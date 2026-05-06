@@ -5,7 +5,7 @@ import click
 from sqlalchemy import select
 
 from opp_ci.db.connection import engine, SessionLocal
-from opp_ci.db.models import Base, Project, TestRun, TestRunStatus, TestResult
+from opp_ci.db.models import Base, Project, TestMatrix, TestRun, TestRunStatus, TestResult
 from opp_ci.executor import install_project, run_test
 
 
@@ -237,5 +237,175 @@ def list_projects():
             deps = ", ".join(p.dependency_names) if p.dependency_names else "-"
             github = f"{p.github_owner}/{p.github_repo}" if p.github_owner else "-"
             click.echo(f"{p.name:<16} {p.tier:<6} {deps:<30} {github}")
+    finally:
+        session.close()
+
+
+@main.command("create-matrix")
+@click.option("--name", required=True, help="Matrix name (e.g. inet-default)")
+@click.option("--project", required=True, help="Project name")
+@click.option("--test-types", required=True, help="Comma-separated test types")
+@click.option("--modes", default="release", help="Comma-separated build modes (default: release)")
+@click.option("--platforms", default=None, help="Comma-separated platform descriptions (optional)")
+@click.option("--versions", default=None, help="Comma-separated project versions (optional, defaults to project name)")
+def create_matrix(name, project, test_types, modes, platforms, versions):
+    """Create a test matrix configuration."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        config = {
+            "test_types": [t.strip() for t in test_types.split(",")],
+            "modes": [m.strip() for m in modes.split(",")],
+            "platforms": [p.strip() for p in platforms.split(",")] if platforms else [None],
+            "versions": [v.strip() for v in versions.split(",")] if versions else [project],
+        }
+        matrix = TestMatrix(name=name, project=project, config=config)
+        session.add(matrix)
+        session.commit()
+
+        from opp_ci.scheduler import expand_matrix
+        jobs = expand_matrix(project, config)
+        click.echo(f"Matrix '{name}' created ({len(jobs)} jobs when expanded):")
+        for job in jobs[:10]:
+            parts = [job["project"], job["test_type"], job["mode"]]
+            if job.get("platform_desc"):
+                parts.append(job["platform_desc"])
+            click.echo(f"  {' × '.join(parts)}")
+        if len(jobs) > 10:
+            click.echo(f"  ... and {len(jobs) - 10} more")
+    finally:
+        session.close()
+
+
+@main.command("list-matrices")
+def list_matrices():
+    """List defined test matrices."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        matrices = session.execute(
+            select(TestMatrix).order_by(TestMatrix.name)
+        ).scalars().all()
+        if not matrices:
+            click.echo("No matrices defined. Use 'opp_ci create-matrix' or 'opp_ci seed-matrices'.")
+            return
+
+        click.echo(f"{'Name':<24} {'Project':<16} {'Jobs'}")
+        click.echo("-" * 60)
+        for m in matrices:
+            from opp_ci.scheduler import expand_matrix
+            jobs = expand_matrix(m.project, m.config)
+            click.echo(f"{m.name:<24} {m.project:<16} {len(jobs)}")
+    finally:
+        session.close()
+
+
+@main.command("run-matrix")
+@click.option("--matrix", "matrix_name", required=True, help="Matrix name to run")
+@click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
+def run_matrix(matrix_name, skip_install):
+    """Expand a matrix and run all jobs sequentially."""
+    from opp_ci.scheduler import expand_matrix
+
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        matrix = session.execute(
+            select(TestMatrix).where(TestMatrix.name == matrix_name)
+        ).scalar_one_or_none()
+        if matrix is None:
+            click.echo(f"Matrix '{matrix_name}' not found.")
+            return
+
+        jobs = expand_matrix(matrix.project, matrix.config)
+        click.echo(f"Running matrix '{matrix_name}': {len(jobs)} jobs")
+
+        # Install once per unique project version
+        if not skip_install:
+            installed = set()
+            for job in jobs:
+                if job["project"] not in installed:
+                    try:
+                        install_project(job["project"])
+                        installed.add(job["project"])
+                    except RuntimeError as e:
+                        click.echo(f"ERROR installing {job['project']}: {e}")
+                        return
+
+        passed = 0
+        failed = 0
+        errors = 0
+        for i, job in enumerate(jobs, 1):
+            test_run = TestRun(
+                project=job["project"],
+                test_type=job["test_type"],
+                mode=job.get("mode"),
+                platform_desc=job.get("platform_desc"),
+                matrix_id=matrix.id,
+                status=TestRunStatus.running,
+                started_at=datetime.datetime.utcnow(),
+            )
+            session.add(test_run)
+            session.commit()
+
+            parts = [job["project"], job["test_type"], job.get("mode", "")]
+            if job.get("platform_desc"):
+                parts.append(job["platform_desc"])
+            click.echo(f"  [{i}/{len(jobs)}] {' × '.join(parts)}", nl=False)
+
+            try:
+                outcome = run_test(job["project"], job["test_type"])
+            except Exception as e:
+                test_run.status = TestRunStatus.error
+                test_run.finished_at = datetime.datetime.utcnow()
+                session.add(TestResult(
+                    test_run_id=test_run.id,
+                    result_code="ERROR",
+                    stderr=str(e),
+                ))
+                session.commit()
+                click.echo(f" → ERROR")
+                errors += 1
+                continue
+
+            test_run.status = TestRunStatus.passed if outcome["result_code"] == "PASS" else TestRunStatus.failed
+            test_run.finished_at = datetime.datetime.utcnow()
+            test_run.duration_seconds = outcome["duration_seconds"]
+            session.add(TestResult(
+                test_run_id=test_run.id,
+                result_code=outcome["result_code"],
+                stdout=outcome["stdout"],
+                stderr=outcome["stderr"],
+            ))
+            session.commit()
+
+            if outcome["result_code"] == "PASS":
+                passed += 1
+                click.echo(f" → PASS ({outcome['duration_seconds']:.1f}s)")
+            else:
+                failed += 1
+                click.echo(f" → FAIL ({outcome['duration_seconds']:.1f}s)")
+
+        click.echo(f"\nMatrix complete: {passed} passed, {failed} failed, {errors} errors")
+    finally:
+        session.close()
+
+
+@main.command("seed-matrices")
+def seed_matrices_cmd():
+    """Seed the database with default matrix configurations."""
+    from opp_ci.scheduler import DEFAULT_MATRICES
+
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        for name, mdef in DEFAULT_MATRICES.items():
+            existing = session.execute(
+                select(TestMatrix).where(TestMatrix.name == name)
+            ).scalar_one_or_none()
+            if existing is None:
+                session.add(TestMatrix(name=name, project=mdef["project"], config=mdef["config"]))
+        session.commit()
+        click.echo(f"Seeded {len(DEFAULT_MATRICES)} default matrices.")
     finally:
         session.close()
