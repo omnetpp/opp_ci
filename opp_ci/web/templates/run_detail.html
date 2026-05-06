@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Run #{{ run.id }}{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">
+    Run #{{ run.id }}
+    <span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span>
+</h2>
+
+<div class="card">
+    <table>
+        <tr><th style="width:150px;">Project</th><td>{{ run.project }}</td></tr>
+        <tr><th>Test type</th><td>{{ run.test_type }}</td></tr>
+        <tr><th>Status</th><td>{{ run.status.value }}</td></tr>
+        <tr><th>Duration</th><td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td></tr>
+        <tr><th>Started</th><td>{{ run.started_at.strftime("%Y-%m-%d %H:%M:%S") if run.started_at else "-" }}</td></tr>
+        <tr><th>Finished</th><td>{{ run.finished_at.strftime("%Y-%m-%d %H:%M:%S") if run.finished_at else "-" }}</td></tr>
+        <tr><th>Trigger</th><td>{{ run.trigger }}</td></tr>
+    </table>
+</div>
+
+{% for result in results %}
+<div class="card">
+    <h2>Result: {{ result.result_code }}</h2>
+    {% if result.stdout %}
+    <details open>
+        <summary style="cursor:pointer; font-weight:600; margin-bottom:0.5rem;">stdout</summary>
+        <pre>{{ result.stdout }}</pre>
+    </details>
+    {% endif %}
+    {% if result.stderr %}
+    <details>
+        <summary style="cursor:pointer; font-weight:600; margin-bottom:0.5rem;">stderr</summary>
+        <pre>{{ result.stderr }}</pre>
+    </details>
+    {% endif %}
+</div>
+{% endfor %}
+
+<p style="margin-top:1rem;"><a href="/runs">&larr; Back to runs</a></p>
+{% endblock %}

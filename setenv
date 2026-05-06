@@ -1,0 +1,26 @@
+#!/usr/bin/env -S sh -c "echo >&2 \"Error: You are running this script instead of sourcing it. Make sure to use it as 'source setenv' or '. setenv', otherwise its settings won't take effect.\"; exit 1"
+
+# Resolve the path of this script whether it was sourced from bash or zsh.
+# Under bash, BASH_SOURCE[0] is the sourced file; under zsh, %x expands to it.
+if [ -n "$BASH_VERSION" ]; then
+    _OPP_CI_SETENV_FILE="${BASH_SOURCE[0]}"
+elif [ -n "$ZSH_VERSION" ]; then
+    _OPP_CI_SETENV_FILE="${(%):-%x}"
+else
+    _OPP_CI_SETENV_FILE="$0"
+fi
+
+export OPP_CI_ROOT="$(cd "$(dirname "$_OPP_CI_SETENV_FILE")" && pwd)"
+unset _OPP_CI_SETENV_FILE
+
+# If the user installed opp_ci into a sibling virtual environment
+# (e.g. `python3 -m venv .venv && .venv/bin/pip install -e .`), activate
+# it automatically so `opp_ci` and its dependencies are available
+# without a second `source` step.
+if [ -f "$OPP_CI_ROOT/.venv/bin/activate" ]; then
+    . "$OPP_CI_ROOT/.venv/bin/activate"
+fi
+
+export PATH="$OPP_CI_ROOT/bin:$PATH"
+export PYTHONPATH="$OPP_CI_ROOT:$PYTHONPATH"
+echo "opp_ci is ready (added $OPP_CI_ROOT to PATH)."

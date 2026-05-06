@@ -118,19 +118,67 @@ Development is split into stages that each deliver a usable increment. Each stag
 
 ### Stage 1 — Local single-project smoke test (MVP)
 
-**Goal**: Run a single test of a single opp_env project from the command line on the local machine, store the result in Postgres.
+**Goal**: Run a single test of a single opp_env project from the command line on the local machine, store the result in the database.
 
 - Create project skeleton: `pyproject.toml`, `opp_ci/` package (see [Project Structure](#project-structure))
 - Minimal DB schema — just `TestRun` and `TestResult` tables (subset of the full [Database Schema](#database-schema))
-- Config from env vars: `OPP_CI_DATABASE_URL` (see [Configuration](#configuration))
-- Single executor: call `opp_env install <pkg-version>` + `opp_env run <pkg-version> -c "opp_repl ..."` (see [opp_env + opp_repl integration](#role-of-each-tool))
+- Config from env vars: `OPP_CI_DATABASE_URL` (default: SQLite for local use, PostgreSQL in the cloud)
+- Direct mode (`OPP_CI_USE_OPP_ENV=0`): run `opp_repl` test commands directly without Nix/opp_env
+- opp_env mode (`OPP_CI_USE_OPP_ENV=1`): call `opp_env install <pkg-version>` + `opp_env run <pkg-version> -c "opp_repl ..."` (see [opp_env + opp_repl integration](#role-of-each-tool))
 - Minimal CLI: `opp_ci run --project inet-4.5 --test smoke`
-- Store result (pass/fail, duration, stdout) in Postgres
+- Store result (pass/fail, duration, stdout) in the database
 - **Deliverable**: can run `opp_ci run --project inet-4.5 --test smoke` and query the result with `opp_ci show-results`
 
 ---
 
-### Stage 2 — Multiple test types, multiple projects
+### Stage 2 — Web UI: read-only results
+
+**Goal**: Browse test results via local web server (and later in the cloud).
+
+- FastAPI + Jinja2 server-rendered pages (see [Web UI Pages](#web-ui-pages))
+- Run locally with `opp_ci serve` — connects to the same SQLite/PostgreSQL database as the CLI
+- Dashboard (`/`): project health badges, recent activity feed
+- Test runs list (`/runs`): filterable table with status, duration, pass/fail counts
+- Test run detail (`/runs/{run_id}`): expandable results, stdout/stderr links
+- Test results search (`/results`): multi-dimensional filter + two display modes (see below)
+- Comparison page (`/compare`): side-by-side diff of two runs or branches
+- **Deliverable**: run `opp_ci serve`, open `http://localhost:8000` to browse results locally
+
+#### Result Filter and Display Modes
+
+The results page (`/results`) provides a **multi-dimensional filter** where every stored dimension can be independently constrained:
+
+| Filter dimension | Examples |
+|---|---|
+| Project | inet, omnetpp, simu5g, veins, ... |
+| Project version | 4.5, 4.6, master, git |
+| Dependency versions | omnetpp: 6.1, 6.0; inet: 4.5 |
+| OS type / version | Ubuntu 24.04, Fedora 41, macOS 15 |
+| Compiler type / version | gcc-14, clang-18 |
+| Build mode | release, debug |
+| Test type | smoke, fingerprint, statistical, ... |
+| Result status | PASS, FAIL, ERROR, SKIP |
+
+Dimensions left unset act as wildcards — the query returns all matching results regardless of that dimension's value.
+
+Results are displayed in **two switchable formats**:
+
+1. **Detailed view** — one row per stored result. Every dimension value and metadata (duration, timestamp, stdout link) is shown. Suitable for drilling down into individual failures.
+
+2. **Summary view** — rows are collapsed across the unfiltered dimensions to produce a compact digest:
+   - If all results for a collapsed group share the same status (e.g. all PASS), the group is shown as **a single line** with the common status.
+   - If statuses differ, the line shows a short breakdown (e.g. "18 PASS, 2 FAIL") with expand/drill-down.
+   - Grouping is hierarchical: first by project+version, then by test type, then by remaining dimensions — so the summary stays compact even when many platform/compiler variants are tested.
+   - Example: searching for "INET 4.6" without fixing OS, compiler, omnetpp version, or test type might return 200 result rows in detailed view, but in summary view collapses to a handful of lines like:
+     ```
+     inet 4.6 / smoke        — PASS (all 12 combinations)
+     inet 4.6 / fingerprint  — 46 PASS, 2 FAIL  [expand]
+     inet 4.6 / statistical  — PASS (all 8 combinations)
+     ```
+
+---
+
+### Stage 3 — Multiple test types, multiple projects
 
 **Goal**: Support all test types for Tier 1 projects, query results from CLI.
 
@@ -143,7 +191,7 @@ Development is split into stages that each deliver a usable increment. Each stag
 
 ---
 
-### Stage 3 — Test matrices and platform support
+### Stage 4 — Test matrices and platform support
 
 **Goal**: Define and run multi-dimensional test matrices across versions, platforms, and build modes.
 
@@ -159,7 +207,7 @@ Development is split into stages that each deliver a usable increment. Each stag
 
 ---
 
-### Stage 4 — Remote workers and deployment
+### Stage 5 — Remote workers and deployment
 
 **Goal**: Deploy the coordinator to a cloud VPS, run jobs on remote workers.
 
@@ -174,7 +222,7 @@ Development is split into stages that each deliver a usable increment. Each stag
 
 ---
 
-### Stage 5 — GitHub integration
+### Stage 6 — GitHub integration
 
 **Goal**: Automatically test on push/PR, post status checks back to GitHub.
 
@@ -184,22 +232,6 @@ Development is split into stages that each deliver a usable increment. Each stag
 - GitHub API client: post commit statuses, PR comments with result summaries (see [GitHub API client](#phase-3--github-integration-details))
 - Reuse token from `~/.ssh/github_repo_token` (same as opp_repl)
 - **Deliverable**: push to inet master → tests auto-triggered → green/red status check on GitHub
-
----
-
-### Stage 6 — Web UI: read-only results
-
-**Goal**: Browse test results via web pages.
-
-- FastAPI + Jinja2 server-rendered pages (see [Web UI Pages](#web-ui-pages))
-- Dashboard (`/`): project health badges, recent activity feed
-- Project page (`/projects/{project}`): per-branch status, history chart
-- Test runs list (`/runs`): filterable table with status, duration, pass/fail counts
-- Test run detail (`/runs/{run_id}`): matrix heatmap, expandable results, stdout/stderr links
-- Test results search (`/results`): structured search, CSV export
-- Matrix heatmap (`/matrix/{project}`): interactive heatmap with switchable axes
-- Comparison page (`/compare`): side-by-side diff of two runs or branches
-- **Deliverable**: `https://ci.omnetpp.org` shows live test results
 
 ---
 
@@ -233,11 +265,11 @@ Development is split into stages that each deliver a usable increment. Each stag
 | Stage | What you get | Key components |
 |---|---|---|
 | 1 | Run one smoke test, store in DB | executor, minimal DB, CLI |
-| 2 | All test types, multiple projects | test types, project catalog, dependency resolution |
-| 3 | Multi-dimensional matrices | matrix expansion, platform/compiler axes, scheduler |
-| 4 | Remote execution | worker agent, coordinator deployment, Python client |
-| 5 | GitHub automation | webhooks, status checks, PR comments |
-| 6 | Web results browsing | dashboard, runs list, heatmaps, search, comparison |
+| 2 | Web results browsing (local + cloud) | FastAPI, dashboard, runs list, search, comparison |
+| 3 | All test types, multiple projects | test types, project catalog, dependency resolution |
+| 4 | Multi-dimensional matrices | matrix expansion, platform/compiler axes, scheduler |
+| 5 | Remote execution | worker agent, coordinator deployment, Python client |
+| 6 | GitHub automation | webhooks, status checks, PR comments |
 | 7 | Web management | start runs, manage matrices, admin |
 | 8 | Full ecosystem | Tier 2 projects, nightly runs, compatibility reports |
 
@@ -275,7 +307,7 @@ Server-rendered via FastAPI + Jinja2 (`opp_ci/web/`):
 - **Project** (`/projects/{project}`) — summary, per-branch status, history chart, run button
 - **Runs list** (`/runs`) — filterable/sortable table, bulk actions (cancel, re-run)
 - **Run detail** (`/runs/{run_id}`) — metadata, matrix heatmap, grouped results, stdout/stderr, re-run buttons
-- **Results search** (`/results`) — structured search, filters, CSV export
+- **Results search** (`/results`) — multi-dimensional filter (every axis independently constrainable), two display modes: **Detailed** (one row per result) and **Summary** (collapsed compact digest), CSV export
 - **Matrix heatmap** (`/matrix/{project}`) — interactive heatmap, switchable axes, drill-down
 - **Comparison** (`/compare`) — side-by-side diff of runs or branches, regression detection
 - **Start run** (`/runs/new`) — project/version/platform/test selector, matrix templates, version validation

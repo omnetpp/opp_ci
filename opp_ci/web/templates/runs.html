@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Runs{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Test Runs</h2>
+
+<form class="filters" method="get" action="/runs">
+    <input type="text" name="project" placeholder="Project" value="{{ filter_project }}">
+    <input type="text" name="test_type" placeholder="Test type" value="{{ filter_test_type }}">
+    <select name="status">
+        <option value="">All statuses</option>
+        <option value="passed" {{ "selected" if filter_status == "passed" }}>Passed</option>
+        <option value="failed" {{ "selected" if filter_status == "failed" }}>Failed</option>
+        <option value="error" {{ "selected" if filter_status == "error" }}>Error</option>
+        <option value="running" {{ "selected" if filter_status == "running" }}>Running</option>
+    </select>
+    <button type="submit">Filter</button>
+</form>
+
+{% if runs %}
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Project</th>
+            <th>Test</th>
+            <th>Status</th>
+            <th>Duration</th>
+            <th>Started</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for run in runs %}
+        <tr>
+            <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+            <td>{{ run.project }}</td>
+            <td>{{ run.test_type }}</td>
+            <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
+            <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
+            <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty">No runs match the current filters.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Dashboard{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Dashboard</h2>
+
+<div class="stats">
+    <div class="stat">
+        <div class="value">{{ total_runs }}</div>
+        <div class="label">Total Runs</div>
+    </div>
+    <div class="stat">
+        <div class="value" style="color: var(--pass);">{{ passed }}</div>
+        <div class="label">Passed</div>
+    </div>
+    <div class="stat">
+        <div class="value" style="color: var(--fail);">{{ failed }}</div>
+        <div class="label">Failed</div>
+    </div>
+    <div class="stat">
+        <div class="value" style="color: var(--error);">{{ errored }}</div>
+        <div class="label">Errors</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Recent Runs</h2>
+    {% if recent_runs %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Project</th>
+                <th>Test</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Started</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in recent_runs %}
+            <tr>
+                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td>{{ run.project }}</td>
+                <td>{{ run.test_type }}</td>
+                <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
+                <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
+                <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No test runs yet. Run <code>opp_ci run --project &lt;name&gt; --test smoke</code> to get started.</p>
+    {% endif %}
+</div>
+{% endblock %}

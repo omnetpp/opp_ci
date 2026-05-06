@@ -1,0 +1,53 @@
+[project]
+name = "opp_ci"
+authors = [
+    {name = "Levente Mészáros", email = "levy@omnetpp.org"},
+]
+maintainers = [
+    {name = "Levente Mészáros", email = "levy@omnetpp.org"},
+]
+description = "Continuous integration and testing service for OMNeT++ simulation projects"
+keywords = ["omnetpp", "simulation", "ci", "testing", "continuous-integration"]
+readme = "README.md"
+dynamic = ["version"]
+requires-python = ">=3.10"
+dependencies = [
+    "click",
+    "sqlalchemy>=2.0",
+    "alembic",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
+    "Topic :: Software Development :: Testing",
+]
+
+[project.optional-dependencies]
+postgres = [
+    "psycopg2-binary",
+]
+web = [
+    "fastapi",
+    "uvicorn[standard]",
+    "jinja2",
+]
+
+[project.urls]
+Repository = "https://github.com/omnetpp/opp_ci"
+Issues = "https://github.com/omnetpp/opp_ci/issues"
+
+[project.scripts]
+opp_ci = "opp_ci.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["opp_ci*"]
+
+[tool.setuptools_scm]
+write_to = "opp_ci/_version.py"
+
+[build-system]
+requires = ["setuptools>=61.0", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
