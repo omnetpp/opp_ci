@@ -28,7 +28,7 @@ def dashboard(request: Request):
         failed = session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.failed)).scalar()
         errored = session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.error)).scalar()
 
-        return templates.TemplateResponse("dashboard.html", request=request, context={
+        return templates.TemplateResponse(request, "dashboard.html", {
             "recent_runs": recent_runs,
             "total_runs": total_runs,
             "passed": passed,
@@ -58,8 +58,45 @@ def runs_list(
             query = query.where(TestRun.status == TestRunStatus(status))
 
         runs = session.execute(query).scalars().all()
-        return templates.TemplateResponse("runs.html", request=request, context={
+        return templates.TemplateResponse(request, "runs.html", {
             "runs": runs,
+            "filter_project": project or "",
+            "filter_test_type": test_type or "",
+            "filter_status": status or "",
+        })
+    finally:
+        session.close()
+
+
+@app.get("/results", response_class=HTMLResponse)
+def results_page(
+    request: Request,
+    project: str = Query(default=None),
+    test_type: str = Query(default=None),
+    status: str = Query(default=None),
+    view: str = Query(default="summary"),
+    limit: int = Query(default=200),
+):
+    from opp_ci.web.rollup import rollup_runs
+
+    session = SessionLocal()
+    try:
+        query = select(TestRun).order_by(TestRun.id.desc()).limit(limit)
+        if project:
+            query = query.where(TestRun.project == project)
+        if test_type:
+            query = query.where(TestRun.test_type == test_type)
+        if status:
+            query = query.where(TestRun.status == TestRunStatus(status))
+
+        runs = session.execute(query).scalars().all()
+
+        summaries = rollup_runs(runs) if view == "summary" else None
+
+        return templates.TemplateResponse(request, "results.html", {
+            "runs": runs,
+            "summaries": summaries,
+            "view": view,
             "filter_project": project or "",
             "filter_test_type": test_type or "",
             "filter_status": status or "",
@@ -82,7 +119,7 @@ def run_detail(request: Request, run_id: int):
             select(TestResult).where(TestResult.test_run_id == run_id)
         ).scalars().all()
 
-        return templates.TemplateResponse("run_detail.html", request=request, context={
+        return templates.TemplateResponse(request, "run_detail.html", {
             "run": run,
             "results": results,
         })
