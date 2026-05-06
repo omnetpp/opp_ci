@@ -1,10 +1,26 @@
 import datetime
 
-from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Text, Enum
+from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Text, Enum, JSON
 from sqlalchemy.orm import declarative_base, relationship
 import enum
 
 Base = declarative_base()
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, unique=True, nullable=False)
+    opp_env_name = Column(String, nullable=True)
+    github_owner = Column(String, nullable=True)
+    github_repo = Column(String, nullable=True)
+    git_url = Column(String, nullable=True)
+    tier = Column(Integer, default=2)
+    dependency_names = Column(JSON, default=list)
+
+    def __repr__(self):
+        return f"<Project(name={self.name!r}, tier={self.tier})>"
 
 
 class TestRunStatus(enum.Enum):

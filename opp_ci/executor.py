@@ -14,6 +14,9 @@ COMMAND_MAP = {
     "speed": "opp_run_speed_tests",
     "sanitizer": "opp_run_sanitizer_tests",
     "chart": "opp_run_chart_tests",
+    "release": "opp_run_release_tests",
+    "build": "opp_build_project",
+    "all": "opp_run_all_tests",
 }
 
 
