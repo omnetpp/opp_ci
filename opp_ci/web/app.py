@@ -73,6 +73,8 @@ def results_page(
     request: Request,
     project: str = Query(default=None),
     test_type: str = Query(default=None),
+    mode: str = Query(default=None),
+    platform_desc: str = Query(default=None),
     status: str = Query(default=None),
     view: str = Query(default="summary"),
     limit: int = Query(default=200),
@@ -86,6 +88,10 @@ def results_page(
             query = query.where(TestRun.project == project)
         if test_type:
             query = query.where(TestRun.test_type == test_type)
+        if mode:
+            query = query.where(TestRun.mode == mode)
+        if platform_desc:
+            query = query.where(TestRun.platform_desc == platform_desc)
         if status:
             query = query.where(TestRun.status == TestRunStatus(status))
 
@@ -99,6 +105,8 @@ def results_page(
             "view": view,
             "filter_project": project or "",
             "filter_test_type": test_type or "",
+            "filter_mode": mode or "",
+            "filter_platform_desc": platform_desc or "",
             "filter_status": status or "",
         })
     finally:
