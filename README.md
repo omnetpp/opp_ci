@@ -22,6 +22,13 @@ and feature matrices.
 - [opp_env](https://github.com/omnetpp/opp_env) — reproducible OMNeT++ environment management via Nix
 - [opp_repl](https://github.com/omnetpp/opp_repl) — interactive Python REPL for running and testing OMNeT++ simulations
 
+## Documentation
+
+- [Getting Started](doc/getting_started.md) — installation, configuration, and first run
+- [Architecture](doc/architecture.md) — system components and data flow
+- [CLI Reference](doc/cli_reference.md) — command-line interface usage
+- [Deployment](doc/deployment.md) — production deployment guide
+
 ## Status
 
 Early development. See [PLAN.md](PLAN.md) for the design and staged development roadmap.

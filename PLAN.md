@@ -180,17 +180,26 @@ Results are displayed in **two switchable formats**:
 
 ---
 
-### Stage 3 — Multiple test types, multiple projects (partially done)
+### Stage 3 — Multiple test types, project versions, and git branches (partially done)
 
-**Goal**: Support all test types for Tier 1 projects, query results from CLI.
+**Goal**: Support all test types for Tier 1 projects, test specific versions/branches, query results from CLI.
 
 - [x] Executor supports all test types: smoke, fingerprint, statistical, feature, speed, sanitizer, chart, release, build, all (via `COMMAND_MAP`)
 - [x] `Project` table with seed data from catalog (`opp_ci seed-projects`)
 - [ ] `Version` table and version resolution
 - [ ] Dependency resolution: query `opp_env` `required_projects` to auto-resolve compatible dependency versions
+- [ ] Git branch/tag/commit support: test a specific git ref of a project
+  - CLI: `opp_ci run --project inet --ref topic/my-feature --test smoke`
+  - Executor checks out the specified ref before building/testing
+  - For opp_env projects: use `opp_env run <project>-git -c <cmd>` with appropriate git ref
+  - For local/direct mode: `git checkout <ref>` in the project working copy
+- [ ] Version labels: map human-readable names (e.g. "master", "4.5", "topic/my-feature") to git refs
+- [ ] Track tested ref (branch, tag, or SHA) in `TestRun` for result filtering and history
+- [ ] Support testing multiple refs in a single matrix: `--project-versions "master,topic/my-feature"`
+- [ ] Dependency version pinning: test inet branch X against a specific omnetpp version
 - [x] CLI: `opp_ci run --project <name> --test fingerprint,smoke` — comma-separated test types
 - [x] CLI: `opp_ci list-runs`, `opp_ci show-run <id>`, `opp_ci show-results --project <name> --test <type> --status <status>`
-- **Deliverable**: can test any Tier 1 project with any test type, browse results via CLI
+- **Deliverable**: can test any Tier 1 project at any git ref with any test type, browse results via CLI
 
 ---
 
@@ -200,12 +209,18 @@ Results are displayed in **two switchable formats**:
 
 - [x] `Platform` and `TestMatrix` tables in DB schema
 - [x] Matrix expansion: scheduler expands a matrix config into individual jobs (`expand_matrix`)
-- [x] Platform axis: os_type, os_version, arch, compiler_type, compiler_version
+- [x] Platform axes: 4 separate dimensions — os, os_version, compiler, compiler_version
+- [x] Dual-mode platform axes: combined strings (e.g. "Ubuntu 24.04") auto-parsed, or structured (separate name/version lists cross-producted)
 - [x] Build mode axis: debug, release
 - [x] Version matrix: test a project against multiple dependency versions
 - [ ] Feature axis: INET feature flags
 - [x] Sequential local execution; jobs stored in DB (status: queued → running → passed/failed/error)
 - [x] CLI: `opp_ci run-matrix --matrix <name>`, `opp_ci create-matrix`, `opp_ci list-matrices`, `opp_ci seed-matrices`
+- [x] CLI `create-matrix` args: `--name`, `--project`, `--project-versions`, `--builds`, `--os`, `--os-version`, `--compiler`, `--compiler-version`, `--tests`
+- [x] Structured JSON test results from `opp_repl` (`--output-format json`) parsed and stored in `TestResult.details`
+- [x] ANSI escape codes stored raw in DB, converted to colored HTML at render time
+- [x] Run detail page shows per-test results table (test name, result, duration, reason)
+- [x] Results page filters and rollup updated for all 4 platform dimensions
 - **Deliverable**: can define a matrix like "inet master × omnetpp {6.1, 6.0} × {debug, release} × fingerprint" and run it
 
 ---
@@ -289,7 +304,7 @@ Results are displayed in **two switchable formats**:
 - **Platform** — os_type, os_version, arch, compiler_type (gcc/clang), compiler_version
 - **TestMatrix** — project FK, list of version combos + platforms + features
 - **TestRun** — matrix entry, timestamp, status (queued/running/passed/failed/error), triggerer (manual/webhook/schedule)
-- **TestResult** — run FK, test_type (smoke/fingerprint/statistical/…), test_name, result_code, duration, stdout/stderr (or path), metadata JSON
+- **TestResult** — run FK, test_type (smoke/fingerprint/statistical/…), test_name, result_code, duration, stdout/stderr (raw with ANSI codes), details (JSON: structured per-test results from opp_repl)
 
 Migrations via Alembic (`opp_ci/db/migrations/`). Connection pool in `opp_ci/db/connection.py`, config from env vars.
 
@@ -309,7 +324,7 @@ Server-rendered via FastAPI + Jinja2 (`opp_ci/web/`):
 - **Dashboard** (`/`) — project health badges, recent activity, quick-start links
 - **Project** (`/projects/{project}`) — summary, per-branch status, history chart, run button
 - **Runs list** (`/runs`) — filterable/sortable table, bulk actions (cancel, re-run)
-- **Run detail** (`/runs/{run_id}`) — metadata, matrix heatmap, grouped results, stdout/stderr, re-run buttons
+- **Run detail** (`/runs/{run_id}`) — metadata (incl. OS, compiler info), per-test results table from structured details, colored stdout/stderr (ANSI→HTML), re-run buttons
 - **Results search** (`/results`) — multi-dimensional filter (every axis independently constrainable), two display modes: **Detailed** (one row per result) and **Summary** (collapsed compact digest), CSV export
 - **Matrix heatmap** (`/matrix/{project}`) — interactive heatmap, switchable axes, drill-down
 - **Comparison** (`/compare`) — side-by-side diff of runs or branches, regression detection
