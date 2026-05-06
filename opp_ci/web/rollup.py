@@ -6,7 +6,7 @@ groups where all results share the same status into a single summary line.
 Only expands to the next dimension level when statuses within a group differ.
 
 The dimension order is static for now:
-    project → test_type → mode → platform_desc
+    project → test_type → mode → os → os_version → compiler → compiler_version
 
 Later this should be computed dynamically based on which dimensions have
 variation in the result set.
@@ -16,7 +16,7 @@ from collections import OrderedDict
 
 # Static hierarchical dimension order.
 # Later: compute from result variance.
-ALL_DIMENSIONS = ["project", "test_type", "mode", "platform_desc"]
+ALL_DIMENSIONS = ["project", "test_type", "mode", "os", "os_version", "compiler", "compiler_version"]
 
 
 def rollup_runs(runs):

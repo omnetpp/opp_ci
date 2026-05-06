@@ -79,6 +79,7 @@ def run_cmd(project, test_types, skip_install):
                 result_code=outcome["result_code"],
                 stdout=outcome["stdout"],
                 stderr=outcome["stderr"],
+                details=outcome.get("details"),
             ))
             session.commit()
             click.echo(f"  Result: {outcome['result_code']} ({outcome['duration_seconds']:.1f}s)")
@@ -244,21 +245,40 @@ def list_projects():
 @main.command("create-matrix")
 @click.option("--name", required=True, help="Matrix name (e.g. inet-default)")
 @click.option("--project", required=True, help="Project name")
-@click.option("--test-types", required=True, help="Comma-separated test types")
-@click.option("--modes", default="release", help="Comma-separated build modes (default: release)")
-@click.option("--platforms", default=None, help="Comma-separated platform descriptions (optional)")
-@click.option("--versions", default=None, help="Comma-separated project versions (optional, defaults to project name)")
-def create_matrix(name, project, test_types, modes, platforms, versions):
-    """Create a test matrix configuration."""
+@click.option("--project-versions", "versions", default=None, help="Comma-separated project versions (optional, defaults to project name)")
+@click.option("--builds", "modes", default="release", help="Comma-separated build modes (default: release)")
+@click.option("--os", "os_names", default=None, help="Comma-separated OS (e.g. 'Ubuntu 24.04,Fedora 41' or 'Ubuntu,Fedora' with --os-version)")
+@click.option("--os-version", "os_versions", default=None, help="Comma-separated OS versions for cross-product (e.g. '24.04,41')")
+@click.option("--compiler", "compilers", default=None, help="Comma-separated compilers (e.g. 'gcc-14,clang-18' or 'gcc,clang' with --compiler-version)")
+@click.option("--compiler-version", "compiler_versions", default=None, help="Comma-separated compiler versions for cross-product (e.g. '14,18')")
+@click.option("--tests", "test_types", required=True, help="Comma-separated test types")
+def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions):
+    """Create a test matrix configuration.
+
+    Platform axes support two styles:
+
+    Combined: --os 'Ubuntu 24.04,Fedora 41' (parsed into name+version automatically)
+
+    Structured: --os 'Ubuntu,Fedora' --os-version '24.04,41' (cross-product)
+
+    Same for --compiler / --compiler-version.
+    """
     Base.metadata.create_all(engine)
     session = SessionLocal()
     try:
         config = {
             "test_types": [t.strip() for t in test_types.split(",")],
             "modes": [m.strip() for m in modes.split(",")],
-            "platforms": [p.strip() for p in platforms.split(",")] if platforms else [None],
             "versions": [v.strip() for v in versions.split(",")] if versions else [project],
         }
+        if os_names:
+            config["os"] = [o.strip() for o in os_names.split(",")]
+        if os_versions:
+            config["os_version"] = [o.strip() for o in os_versions.split(",")]
+        if compilers:
+            config["compiler"] = [c.strip() for c in compilers.split(",")]
+        if compiler_versions:
+            config["compiler_version"] = [c.strip() for c in compiler_versions.split(",")]
         matrix = TestMatrix(name=name, project=project, config=config)
         session.add(matrix)
         session.commit()
@@ -340,6 +360,10 @@ def run_matrix(matrix_name, skip_install):
                 project=job["project"],
                 test_type=job["test_type"],
                 mode=job.get("mode"),
+                os=job.get("os"),
+                os_version=job.get("os_version"),
+                compiler=job.get("compiler"),
+                compiler_version=job.get("compiler_version"),
                 platform_desc=job.get("platform_desc"),
                 matrix_id=matrix.id,
                 status=TestRunStatus.running,
@@ -376,6 +400,7 @@ def run_matrix(matrix_name, skip_install):
                 result_code=outcome["result_code"],
                 stdout=outcome["stdout"],
                 stderr=outcome["stderr"],
+                details=outcome.get("details"),
             ))
             session.commit()
 

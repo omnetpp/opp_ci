@@ -7,7 +7,10 @@
     <input type="text" name="project" placeholder="Project" value="{{ filter_project }}">
     <input type="text" name="test_type" placeholder="Test type" value="{{ filter_test_type }}">
     <input type="text" name="mode" placeholder="Mode" value="{{ filter_mode }}">
-    <input type="text" name="platform_desc" placeholder="Platform" value="{{ filter_platform_desc }}">
+    <input type="text" name="os" placeholder="OS" value="{{ filter_os }}">
+    <input type="text" name="os_version" placeholder="OS version" value="{{ filter_os_version }}">
+    <input type="text" name="compiler" placeholder="Compiler" value="{{ filter_compiler }}">
+    <input type="text" name="compiler_version" placeholder="Compiler ver." value="{{ filter_compiler_version }}">
     <select name="status">
         <option value="">All statuses</option>
         <option value="passed" {{ "selected" if filter_status == "passed" }}>Passed</option>
@@ -70,7 +73,10 @@
             <th>Project</th>
             <th>Test</th>
             <th>Mode</th>
-            <th>Platform</th>
+            <th>OS</th>
+            <th>OS ver.</th>
+            <th>Compiler</th>
+            <th>Comp. ver.</th>
             <th>Status</th>
             <th>Duration</th>
             <th>Started</th>
@@ -83,7 +89,10 @@
             <td>{{ run.project }}</td>
             <td>{{ run.test_type }}</td>
             <td>{{ run.mode or "-" }}</td>
-            <td>{{ run.platform_desc or "-" }}</td>
+            <td>{{ run.os or "-" }}</td>
+            <td>{{ run.os_version or "-" }}</td>
+            <td>{{ run.compiler or "-" }}</td>
+            <td>{{ run.compiler_version or "-" }}</td>
             <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
             <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
             <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
@@ -99,7 +108,7 @@
 <p style="margin-top:1rem; font-size:0.8rem; color:var(--muted);">
     Showing {{ runs|length }} result(s).
     {% if view == "summary" %}
-    Hierarchical roll-up: project &rarr; test_type &rarr; mode &rarr; platform. Groups expand only when statuses differ.
+    Hierarchical roll-up: project &rarr; test_type &rarr; mode &rarr; os &rarr; os_version &rarr; compiler &rarr; compiler_version. Groups expand only when statuses differ.
     {% endif %}
 </p>
 {% endblock %}

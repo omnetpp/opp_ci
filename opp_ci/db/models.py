@@ -79,6 +79,10 @@ class TestRun(Base):
     project = Column(String, nullable=False)
     test_type = Column(String, nullable=False)
     mode = Column(String, nullable=True)
+    os = Column(String, nullable=True)
+    os_version = Column(String, nullable=True)
+    compiler = Column(String, nullable=True)
+    compiler_version = Column(String, nullable=True)
     platform_desc = Column(String, nullable=True)
     matrix_id = Column(Integer, ForeignKey("test_matrices.id"), nullable=True)
     status = Column(Enum(TestRunStatus), nullable=False, default=TestRunStatus.queued)
@@ -101,6 +105,7 @@ class TestResult(Base):
     result_code = Column(String, nullable=False)
     stdout = Column(Text, nullable=True)
     stderr = Column(Text, nullable=True)
+    details = Column(JSON, nullable=True)
 
     test_run = relationship("TestRun", back_populates="results")
 
