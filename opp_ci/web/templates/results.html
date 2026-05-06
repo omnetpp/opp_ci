@@ -36,7 +36,9 @@
         {% for s in summaries %}
         <tr>
             <td>
-                <strong>{{ s.key }}</strong>
+                <a href="/results?{% for k, v in s.dimensions.items() if v %}{{ k }}={{ v }}&{% endfor %}view=summary" style="text-decoration:none; color:inherit;">
+                    <strong>{{ s.key }}</strong>
+                </a>
             </td>
             <td>{{ s.total }}</td>
             <td>
@@ -47,8 +49,8 @@
                     {% for status, count in s.breakdown.items() %}
                         <span class="badge badge-{{ status }}">{{ count }} {{ status }}</span>
                     {% endfor %}
-                    <a href="/results?{% for k, v in s.dimensions.items() if v %}{{ k }}={{ v }}&{% endfor %}view=detailed" style="font-size:0.75rem; margin-left:0.3rem;">[expand]</a>
                 {% endif %}
+                <a href="/results?{% for k, v in s.dimensions.items() if v %}{{ k }}={{ v }}&{% endfor %}view=detailed" style="font-size:0.75rem; margin-left:0.3rem;">[details]</a>
             </td>
         </tr>
         {% endfor %}

@@ -52,7 +52,7 @@ def run_test(project, test_type):
     if USE_OPP_ENV:
         args = ["opp_env", "run", project, "-c", cmd]
     else:
-        args = [cmd]
+        args = [cmd, "--load", "@opp", "-p", project]
 
     _logger.info("Running test: %s", " ".join(args))
     start = time.time()
