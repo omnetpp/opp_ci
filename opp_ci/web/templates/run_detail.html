@@ -10,6 +10,9 @@
     <table>
         <tr><th style="width:150px;">Project</th><td>{{ run.project }}</td></tr>
         <tr><th>Test type</th><td>{{ run.test_type }}</td></tr>
+        <tr><th>Mode</th><td>{{ run.mode or "-" }}</td></tr>
+        <tr><th>OS</th><td>{{ (run.os ~ " " ~ run.os_version) if run.os else "-" }}</td></tr>
+        <tr><th>Compiler</th><td>{{ (run.compiler ~ "-" ~ run.compiler_version) if run.compiler else "-" }}</td></tr>
         <tr><th>Status</th><td>{{ run.status.value }}</td></tr>
         <tr><th>Duration</th><td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td></tr>
         <tr><th>Started</th><td>{{ run.started_at.strftime("%Y-%m-%d %H:%M:%S") if run.started_at else "-" }}</td></tr>
@@ -21,16 +24,44 @@
 {% for result in results %}
 <div class="card">
     <h2>Result: {{ result.result_code }}</h2>
+
+    {% if result.details and result.details.results %}
+    <h3 style="margin-top:1rem;">Test Details</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Test</th>
+                <th>Result</th>
+                <th>Duration</th>
+                <th>Reason</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in result.details.results %}
+            <tr>
+                <td>{{ r.parameters or "-" }}</td>
+                <td><span class="badge badge-{{ r.result|lower }}">{{ r.result }}</span></td>
+                <td>{{ "%.3f"|format(r.elapsed_wall_time) ~ "s" if r.elapsed_wall_time else "-" }}</td>
+                <td>{{ r.reason or r.error_message or "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if result.details.elapsed_wall_time %}
+    <p style="margin-top:0.5rem; font-size:0.85rem;">Total: {{ "%.3f"|format(result.details.elapsed_wall_time) }}s</p>
+    {% endif %}
+    {% endif %}
+
     {% if result.stdout %}
-    <details open>
+    <details>
         <summary style="cursor:pointer; font-weight:600; margin-bottom:0.5rem;">stdout</summary>
-        <pre>{{ result.stdout }}</pre>
+        <pre>{{ result.stdout|ansi_to_html }}</pre>
     </details>
     {% endif %}
     {% if result.stderr %}
     <details>
         <summary style="cursor:pointer; font-weight:600; margin-bottom:0.5rem;">stderr</summary>
-        <pre>{{ result.stderr }}</pre>
+        <pre>{{ result.stderr|ansi_to_html }}</pre>
     </details>
     {% endif %}
 </div>

@@ -1,3 +1,4 @@
+import json
 import logging
 import subprocess
 import time
@@ -43,7 +44,7 @@ def run_test(project, test_type):
     In direct mode (USE_OPP_ENV=0): runs the opp_repl command directly.
     In opp_env mode (USE_OPP_ENV=1): runs via opp_env run <project> -c <cmd>.
 
-    Returns a dict with keys: result_code, duration_seconds, stdout, stderr.
+    Returns a dict with keys: result_code, duration_seconds, stdout, stderr, details.
     """
     cmd = COMMAND_MAP.get(test_type)
     if cmd is None:
@@ -52,7 +53,7 @@ def run_test(project, test_type):
     if USE_OPP_ENV:
         args = ["opp_env", "run", project, "-c", cmd]
     else:
-        args = [cmd, "--load", "@opp", "-p", project]
+        args = [cmd, "--load", "@opp", "-p", project, "--output-format", "json"]
 
     _logger.info("Running test: %s", " ".join(args))
     start = time.time()
@@ -64,10 +65,21 @@ def run_test(project, test_type):
     else:
         result_code = "FAIL"
 
+    details = None
+    stdout = result.stdout
+    if "--output-format" in args and stdout.rstrip():
+        last_line = stdout.rstrip().rsplit("\n", 1)[-1]
+        try:
+            details = json.loads(last_line)
+            stdout = stdout[:stdout.rfind(last_line)].rstrip()
+        except (json.JSONDecodeError, ValueError):
+            _logger.warning("Failed to parse JSON from last line of stdout")
+
     _logger.info("Test finished: %s (%.1fs)", result_code, duration)
     return {
         "result_code": result_code,
         "duration_seconds": duration,
-        "stdout": result.stdout,
+        "stdout": stdout,
         "stderr": result.stderr,
+        "details": details,
     }
