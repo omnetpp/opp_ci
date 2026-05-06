@@ -116,32 +116,34 @@ Development is split into stages that each deliver a usable increment. Each stag
 
 ---
 
-### Stage 1 — Local single-project smoke test (MVP)
+### Stage 1 — Local single-project smoke test (MVP) ✅
 
 **Goal**: Run a single test of a single opp_env project from the command line on the local machine, store the result in the database.
 
-- Create project skeleton: `pyproject.toml`, `opp_ci/` package (see [Project Structure](#project-structure))
-- Minimal DB schema — just `TestRun` and `TestResult` tables (subset of the full [Database Schema](#database-schema))
-- Config from env vars: `OPP_CI_DATABASE_URL` (default: SQLite for local use, PostgreSQL in the cloud)
-- Direct mode (`OPP_CI_USE_OPP_ENV=0`): run `opp_repl` test commands directly without Nix/opp_env
-- opp_env mode (`OPP_CI_USE_OPP_ENV=1`): call `opp_env install <pkg-version>` + `opp_env run <pkg-version> -c "opp_repl ..."` (see [opp_env + opp_repl integration](#role-of-each-tool))
-- Minimal CLI: `opp_ci run --project inet-4.5 --test smoke`
-- Store result (pass/fail, duration, stdout) in the database
+- [x] Create project skeleton: `pyproject.toml`, `opp_ci/` package (see [Project Structure](#project-structure))
+- [x] Minimal DB schema — `TestRun` and `TestResult` tables + `Project`, `Platform`, `TestMatrix` (see [Database Schema](#database-schema))
+- [x] Config from env vars: `OPP_CI_DATABASE_URL` (default: SQLite for local use, PostgreSQL in the cloud)
+- [x] Direct mode (`OPP_CI_USE_OPP_ENV=0`): run `opp_repl` test commands directly (passes `--load @opp -p <project>`)
+- [x] opp_env mode (`OPP_CI_USE_OPP_ENV=1`): call `opp_env install <pkg-version>` + `opp_env run <pkg-version> -c <cmd>`
+- [x] CLI: `opp_ci run --project <name> --test smoke` (supports comma-separated test types)
+- [x] Store result (pass/fail, duration, stdout/stderr) in the database
+- [x] CLI: `opp_ci list-runs`, `opp_ci show-run <id>`, `opp_ci show-results`
+- [x] CLI: `opp_ci seed-projects`, `opp_ci list-projects`
 - **Deliverable**: can run `opp_ci run --project inet-4.5 --test smoke` and query the result with `opp_ci show-results`
 
 ---
 
-### Stage 2 — Web UI: read-only results
+### Stage 2 — Web UI: read-only results (in progress)
 
 **Goal**: Browse test results via local web server (and later in the cloud).
 
-- FastAPI + Jinja2 server-rendered pages (see [Web UI Pages](#web-ui-pages))
-- Run locally with `opp_ci serve` — connects to the same SQLite/PostgreSQL database as the CLI
-- Dashboard (`/`): project health badges, recent activity feed
-- Test runs list (`/runs`): filterable table with status, duration, pass/fail counts
-- Test run detail (`/runs/{run_id}`): expandable results, stdout/stderr links
-- Test results search (`/results`): multi-dimensional filter + two display modes (see below)
-- Comparison page (`/compare`): side-by-side diff of two runs or branches
+- [x] FastAPI + Jinja2 server-rendered pages (`opp_ci/web/`)
+- [x] Run locally with `opp_ci serve` — connects to the same SQLite/PostgreSQL database as the CLI
+- [x] Dashboard (`/`): recent activity, summary stats
+- [x] Test runs list (`/runs`): filterable table with status, duration
+- [x] Test run detail (`/runs/{run_id}`): results, stdout/stderr
+- [x] Test results search (`/results`): multi-dimensional filter + summary/detailed display modes
+- [ ] Comparison page (`/compare`): side-by-side diff of two runs or branches
 - **Deliverable**: run `opp_ci serve`, open `http://localhost:8000` to browse results locally
 
 #### Result Filter and Display Modes
@@ -178,31 +180,32 @@ Results are displayed in **two switchable formats**:
 
 ---
 
-### Stage 3 — Multiple test types, multiple projects
+### Stage 3 — Multiple test types, multiple projects (partially done)
 
 **Goal**: Support all test types for Tier 1 projects, query results from CLI.
 
-- Extend executor to support all test types: build, fingerprint, statistical, chart, feature, module, unit, packet, queueing, protocol, validation, smoke, sanitizer, speed (see [Test Matrices](#test-matrices-examples))
-- Add `Project` and `Version` tables; import Tier 1 projects from opp_env catalog (see [Supported Projects](#supported-projects-from-opp_env))
-- Dependency resolution: query `opp_env` `required_projects` to auto-resolve compatible dependency versions (see [How opp_env Drives the Matrix](#how-opp_env-drives-the-matrix))
-- CLI: `opp_ci run --project simu5g-1.3 --test fingerprint,smoke` — dependencies auto-resolved
-- CLI: `opp_ci list-runs`, `opp_ci show-run <id>`, `opp_ci show-results --project inet --test fingerprint --status failed`
+- [x] Executor supports all test types: smoke, fingerprint, statistical, feature, speed, sanitizer, chart, release, build, all (via `COMMAND_MAP`)
+- [x] `Project` table with seed data from catalog (`opp_ci seed-projects`)
+- [ ] `Version` table and version resolution
+- [ ] Dependency resolution: query `opp_env` `required_projects` to auto-resolve compatible dependency versions
+- [x] CLI: `opp_ci run --project <name> --test fingerprint,smoke` — comma-separated test types
+- [x] CLI: `opp_ci list-runs`, `opp_ci show-run <id>`, `opp_ci show-results --project <name> --test <type> --status <status>`
 - **Deliverable**: can test any Tier 1 project with any test type, browse results via CLI
 
 ---
 
-### Stage 4 — Test matrices and platform support
+### Stage 4 — Test matrices and platform support ✅
 
 **Goal**: Define and run multi-dimensional test matrices across versions, platforms, and build modes.
 
-- Add `Platform` and `TestMatrix` tables (see [Database Schema](#database-schema))
-- Matrix expansion: scheduler expands a matrix config into individual jobs (see [Test Matrices](#test-matrices-examples))
-- Platform axis: os_type, os_version, arch, compiler_type, compiler_version
-- Build mode axis: debug, release
-- Version matrix: test a project against multiple dependency versions
-- Feature axis: INET feature flags
-- Sequential local execution; jobs queued in DB (status: queued → running → done)
-- CLI: `opp_ci run-matrix --project inet --matrix default` and `opp_ci create-matrix`
+- [x] `Platform` and `TestMatrix` tables in DB schema
+- [x] Matrix expansion: scheduler expands a matrix config into individual jobs (`expand_matrix`)
+- [x] Platform axis: os_type, os_version, arch, compiler_type, compiler_version
+- [x] Build mode axis: debug, release
+- [x] Version matrix: test a project against multiple dependency versions
+- [ ] Feature axis: INET feature flags
+- [x] Sequential local execution; jobs stored in DB (status: queued → running → passed/failed/error)
+- [x] CLI: `opp_ci run-matrix --matrix <name>`, `opp_ci create-matrix`, `opp_ci list-matrices`, `opp_ci seed-matrices`
 - **Deliverable**: can define a matrix like "inet master × omnetpp {6.1, 6.0} × {debug, release} × fingerprint" and run it
 
 ---
@@ -264,10 +267,10 @@ Results are displayed in **two switchable formats**:
 
 | Stage | What you get | Key components |
 |---|---|---|
-| 1 | Run one smoke test, store in DB | executor, minimal DB, CLI |
-| 2 | Web results browsing (local + cloud) | FastAPI, dashboard, runs list, search, comparison |
-| 3 | All test types, multiple projects | test types, project catalog, dependency resolution |
-| 4 | Multi-dimensional matrices | matrix expansion, platform/compiler axes, scheduler |
+| 1 | Run one smoke test, store in DB | executor, minimal DB, CLI | ✅ done |
+| 2 | Web results browsing (local + cloud) | FastAPI, dashboard, runs list, search, comparison | 🔧 in progress |
+| 3 | All test types, multiple projects | test types, project catalog, dependency resolution | 🔧 partially done |
+| 4 | Multi-dimensional matrices | matrix expansion, platform/compiler axes, scheduler | ✅ done |
 | 5 | Remote execution | worker agent, coordinator deployment, Python client |
 | 6 | GitHub automation | webhooks, status checks, PR comments |
 | 7 | Web management | start runs, manage matrices, admin |
