@@ -304,7 +304,8 @@ Results are displayed in **two switchable formats**:
 
 - **Project** — name, opp_env_name, github_owner, github_repo, git_url, tier (1/2), dependency_names
 - **Version** — project FK, opp_env_version, git_ref (branch/tag/SHA), label, resolved_dependencies (JSON: {dep_project: dep_version})
-- **Platform** — os_type, os_version, arch, compiler_type (gcc/clang), compiler_version
+- **OS** — name, version, arch
+- **Compiler** — name, version
 - **TestMatrix** — project FK, list of version combos + platforms + features
 - **TestRun** — matrix entry, git_ref, version, timestamp, status (queued/running/passed/failed/error), triggerer (manual/webhook/schedule)
 - **TestResult** — run FK, test_type (smoke/fingerprint/statistical/…), test_name, result_code, duration, stdout/stderr (raw with ANSI codes), details (JSON: structured per-test results from opp_repl)

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Operating Systems{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Operating Systems</h2>
+
+{% if os_entries %}
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Version</th>
+            <th>Architecture</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for o in os_entries %}
+        <tr>
+            <td>{{ o.id }}</td>
+            <td>{{ o.name }}</td>
+            <td>{{ o.version or "-" }}</td>
+            <td>{{ o.arch }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty">No operating systems registered.</p>
+{% endif %}
+{% endblock %}

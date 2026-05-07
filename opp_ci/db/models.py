@@ -39,33 +39,38 @@ class Version(Base):
         return f"<Version(project_id={self.project_id}, label={self.label!r}, git_ref={self.git_ref!r})>"
 
 
-class Platform(Base):
-    __tablename__ = "platforms"
+class OS(Base):
+    __tablename__ = "os_entries"
 
     id = Column(Integer, primary_key=True)
-    os_type = Column(String, nullable=False)
-    os_version = Column(String, nullable=True)
+    name = Column(String, nullable=False)
+    version = Column(String, nullable=True)
     arch = Column(String, default="x86_64")
-    compiler_type = Column(String, nullable=True)
-    compiler_version = Column(String, nullable=True)
 
     def __repr__(self):
-        parts = [self.os_type]
-        if self.os_version:
-            parts.append(self.os_version)
-        parts.append(self.arch)
-        if self.compiler_type:
-            parts.append(f"{self.compiler_type}-{self.compiler_version or '?'}")
-        return f"<Platform({' '.join(parts)})>"
+        return f"<OS({self.name} {self.version or ''} {self.arch})>"
 
     @property
     def label(self):
-        parts = [self.os_type]
-        if self.os_version:
-            parts.append(self.os_version)
-        if self.compiler_type:
-            parts.append(f"{self.compiler_type}-{self.compiler_version or ''}")
-        return " / ".join(parts)
+        parts = [self.name]
+        if self.version:
+            parts.append(self.version)
+        return " ".join(parts)
+
+
+class Compiler(Base):
+    __tablename__ = "compilers"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    version = Column(String, nullable=True)
+
+    def __repr__(self):
+        return f"<Compiler({self.name}-{self.version or '?'})>"
+
+    @property
+    def label(self):
+        return f"{self.name}-{self.version}" if self.version else self.name
 
 
 class TestMatrix(Base):

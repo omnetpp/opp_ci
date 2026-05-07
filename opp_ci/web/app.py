@@ -10,7 +10,7 @@ from markupsafe import Markup
 from sqlalchemy import select, func
 
 from opp_ci.db.connection import SessionLocal
-from opp_ci.db.models import Project, Version, Platform, TestMatrix, TestRun, TestRunStatus, TestResult
+from opp_ci.db.models import Project, Version, OS, Compiler, TestMatrix, TestRun, TestRunStatus, TestResult
 
 _ANSI_RE = re.compile(r'\x1b\[([0-9;]*)m')
 
@@ -480,16 +480,31 @@ def matrix_detail(request: Request, matrix_id: int):
         session.close()
 
 
-@app.get("/platforms", response_class=HTMLResponse)
-def platforms_list(request: Request):
+@app.get("/os", response_class=HTMLResponse)
+def os_list(request: Request):
     session = SessionLocal()
     try:
-        platforms = session.execute(
-            select(Platform).order_by(Platform.os_type, Platform.os_version)
+        os_entries = session.execute(
+            select(OS).order_by(OS.name, OS.version)
         ).scalars().all()
 
-        return templates.TemplateResponse(request, "platforms.html", {
-            "platforms": platforms,
+        return templates.TemplateResponse(request, "os.html", {
+            "os_entries": os_entries,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/compilers", response_class=HTMLResponse)
+def compilers_list(request: Request):
+    session = SessionLocal()
+    try:
+        compilers = session.execute(
+            select(Compiler).order_by(Compiler.name, Compiler.version)
+        ).scalars().all()
+
+        return templates.TemplateResponse(request, "compilers.html", {
+            "compilers": compilers,
         })
     finally:
         session.close()
@@ -502,7 +517,8 @@ def admin_page(request: Request):
         stats = {
             "projects": session.execute(select(func.count(Project.id))).scalar(),
             "versions": session.execute(select(func.count(Version.id))).scalar(),
-            "platforms": session.execute(select(func.count(Platform.id))).scalar(),
+            "os_entries": session.execute(select(func.count(OS.id))).scalar(),
+            "compilers": session.execute(select(func.count(Compiler.id))).scalar(),
             "matrices": session.execute(select(func.count(TestMatrix.id))).scalar(),
             "runs_total": session.execute(select(func.count(TestRun.id))).scalar(),
             "runs_passed": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.passed)).scalar(),

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Compilers{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Compilers</h2>
+
+{% if compilers %}
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Version</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for c in compilers %}
+        <tr>
+            <td>{{ c.id }}</td>
+            <td>{{ c.name }}</td>
+            <td>{{ c.version or "-" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty">No compilers registered.</p>
+{% endif %}
+{% endblock %}
