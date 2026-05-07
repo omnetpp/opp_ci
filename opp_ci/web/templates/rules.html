@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Auto-Test Rules{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Auto-Test Rules</h2>
+
+<p style="margin-bottom: 1rem; color: var(--muted); font-size: 0.9rem;">
+    Rules define which GitHub branches, pull requests, and tags are automatically tested when events arrive via webhook.
+</p>
+
+{% if rules %}
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Project</th>
+            <th>Type</th>
+            <th>Pattern</th>
+            <th>Matrix</th>
+            <th>Enabled</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in rules %}
+        <tr style="{{ 'opacity:0.5;' if not r.enabled else '' }}">
+            <td>{{ r.id }}</td>
+            <td><a href="/projects/{{ r.project_name }}">{{ r.project_name }}</a></td>
+            <td><span class="badge" style="background:#e2e3e5; color:var(--text);">{{ r.rule_type }}</span></td>
+            <td><code>{{ r.pattern }}</code></td>
+            <td>
+                {% if r.matrix_id %}
+                <a href="/matrices/{{ r.matrix_id }}">{{ r.matrix_name or "Matrix #" ~ r.matrix_id }}</a>
+                {% else %}-{% endif %}
+            </td>
+            <td>{{ "Yes" if r.enabled else "No" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty">No auto-test rules configured. Rules specify which branches/PRs/tags trigger automatic testing.</p>
+{% endif %}
+{% endblock %}

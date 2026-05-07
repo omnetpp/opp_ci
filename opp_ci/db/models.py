@@ -81,8 +81,22 @@ class TestMatrix(Base):
     project = Column(String, nullable=False)
     config = Column(JSON, nullable=False)
 
+
+class AutoTestRule(Base):
+    __tablename__ = "auto_test_rules"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    rule_type = Column(String, nullable=False)  # branch, pr, tag
+    pattern = Column(String, nullable=False)    # glob pattern, e.g. "master", "topic/*", "*"
+    matrix_id = Column(Integer, ForeignKey("test_matrices.id"), nullable=True)
+    enabled = Column(Integer, default=1)
+
+    project_rel = relationship("Project", backref="auto_test_rules")
+    matrix_rel = relationship("TestMatrix", backref="auto_test_rules")
+
     def __repr__(self):
-        return f"<TestMatrix(name={self.name!r}, project={self.project!r})>"
+        return f"<AutoTestRule(id={self.id}, rule_type={self.rule_type!r}, pattern={self.pattern!r})>"
 
 
 class TestRunStatus(enum.Enum):

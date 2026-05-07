@@ -10,7 +10,7 @@ from markupsafe import Markup
 from sqlalchemy import select, func
 
 from opp_ci.db.connection import SessionLocal
-from opp_ci.db.models import Project, Version, OS, Compiler, TestMatrix, TestRun, TestRunStatus, TestResult
+from opp_ci.db.models import Project, Version, OS, Compiler, TestMatrix, AutoTestRule, TestRun, TestRunStatus, TestResult
 
 _ANSI_RE = re.compile(r'\x1b\[([0-9;]*)m')
 
@@ -505,6 +505,43 @@ def compilers_list(request: Request):
 
         return templates.TemplateResponse(request, "compilers.html", {
             "compilers": compilers,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/rules", response_class=HTMLResponse)
+def rules_list(request: Request):
+    session = SessionLocal()
+    try:
+        rules = session.execute(
+            select(AutoTestRule).order_by(AutoTestRule.project_id, AutoTestRule.rule_type)
+        ).scalars().all()
+
+        # Resolve project names and matrix names
+        rule_data = []
+        for rule in rules:
+            proj_name = session.execute(
+                select(Project.name).where(Project.id == rule.project_id)
+            ).scalar_one_or_none() or "?"
+            matrix_name = None
+            if rule.matrix_id:
+                matrix_name = session.execute(
+                    select(TestMatrix.name).where(TestMatrix.id == rule.matrix_id)
+                ).scalar_one_or_none()
+            rule_data.append({
+                "id": rule.id,
+                "project_name": proj_name,
+                "project_id": rule.project_id,
+                "rule_type": rule.rule_type,
+                "pattern": rule.pattern,
+                "matrix_id": rule.matrix_id,
+                "matrix_name": matrix_name,
+                "enabled": rule.enabled,
+            })
+
+        return templates.TemplateResponse(request, "rules.html", {
+            "rules": rule_data,
         })
     finally:
         session.close()
