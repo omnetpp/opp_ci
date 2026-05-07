@@ -99,6 +99,25 @@ def dashboard(request: Request):
         session.close()
 
 
+@app.get("/queue", response_class=HTMLResponse)
+def queue_page(request: Request):
+    session = SessionLocal()
+    try:
+        running = session.execute(
+            select(TestRun).where(TestRun.status == TestRunStatus.running).order_by(TestRun.started_at.desc())
+        ).scalars().all()
+        queued = session.execute(
+            select(TestRun).where(TestRun.status == TestRunStatus.queued).order_by(TestRun.id)
+        ).scalars().all()
+
+        return templates.TemplateResponse(request, "queue.html", {
+            "running": running,
+            "queued": queued,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/runs", response_class=HTMLResponse)
 def runs_list(
     request: Request,

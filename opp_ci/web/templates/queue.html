@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Queue{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Active Tests</h2>
+
+{% if running %}
+<div class="card">
+    <h2>Running ({{ running|length }})</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Project</th>
+                <th>Test</th>
+                <th>Ref</th>
+                <th>Platform</th>
+                <th>Started</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in running %}
+            <tr>
+                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td>{{ run.project }}</td>
+                <td>{{ run.test_type }}</td>
+                <td>{{ run.git_ref or "-" }}</td>
+                <td>{{ run.platform_desc or "-" }}</td>
+                <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M:%S") if run.started_at else "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="card">
+    <h2>Running</h2>
+    <p class="empty">No tests currently running.</p>
+</div>
+{% endif %}
+
+{% if queued %}
+<div class="card">
+    <h2>Queued ({{ queued|length }})</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Project</th>
+                <th>Test</th>
+                <th>Ref</th>
+                <th>Platform</th>
+                <th>Trigger</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in queued %}
+            <tr>
+                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td>{{ run.project }}</td>
+                <td>{{ run.test_type }}</td>
+                <td>{{ run.git_ref or "-" }}</td>
+                <td>{{ run.platform_desc or "-" }}</td>
+                <td>{{ run.trigger }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="card">
+    <h2>Queued</h2>
+    <p class="empty">No tests in queue.</p>
+</div>
+{% endif %}
+
+{% if not running and not queued %}
+<p class="empty" style="margin-top: 1rem;">All clear — no active or pending tests.</p>
+{% endif %}
+{% endblock %}
