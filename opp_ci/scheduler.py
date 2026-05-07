@@ -6,8 +6,12 @@ A TestMatrix config is a JSON dict with axes to cross-product:
     "test_types": ["smoke", "fingerprint"],
     "modes": ["release", "debug"],
     "versions": ["inet-4.5", "inet-4.4"],
+    "refs": ["master", "topic/my-feature"],
     "features": []
 }
+
+The 'refs' axis (optional) specifies git branches/tags/commits to test.
+If both 'versions' and 'refs' are present, they are cross-producted.
 
 Platform axes support two styles:
 
@@ -104,6 +108,7 @@ def expand_matrix(project, config):
             "project": "inet-4.5",
             "test_type": "smoke",
             "mode": "release",
+            "git_ref": "master",
             "os": "Ubuntu",
             "os_version": "24.04",
             "compiler": "gcc",
@@ -114,16 +119,18 @@ def expand_matrix(project, config):
     test_types = config.get("test_types", ["smoke"])
     modes = config.get("modes", ["release"])
     versions = config.get("versions", [project])
+    refs = config.get("refs", [None])
     os_tuples = _resolve_os_axis(config)
     compiler_tuples = _resolve_compiler_axis(config)
 
     jobs = []
-    for version, test_type, mode, (os_name, os_ver), (comp_name, comp_ver) in itertools.product(
-            versions, test_types, modes, os_tuples, compiler_tuples):
+    for version, ref, test_type, mode, (os_name, os_ver), (comp_name, comp_ver) in itertools.product(
+            versions, refs, test_types, modes, os_tuples, compiler_tuples):
         jobs.append({
             "project": version,
             "test_type": test_type,
             "mode": mode,
+            "git_ref": ref,
             "os": os_name,
             "os_version": os_ver,
             "compiler": comp_name,

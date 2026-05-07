@@ -5,7 +5,7 @@ import click
 from sqlalchemy import select
 
 from opp_ci.db.connection import engine, SessionLocal
-from opp_ci.db.models import Base, Project, TestMatrix, TestRun, TestRunStatus, TestResult
+from opp_ci.db.models import Base, Project, Version, TestMatrix, TestRun, TestRunStatus, TestResult
 from opp_ci.executor import install_project, run_test
 
 
@@ -27,16 +27,32 @@ def init_db():
 @main.command("run")
 @click.option("--project", required=True, help="opp_env project name (e.g. inet-4.5)")
 @click.option("--test", "test_types", required=True, help="Test type(s), comma-separated (e.g. smoke,fingerprint)")
+@click.option("--ref", "git_ref", default=None, help="Git branch, tag, or commit to test (e.g. master, topic/my-feature)")
+@click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
-def run_cmd(project, test_types, skip_install):
+def run_cmd(project, test_types, git_ref, pins, skip_install):
     """Run test(s) for a project and store the results."""
+    from opp_ci.dependency import resolve_dependencies, parse_pins, format_resolved_deps
+
     Base.metadata.create_all(engine)
     session = SessionLocal()
     try:
+        # Resolve dependencies if pins are specified or project has deps
+        resolved_deps = None
+        if pins:
+            try:
+                pin_dict = parse_pins(pins)
+                resolved_deps = resolve_dependencies(project, pins=pin_dict)
+                if resolved_deps:
+                    click.echo(f"Resolved dependencies: {format_resolved_deps(resolved_deps)}")
+            except ValueError as e:
+                click.echo(f"ERROR: {e}")
+                return
+
         # Install once for all test types
         if not skip_install:
             try:
-                install_project(project)
+                install_project(project, git_ref=git_ref)
             except RuntimeError as e:
                 click.echo(f"ERROR during install: {e}")
                 return
@@ -49,16 +65,18 @@ def run_cmd(project, test_types, skip_install):
             test_run = TestRun(
                 project=project,
                 test_type=test_type,
+                git_ref=git_ref,
                 status=TestRunStatus.running,
                 started_at=datetime.datetime.utcnow(),
             )
             session.add(test_run)
             session.commit()
 
-            click.echo(f"Test run #{test_run.id}: {project} / {test_type}")
+            desc = f"{project}@{git_ref}" if git_ref else project
+            click.echo(f"Test run #{test_run.id}: {desc} / {test_type}")
 
             try:
-                outcome = run_test(project, test_type)
+                outcome = run_test(project, test_type, git_ref=git_ref)
             except Exception as e:
                 test_run.status = TestRunStatus.error
                 test_run.finished_at = datetime.datetime.utcnow()
@@ -101,16 +119,19 @@ def serve(host, port):
 
 @main.command("list-runs")
 @click.option("--project", default=None, help="Filter by project")
+@click.option("--ref", "git_ref", default=None, help="Filter by git ref")
 @click.option("--test", "test_type", default=None, help="Filter by test type")
 @click.option("--status", default=None, help="Filter by status (passed/failed/error)")
 @click.option("--limit", default=20, help="Max rows to show")
-def list_runs(project, test_type, status, limit):
+def list_runs(project, git_ref, test_type, status, limit):
     """List test runs."""
     session = SessionLocal()
     try:
         query = select(TestRun).order_by(TestRun.id.desc()).limit(limit)
         if project:
             query = query.where(TestRun.project == project)
+        if git_ref:
+            query = query.where(TestRun.git_ref == git_ref)
         if test_type:
             query = query.where(TestRun.test_type == test_type)
         if status:
@@ -121,12 +142,13 @@ def list_runs(project, test_type, status, limit):
             click.echo("No runs found.")
             return
 
-        click.echo(f"{'ID':<6} {'Project':<20} {'Test':<14} {'Status':<10} {'Duration':<10} {'Started'}")
-        click.echo("-" * 90)
+        click.echo(f"{'ID':<6} {'Project':<20} {'Ref':<16} {'Test':<14} {'Status':<10} {'Duration':<10} {'Started'}")
+        click.echo("-" * 106)
         for run in runs:
             duration = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
             started = run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-"
-            click.echo(f"{run.id:<6} {run.project:<20} {run.test_type:<14} {run.status.value:<10} {duration:<10} {started}")
+            ref = run.git_ref or "-"
+            click.echo(f"{run.id:<6} {run.project:<20} {ref:<16} {run.test_type:<14} {run.status.value:<10} {duration:<10} {started}")
     finally:
         session.close()
 
@@ -146,6 +168,8 @@ def show_run(run_id):
 
         click.echo(f"Run #{run.id}")
         click.echo(f"  Project:  {run.project}")
+        click.echo(f"  Ref:      {run.git_ref or '-'}")
+        click.echo(f"  Version:  {run.version or '-'}")
         click.echo(f"  Test:     {run.test_type}")
         click.echo(f"  Status:   {run.status.value}")
         click.echo(f"  Duration: {run.duration_seconds:.1f}s" if run.duration_seconds else "  Duration: -")
@@ -252,7 +276,8 @@ def list_projects():
 @click.option("--compiler", "compilers", default=None, help="Comma-separated compilers (e.g. 'gcc-14,clang-18' or 'gcc,clang' with --compiler-version)")
 @click.option("--compiler-version", "compiler_versions", default=None, help="Comma-separated compiler versions for cross-product (e.g. '14,18')")
 @click.option("--tests", "test_types", required=True, help="Comma-separated test types")
-def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions):
+@click.option("--refs", default=None, help="Comma-separated git refs to test (e.g. 'master,topic/my-feature')")
+def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs):
     """Create a test matrix configuration.
 
     Platform axes support two styles:
@@ -271,6 +296,8 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
             "modes": [m.strip() for m in modes.split(",")],
             "versions": [v.strip() for v in versions.split(",")] if versions else [project],
         }
+        if refs:
+            config["refs"] = [r.strip() for r in refs.split(",")]
         if os_names:
             config["os"] = [o.strip() for o in os_names.split(",")]
         if os_versions:
@@ -288,6 +315,8 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
         click.echo(f"Matrix '{name}' created ({len(jobs)} jobs when expanded):")
         for job in jobs[:10]:
             parts = [job["project"], job["test_type"], job["mode"]]
+            if job.get("git_ref"):
+                parts.append(f"@{job['git_ref']}")
             if job.get("platform_desc"):
                 parts.append(job["platform_desc"])
             click.echo(f"  {' × '.join(parts)}")
@@ -340,14 +369,15 @@ def run_matrix(matrix_name, skip_install):
         jobs = expand_matrix(matrix.project, matrix.config)
         click.echo(f"Running matrix '{matrix_name}': {len(jobs)} jobs")
 
-        # Install once per unique project version
+        # Install once per unique project+ref combination
         if not skip_install:
             installed = set()
             for job in jobs:
-                if job["project"] not in installed:
+                install_key = (job["project"], job.get("git_ref"))
+                if install_key not in installed:
                     try:
-                        install_project(job["project"])
-                        installed.add(job["project"])
+                        install_project(job["project"], git_ref=job.get("git_ref"))
+                        installed.add(install_key)
                     except RuntimeError as e:
                         click.echo(f"ERROR installing {job['project']}: {e}")
                         return
@@ -360,6 +390,7 @@ def run_matrix(matrix_name, skip_install):
                 project=job["project"],
                 test_type=job["test_type"],
                 mode=job.get("mode"),
+                git_ref=job.get("git_ref"),
                 os=job.get("os"),
                 os_version=job.get("os_version"),
                 compiler=job.get("compiler"),
@@ -373,12 +404,14 @@ def run_matrix(matrix_name, skip_install):
             session.commit()
 
             parts = [job["project"], job["test_type"], job.get("mode", "")]
+            if job.get("git_ref"):
+                parts.append(f"@{job['git_ref']}")
             if job.get("platform_desc"):
                 parts.append(job["platform_desc"])
             click.echo(f"  [{i}/{len(jobs)}] {' × '.join(parts)}", nl=False)
 
             try:
-                outcome = run_test(job["project"], job["test_type"])
+                outcome = run_test(job["project"], job["test_type"], git_ref=job.get("git_ref"))
             except Exception as e:
                 test_run.status = TestRunStatus.error
                 test_run.finished_at = datetime.datetime.utcnow()
@@ -434,3 +467,109 @@ def seed_matrices_cmd():
         click.echo(f"Seeded {len(DEFAULT_MATRICES)} default matrices.")
     finally:
         session.close()
+
+
+@main.command("add-version")
+@click.option("--project", required=True, help="Project name")
+@click.option("--label", required=True, help="Human-readable version label (e.g. master, 4.5, topic/my-feature)")
+@click.option("--ref", "git_ref", default=None, help="Git ref (branch, tag, or SHA)")
+@click.option("--opp-env-version", default=None, help="opp_env version string (e.g. inet-4.5)")
+@click.option("--deps", default=None, help="Resolved dependencies as JSON (e.g. '{\"omnetpp\": \"6.1\"}')")
+def add_version(project, label, git_ref, opp_env_version, deps):
+    """Register a version (git ref / opp_env version) for a project."""
+    import json as _json
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        proj = session.execute(
+            select(Project).where(Project.name == project)
+        ).scalar_one_or_none()
+        if proj is None:
+            click.echo(f"Project '{project}' not found. Run 'opp_ci seed-projects' first.")
+            return
+
+        resolved = _json.loads(deps) if deps else None
+        version = Version(
+            project_id=proj.id,
+            label=label,
+            git_ref=git_ref or label,
+            opp_env_version=opp_env_version,
+            resolved_dependencies=resolved,
+        )
+        session.add(version)
+        session.commit()
+        click.echo(f"Version '{label}' added for project '{project}' (ref: {version.git_ref})")
+    finally:
+        session.close()
+
+
+@main.command("list-versions")
+@click.option("--project", default=None, help="Filter by project name")
+def list_versions(project):
+    """List registered versions for projects."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        query = select(Version)
+        if project:
+            proj = session.execute(
+                select(Project).where(Project.name == project)
+            ).scalar_one_or_none()
+            if proj is None:
+                click.echo(f"Project '{project}' not found.")
+                return
+            query = query.where(Version.project_id == proj.id)
+
+        versions = session.execute(query).scalars().all()
+        if not versions:
+            click.echo("No versions registered. Use 'opp_ci add-version' to add one.")
+            return
+
+        click.echo(f"{'ID':<6} {'Project':<16} {'Label':<20} {'Git Ref':<24} {'opp_env':<16} {'Dependencies'}")
+        click.echo("-" * 110)
+        for v in versions:
+            proj_name = session.execute(
+                select(Project.name).where(Project.id == v.project_id)
+            ).scalar_one()
+            deps = str(v.resolved_dependencies) if v.resolved_dependencies else "-"
+            click.echo(f"{v.id:<6} {proj_name:<16} {v.label:<20} {v.git_ref or '-':<24} {v.opp_env_version or '-':<16} {deps}")
+    finally:
+        session.close()
+
+
+@main.command("resolve-deps")
+@click.argument("project_version")
+@click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
+def resolve_deps_cmd(project_version, pins):
+    """Resolve dependencies for a project version via opp_env.
+
+    Queries opp_env for required_projects and shows compatible versions.
+    Use --pin to override auto-resolution for specific dependencies.
+
+    Example: opp_ci resolve-deps inet-4.5 --pin omnetpp=6.0.3
+    """
+    from opp_ci.dependency import (
+        resolve_dependencies, parse_pins, get_required_projects, format_resolved_deps
+    )
+
+    required = get_required_projects(project_version)
+    if not required:
+        click.echo(f"No dependencies found for '{project_version}' (or opp_env query failed).")
+        return
+
+    click.echo(f"Dependencies for {project_version}:")
+    for dep_name, compatible_versions in required.items():
+        versions_str = ", ".join(compatible_versions[:10])
+        if len(compatible_versions) > 10:
+            versions_str += f" ... ({len(compatible_versions)} total)"
+        click.echo(f"  {dep_name}: {versions_str}")
+
+    try:
+        pin_dict = parse_pins(pins)
+        resolved = resolve_dependencies(project_version, pins=pin_dict)
+    except ValueError as e:
+        click.echo(f"\nERROR: {e}")
+        return
+
+    if resolved:
+        click.echo(f"\nResolved: {format_resolved_deps(resolved)}")

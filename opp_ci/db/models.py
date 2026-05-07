@@ -23,6 +23,22 @@ class Project(Base):
         return f"<Project(name={self.name!r}, tier={self.tier})>"
 
 
+class Version(Base):
+    __tablename__ = "versions"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    opp_env_version = Column(String, nullable=True)
+    git_ref = Column(String, nullable=True)
+    label = Column(String, nullable=True)
+    resolved_dependencies = Column(JSON, nullable=True)
+
+    project_rel = relationship("Project", backref="versions")
+
+    def __repr__(self):
+        return f"<Version(project_id={self.project_id}, label={self.label!r}, git_ref={self.git_ref!r})>"
+
+
 class Platform(Base):
     __tablename__ = "platforms"
 
@@ -84,6 +100,8 @@ class TestRun(Base):
     compiler = Column(String, nullable=True)
     compiler_version = Column(String, nullable=True)
     platform_desc = Column(String, nullable=True)
+    git_ref = Column(String, nullable=True)
+    version = Column(String, nullable=True)
     matrix_id = Column(Integer, ForeignKey("test_matrices.id"), nullable=True)
     status = Column(Enum(TestRunStatus), nullable=False, default=TestRunStatus.queued)
     started_at = Column(DateTime, default=datetime.datetime.utcnow)
