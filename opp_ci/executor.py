@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import subprocess
+import tempfile
 import time
 
 from opp_ci.config import USE_OPP_ENV
@@ -104,13 +105,18 @@ def run_test(project, test_type, git_ref=None):
         raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(COMMAND_MAP.keys())}")
 
     env = os.environ.copy()
+    result_file = None
     if USE_OPP_ENV:
         effective_project, effective_ref = resolve_git_project(project, git_ref)
         if effective_ref:
             env["OPP_ENV_GIT_REF"] = effective_ref
         args = ["opp_env", "run", effective_project, "-c", cmd]
     else:
-        args = [cmd, "--load", "@opp", "-p", project, "--output-format", "json"]
+        result_file = tempfile.NamedTemporaryFile(
+            prefix="opp_ci_result_", suffix=".json", delete=False
+        )
+        result_file.close()
+        args = [cmd, "--load", "@opp", "-p", project, "--result-file", result_file.name]
 
     _logger.info("Running test: %s", " ".join(args))
     start = time.time()
@@ -123,20 +129,23 @@ def run_test(project, test_type, git_ref=None):
         result_code = "FAIL"
 
     details = None
-    stdout = result.stdout
-    if "--output-format" in args and stdout.rstrip():
-        last_line = stdout.rstrip().rsplit("\n", 1)[-1]
+    if result_file:
         try:
-            details = json.loads(last_line)
-            stdout = stdout[:stdout.rfind(last_line)].rstrip()
-        except (json.JSONDecodeError, ValueError):
-            _logger.warning("Failed to parse JSON from last line of stdout")
+            with open(result_file.name, "r") as f:
+                details = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            _logger.warning("Failed to read result file %s: %s", result_file.name, e)
+        finally:
+            try:
+                os.unlink(result_file.name)
+            except OSError:
+                pass
 
     _logger.info("Test finished: %s (%.1fs)", result_code, duration)
     return {
         "result_code": result_code,
         "duration_seconds": duration,
-        "stdout": stdout,
+        "stdout": result.stdout,
         "stderr": result.stderr,
         "details": details,
     }
