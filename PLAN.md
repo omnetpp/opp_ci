@@ -133,7 +133,7 @@ Development is split into stages that each deliver a usable increment. Each stag
 
 ---
 
-### Stage 2 — Web UI: read-only results (in progress)
+### Stage 2 — Web UI: read-only results ✅
 
 **Goal**: Browse test results via local web server (and later in the cloud).
 
@@ -143,7 +143,7 @@ Development is split into stages that each deliver a usable increment. Each stag
 - [x] Test runs list (`/runs`): filterable table with status, duration
 - [x] Test run detail (`/runs/{run_id}`): results, stdout/stderr
 - [x] Test results search (`/results`): multi-dimensional filter + summary/detailed display modes
-- [ ] Comparison page (`/compare`): side-by-side diff of two runs or branches
+- [x] Comparison page (`/compare`): side-by-side diff of two runs or branches
 - **Deliverable**: run `opp_ci serve`, open `http://localhost:8000` to browse results locally
 
 #### Result Filter and Display Modes
@@ -286,7 +286,7 @@ Results are displayed in **two switchable formats**:
 | Stage | What you get | Key components |
 |---|---|---|
 | 1 | Run one smoke test, store in DB | executor, minimal DB, CLI | ✅ done |
-| 2 | Web results browsing (local + cloud) | FastAPI, dashboard, runs list, search, comparison | 🔧 in progress |
+| 2 | Web results browsing (local + cloud) | FastAPI, dashboard, runs list, search, comparison | ✅ done |
 | 3 | All test types, multiple projects | test types, project catalog, dependency resolution | ✅ done |
 | 4 | Multi-dimensional matrices | matrix expansion, platform/compiler axes, scheduler | ✅ done |
 | 5 | Remote execution | worker agent, coordinator deployment, Python client |

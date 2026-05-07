@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Compare{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Compare</h2>
+
+<div class="card">
+    <h2>Compare two runs by ID</h2>
+    <form class="filters" method="get" action="/compare">
+        <input type="number" name="run_a" placeholder="Run A (ID)" value="{{ run_a }}" style="width:100px;">
+        <span style="color:var(--muted)">vs</span>
+        <input type="number" name="run_b" placeholder="Run B (ID)" value="{{ run_b }}" style="width:100px;">
+        <button type="submit">Compare</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Compare two branches/refs</h2>
+    <form class="filters" method="get" action="/compare">
+        <input type="text" name="project" placeholder="Project" value="{{ filter_project }}" style="width:120px;">
+        <input type="text" name="ref_a" placeholder="Ref A (e.g. master)" value="{{ ref_a }}" style="width:140px;">
+        <span style="color:var(--muted)">vs</span>
+        <input type="text" name="ref_b" placeholder="Ref B (e.g. topic/fix)" value="{{ ref_b }}" style="width:140px;">
+        <input type="text" name="test_type" placeholder="Test type (opt)" value="{{ filter_test_type }}" style="width:120px;">
+        <button type="submit">Compare</button>
+    </form>
+</div>
+
+{% if left_label and right_label %}
+<div class="card">
+    <h2>{{ left_label }} vs {{ right_label }}</h2>
+
+    {% if diff %}
+    <table>
+        <thead>
+            <tr>
+                <th>Test</th>
+                <th>{{ left_label }}</th>
+                <th>{{ right_label }}</th>
+                <th>Duration (A)</th>
+                <th>Duration (B)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in diff %}
+            <tr style="{{ 'background:#fff3cd;' if row.changed else '' }}">
+                <td>{{ row.test_key }}</td>
+                <td>
+                    {% if row.left_status == "PASS" or row.left_status == "passed" %}
+                    <span class="badge badge-passed">{{ row.left_status }}</span>
+                    {% elif row.left_status == "FAIL" or row.left_status == "failed" %}
+                    <span class="badge badge-failed">{{ row.left_status }}</span>
+                    {% elif row.left_status == "ERROR" or row.left_status == "error" %}
+                    <span class="badge badge-error">{{ row.left_status }}</span>
+                    {% else %}
+                    {{ row.left_status }}
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.right_status == "PASS" or row.right_status == "passed" %}
+                    <span class="badge badge-passed">{{ row.right_status }}</span>
+                    {% elif row.right_status == "FAIL" or row.right_status == "failed" %}
+                    <span class="badge badge-failed">{{ row.right_status }}</span>
+                    {% elif row.right_status == "ERROR" or row.right_status == "error" %}
+                    <span class="badge badge-error">{{ row.right_status }}</span>
+                    {% else %}
+                    {{ row.right_status }}
+                    {% endif %}
+                </td>
+                <td>{{ row.left_duration }}</td>
+                <td>{{ row.right_duration }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% set changed_count = diff|selectattr("changed")|list|length %}
+    <p style="margin-top:0.75rem; font-size:0.85rem; color:var(--muted);">
+        {{ diff|length }} tests compared, {{ changed_count }} changed
+    </p>
+    {% else %}
+    <p class="empty">No test data to compare. Make sure both sides have results with structured details.</p>
+    {% endif %}
+</div>
+{% elif not run_a and not run_b and not ref_a %}
+<p class="empty" style="margin-top:1rem;">
+    Select two runs by ID or compare two branches above.
+</p>
+{% else %}
+<p class="empty" style="margin-top:1rem;">
+    Could not find runs for the specified criteria.
+</p>
+{% endif %}
+
+{% endblock %}

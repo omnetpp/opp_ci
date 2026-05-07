@@ -185,6 +185,169 @@ def results_page(
         session.close()
 
 
+@app.get("/compare", response_class=HTMLResponse)
+def compare_page(
+    request: Request,
+    run_a: int = Query(default=None, description="First run ID"),
+    run_b: int = Query(default=None, description="Second run ID"),
+    project: str = Query(default=None),
+    ref_a: str = Query(default=None, description="Git ref for side A"),
+    ref_b: str = Query(default=None, description="Git ref for side B"),
+    test_type: str = Query(default=None),
+):
+    """Compare two runs or two refs side-by-side."""
+    session = SessionLocal()
+    try:
+        left_runs = []
+        right_runs = []
+        left_label = ""
+        right_label = ""
+        left_results = []
+        right_results = []
+
+        if run_a and run_b:
+            # Compare two specific runs
+            left_run = session.execute(select(TestRun).where(TestRun.id == run_a)).scalar_one_or_none()
+            right_run = session.execute(select(TestRun).where(TestRun.id == run_b)).scalar_one_or_none()
+            if left_run:
+                left_runs = [left_run]
+                left_label = f"Run #{left_run.id} ({left_run.project}{'@' + left_run.git_ref if left_run.git_ref else ''})"
+                left_results = session.execute(
+                    select(TestResult).where(TestResult.test_run_id == left_run.id)
+                ).scalars().all()
+            if right_run:
+                right_runs = [right_run]
+                right_label = f"Run #{right_run.id} ({right_run.project}{'@' + right_run.git_ref if right_run.git_ref else ''})"
+                right_results = session.execute(
+                    select(TestResult).where(TestResult.test_run_id == right_run.id)
+                ).scalars().all()
+
+        elif project and ref_a and ref_b:
+            # Compare by branch/ref — find most recent runs for each ref
+            query_base = select(TestRun).where(TestRun.project == project).order_by(TestRun.id.desc())
+            if test_type:
+                query_base = query_base.where(TestRun.test_type == test_type)
+
+            left_runs = session.execute(
+                query_base.where(TestRun.git_ref == ref_a).limit(20)
+            ).scalars().all()
+            right_runs = session.execute(
+                query_base.where(TestRun.git_ref == ref_b).limit(20)
+            ).scalars().all()
+            left_label = f"{project}@{ref_a}"
+            right_label = f"{project}@{ref_b}"
+
+            if left_runs:
+                left_results = session.execute(
+                    select(TestResult).where(TestResult.test_run_id.in_([r.id for r in left_runs]))
+                ).scalars().all()
+            if right_runs:
+                right_results = session.execute(
+                    select(TestResult).where(TestResult.test_run_id.in_([r.id for r in right_runs]))
+                ).scalars().all()
+
+        # Build comparison data: match tests by name/type
+        diff = _build_comparison_diff(left_runs, left_results, right_runs, right_results)
+
+        return templates.TemplateResponse(request, "compare.html", {
+            "left_label": left_label,
+            "right_label": right_label,
+            "left_runs": left_runs,
+            "right_runs": right_runs,
+            "diff": diff,
+            "run_a": run_a or "",
+            "run_b": run_b or "",
+            "filter_project": project or "",
+            "ref_a": ref_a or "",
+            "ref_b": ref_b or "",
+            "filter_test_type": test_type or "",
+        })
+    finally:
+        session.close()
+
+
+def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
+    """
+    Build a list of comparison rows.
+
+    Each row: {test_key, left_status, right_status, changed, left_duration, right_duration}
+    """
+    def _result_key(result):
+        # Use test_run's test_type + result parameters as key
+        return result.result_code  # fallback
+
+    def _results_by_run(runs, results):
+        """Map run_id → results list."""
+        by_run = {}
+        for r in results:
+            by_run.setdefault(r.test_run_id, []).append(r)
+        return by_run
+
+    # For simple two-run comparison
+    if len(left_runs) == 1 and len(right_runs) == 1:
+        left_detail = left_results[0].details if left_results else None
+        right_detail = right_results[0].details if right_results else None
+
+        left_tests = {}
+        right_tests = {}
+
+        if left_detail and isinstance(left_detail, dict) and "results" in left_detail:
+            for t in left_detail["results"]:
+                key = t.get("parameters") or t.get("working_directory", "")
+                left_tests[key] = t
+        if right_detail and isinstance(right_detail, dict) and "results" in right_detail:
+            for t in right_detail["results"]:
+                key = t.get("parameters") or t.get("working_directory", "")
+                right_tests[key] = t
+
+        all_keys = list(dict.fromkeys(list(left_tests.keys()) + list(right_tests.keys())))
+
+        rows = []
+        for key in all_keys:
+            lt = left_tests.get(key)
+            rt = right_tests.get(key)
+            left_status = lt.get("result", "-") if lt else "-"
+            right_status = rt.get("result", "-") if rt else "-"
+            left_dur = lt.get("elapsed_wall_time") if lt else None
+            right_dur = rt.get("elapsed_wall_time") if rt else None
+            rows.append({
+                "test_key": key or "(unnamed)",
+                "left_status": left_status,
+                "right_status": right_status,
+                "changed": left_status != right_status,
+                "left_duration": f"{left_dur:.3f}s" if left_dur else "-",
+                "right_duration": f"{right_dur:.3f}s" if right_dur else "-",
+            })
+        return rows
+
+    # For multi-run (branch) comparison: compare by test_type
+    left_by_type = {}
+    right_by_type = {}
+    for r in left_runs:
+        left_by_type.setdefault(r.test_type, []).append(r)
+    for r in right_runs:
+        right_by_type.setdefault(r.test_type, []).append(r)
+
+    all_types = list(dict.fromkeys(list(left_by_type.keys()) + list(right_by_type.keys())))
+    rows = []
+    for tt in all_types:
+        l_runs = left_by_type.get(tt, [])
+        r_runs = right_by_type.get(tt, [])
+        l_statuses = set(r.status.value for r in l_runs)
+        r_statuses = set(r.status.value for r in r_runs)
+        left_status = l_statuses.pop() if len(l_statuses) == 1 else "/".join(sorted(l_statuses)) if l_statuses else "-"
+        right_status = r_statuses.pop() if len(r_statuses) == 1 else "/".join(sorted(r_statuses)) if r_statuses else "-"
+        rows.append({
+            "test_key": tt,
+            "left_status": left_status,
+            "right_status": right_status,
+            "changed": left_status != right_status,
+            "left_duration": "-",
+            "right_duration": "-",
+        })
+    return rows
+
+
 @app.get("/runs/{run_id}", response_class=HTMLResponse)
 def run_detail(request: Request, run_id: int):
     session = SessionLocal()
