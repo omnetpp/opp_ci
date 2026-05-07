@@ -220,7 +220,7 @@ Results are displayed in **two switchable formats**:
 - [x] Sequential local execution; jobs stored in DB (status: queued → running → passed/failed/error)
 - [x] CLI: `opp_ci run-matrix --matrix <name>`, `opp_ci create-matrix`, `opp_ci list-matrices`, `opp_ci seed-matrices`
 - [x] CLI `create-matrix` args: `--name`, `--project`, `--project-versions`, `--builds`, `--os`, `--os-version`, `--compiler`, `--compiler-version`, `--tests`
-- [x] Structured JSON test results from `opp_repl` (`--output-format json`) parsed and stored in `TestResult.details`
+- [x] Structured JSON test results from `opp_repl` (`--result-file`) parsed and stored in `TestResult.details`; human-readable text kept in stdout
 - [x] ANSI escape codes stored raw in DB, converted to colored HTML at render time
 - [x] Run detail page shows per-test results table (test name, result, duration, reason)
 - [x] Results page filters and rollup updated for all 4 platform dimensions
@@ -306,7 +306,7 @@ Results are displayed in **two switchable formats**:
 - **Version** — project FK, opp_env_version, git_ref (branch/tag/SHA), label, resolved_dependencies (JSON: {dep_project: dep_version})
 - **Platform** — os_type, os_version, arch, compiler_type (gcc/clang), compiler_version
 - **TestMatrix** — project FK, list of version combos + platforms + features
-- **TestRun** — matrix entry, timestamp, status (queued/running/passed/failed/error), triggerer (manual/webhook/schedule)
+- **TestRun** — matrix entry, git_ref, version, timestamp, status (queued/running/passed/failed/error), triggerer (manual/webhook/schedule)
 - **TestResult** — run FK, test_type (smoke/fingerprint/statistical/…), test_name, result_code, duration, stdout/stderr (raw with ANSI codes), details (JSON: structured per-test results from opp_repl)
 
 Migrations via Alembic (`opp_ci/db/migrations/`). Connection pool in `opp_ci/db/connection.py`, config from env vars.
@@ -458,7 +458,7 @@ Workers self-describe their capabilities (OS, arch, compilers, features) — the
 ## Key Design Decisions
 
 - **opp_env for reproducible builds** — Nix-based isolation ensures every CI job gets the exact same dependencies, regardless of host.
-- **opp_repl is the test engine** — opp_ci orchestrates; opp_repl builds and runs tests. No duplication of test logic.
+- **opp_repl is the test engine** — opp_ci orchestrates; opp_repl builds and runs tests. No duplication of test logic. opp_repl always prints human-readable text to stdout; structured JSON results go to `--result-file` (a temp file read by opp_ci).
 - **Postgres for persistence** — structured querying of historical results, easy aggregation for dashboards.
 - **Start minimal** — CLI + DB first, web later. Get value from structured result storage immediately.
 - **GitHub-native** — webhooks for automation, status checks for feedback, same token infrastructure as opp_repl.
@@ -476,6 +476,8 @@ opp_ci/
 │   ├── config.py
 │   ├── cli.py
 │   ├── client.py
+│   ├── catalog.py
+│   ├── dependency.py
 │   ├── scheduler.py
 │   ├── executor.py
 │   ├── worker.py
