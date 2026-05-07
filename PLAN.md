@@ -247,9 +247,19 @@ Results are displayed in **two switchable formats**:
 
 **Goal**: Automatically test on push/PR, post status checks back to GitHub.
 
+- **AutoTestRule** model in DB — configures which branches/PRs are automatically tested:
+  - project FK
+  - rule_type: `branch`, `pr`, `tag`
+  - pattern: glob/regex for matching (e.g. `master`, `topic/*`, `*` for all PRs)
+  - matrix FK: which test matrix to run when triggered
+  - enabled: bool
+  - Example rules:
+    - "test inet master with full matrix on every push"
+    - "test inet PRs with smoke only"
+    - "test omnetpp tags matching `v6.*` with release matrix"
 - Webhook receiver at `/api/github/webhook` (see [GitHub integration](#phase-3--github-integration-details))
 - Listen for `push` and `pull_request` events on configured repos
-- Map events to matrix configs → enqueue jobs automatically
+- Match incoming events against AutoTestRule patterns → enqueue matching matrix jobs
 - GitHub API client: post commit statuses, PR comments with result summaries (see [GitHub API client](#phase-3--github-integration-details))
 - Reuse token from `~/.ssh/github_repo_token` (same as opp_repl)
 - **Deliverable**: push to inet master → tests auto-triggered → green/red status check on GitHub
@@ -307,6 +317,7 @@ Results are displayed in **two switchable formats**:
 - **OS** — name, version, arch
 - **Compiler** — name, version
 - **TestMatrix** — project FK, list of version combos + platforms + features
+- **AutoTestRule** — project FK, rule_type (branch/pr/tag), pattern (glob), matrix FK, enabled
 - **TestRun** — matrix entry, git_ref, version, timestamp, status (queued/running/passed/failed/error), triggerer (manual/webhook/schedule)
 - **TestResult** — run FK, test_type (smoke/fingerprint/statistical/…), test_name, result_code, duration, stdout/stderr (raw with ANSI codes), details (JSON: structured per-test results from opp_repl)
 
