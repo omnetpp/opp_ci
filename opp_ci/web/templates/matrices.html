@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Matrices{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Test Matrices</h2>
+
+{% if matrices %}
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Project</th>
+            <th>Test Types</th>
+            <th>Modes</th>
+            <th>Refs</th>
+            <th>Runs</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for m in matrices %}
+        <tr>
+            <td><a href="/matrices/{{ m.id }}">{{ m.id }}</a></td>
+            <td><a href="/matrices/{{ m.id }}">{{ m.name }}</a></td>
+            <td><a href="/projects/{{ m.project }}">{{ m.project }}</a></td>
+            <td>{{ m.config.get("test_types", [])|join(", ") }}</td>
+            <td>{{ m.config.get("modes", [])|join(", ") }}</td>
+            <td>{{ m.config.get("refs", ["-"])|join(", ") }}</td>
+            <td>{{ run_counts.get(m.id, 0) }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty">No matrices defined. Use <code>opp_ci create-matrix</code> or <code>opp_ci seed-matrices</code> to add them.</p>
+{% endif %}
+{% endblock %}

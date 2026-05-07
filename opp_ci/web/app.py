@@ -10,7 +10,7 @@ from markupsafe import Markup
 from sqlalchemy import select, func
 
 from opp_ci.db.connection import SessionLocal
-from opp_ci.db.models import TestRun, TestRunStatus, TestResult
+from opp_ci.db.models import Project, Version, Platform, TestMatrix, TestRun, TestRunStatus, TestResult
 
 _ANSI_RE = re.compile(r'\x1b\[([0-9;]*)m')
 
@@ -365,6 +365,160 @@ def run_detail(request: Request, run_id: int):
         return templates.TemplateResponse(request, "run_detail.html", {
             "run": run,
             "results": results,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/projects", response_class=HTMLResponse)
+def projects_list(request: Request):
+    session = SessionLocal()
+    try:
+        projects = session.execute(
+            select(Project).order_by(Project.tier, Project.name)
+        ).scalars().all()
+
+        # Collect run counts per project
+        run_counts = {}
+        for p in projects:
+            count = session.execute(
+                select(func.count(TestRun.id)).where(TestRun.project == p.name)
+            ).scalar()
+            run_counts[p.name] = count
+
+        return templates.TemplateResponse(request, "projects.html", {
+            "projects": projects,
+            "run_counts": run_counts,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/projects/{name}", response_class=HTMLResponse)
+def project_detail(request: Request, name: str):
+    session = SessionLocal()
+    try:
+        project = session.execute(
+            select(Project).where(Project.name == name)
+        ).scalar_one_or_none()
+        if project is None:
+            return HTMLResponse("<h1>Project not found</h1>", status_code=404)
+
+        versions = session.execute(
+            select(Version).where(Version.project_id == project.id)
+        ).scalars().all()
+
+        recent_runs = session.execute(
+            select(TestRun).where(TestRun.project == name).order_by(TestRun.id.desc()).limit(30)
+        ).scalars().all()
+
+        # Stats
+        total = session.execute(select(func.count(TestRun.id)).where(TestRun.project == name)).scalar()
+        passed = session.execute(select(func.count(TestRun.id)).where(TestRun.project == name, TestRun.status == TestRunStatus.passed)).scalar()
+        failed = session.execute(select(func.count(TestRun.id)).where(TestRun.project == name, TestRun.status == TestRunStatus.failed)).scalar()
+
+        return templates.TemplateResponse(request, "project_detail.html", {
+            "project": project,
+            "versions": versions,
+            "recent_runs": recent_runs,
+            "total": total,
+            "passed": passed,
+            "failed": failed,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/matrices", response_class=HTMLResponse)
+def matrices_list(request: Request):
+    session = SessionLocal()
+    try:
+        matrices = session.execute(
+            select(TestMatrix).order_by(TestMatrix.id)
+        ).scalars().all()
+
+        # Count runs per matrix
+        run_counts = {}
+        for m in matrices:
+            count = session.execute(
+                select(func.count(TestRun.id)).where(TestRun.matrix_id == m.id)
+            ).scalar()
+            run_counts[m.id] = count
+
+        return templates.TemplateResponse(request, "matrices.html", {
+            "matrices": matrices,
+            "run_counts": run_counts,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/matrices/{matrix_id}", response_class=HTMLResponse)
+def matrix_detail(request: Request, matrix_id: int):
+    from opp_ci.scheduler import expand_matrix
+
+    session = SessionLocal()
+    try:
+        matrix = session.execute(
+            select(TestMatrix).where(TestMatrix.id == matrix_id)
+        ).scalar_one_or_none()
+        if matrix is None:
+            return HTMLResponse("<h1>Matrix not found</h1>", status_code=404)
+
+        jobs = expand_matrix(matrix.project, matrix.config)
+
+        recent_runs = session.execute(
+            select(TestRun).where(TestRun.matrix_id == matrix_id).order_by(TestRun.id.desc()).limit(50)
+        ).scalars().all()
+
+        return templates.TemplateResponse(request, "matrix_detail.html", {
+            "matrix": matrix,
+            "jobs": jobs,
+            "recent_runs": recent_runs,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/platforms", response_class=HTMLResponse)
+def platforms_list(request: Request):
+    session = SessionLocal()
+    try:
+        platforms = session.execute(
+            select(Platform).order_by(Platform.os_type, Platform.os_version)
+        ).scalars().all()
+
+        return templates.TemplateResponse(request, "platforms.html", {
+            "platforms": platforms,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(request: Request):
+    session = SessionLocal()
+    try:
+        stats = {
+            "projects": session.execute(select(func.count(Project.id))).scalar(),
+            "versions": session.execute(select(func.count(Version.id))).scalar(),
+            "platforms": session.execute(select(func.count(Platform.id))).scalar(),
+            "matrices": session.execute(select(func.count(TestMatrix.id))).scalar(),
+            "runs_total": session.execute(select(func.count(TestRun.id))).scalar(),
+            "runs_passed": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.passed)).scalar(),
+            "runs_failed": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.failed)).scalar(),
+            "runs_error": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.error)).scalar(),
+            "runs_running": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.running)).scalar(),
+            "results": session.execute(select(func.count(TestResult.id))).scalar(),
+        }
+
+        recent_errors = session.execute(
+            select(TestRun).where(TestRun.status == TestRunStatus.error).order_by(TestRun.id.desc()).limit(10)
+        ).scalars().all()
+
+        return templates.TemplateResponse(request, "admin.html", {
+            "stats": stats,
+            "recent_errors": recent_errors,
         })
     finally:
         session.close()

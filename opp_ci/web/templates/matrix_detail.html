@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Matrix: {{ matrix.name }}{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Matrix: {{ matrix.name }}</h2>
+
+<div class="card">
+    <h2>Configuration</h2>
+    <table>
+        <tr><th style="width:150px;">Name</th><td>{{ matrix.name }}</td></tr>
+        <tr><th>Project</th><td><a href="/projects/{{ matrix.project }}">{{ matrix.project }}</a></td></tr>
+        <tr><th>Test Types</th><td>{{ matrix.config.get("test_types", [])|join(", ") }}</td></tr>
+        <tr><th>Modes</th><td>{{ matrix.config.get("modes", [])|join(", ") }}</td></tr>
+        <tr><th>Versions</th><td>{{ matrix.config.get("versions", [])|join(", ") }}</td></tr>
+        <tr><th>Refs</th><td>{{ matrix.config.get("refs", ["-"])|join(", ") }}</td></tr>
+        <tr><th>OS</th><td>{{ matrix.config.get("os", ["-"])|join(", ") }}</td></tr>
+        <tr><th>OS Version</th><td>{{ matrix.config.get("os_version", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Compiler</th><td>{{ matrix.config.get("compiler", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Compiler Version</th><td>{{ matrix.config.get("compiler_version", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Expanded Jobs</th><td>{{ jobs|length }}</td></tr>
+    </table>
+</div>
+
+<div class="card">
+    <h2>Expanded Jobs ({{ jobs|length }})</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Project</th>
+                <th>Test</th>
+                <th>Mode</th>
+                <th>Ref</th>
+                <th>Platform</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for job in jobs[:50] %}
+            <tr>
+                <td>{{ job.project }}</td>
+                <td>{{ job.test_type }}</td>
+                <td>{{ job.mode }}</td>
+                <td>{{ job.git_ref or "-" }}</td>
+                <td>{{ job.platform_desc or "-" }}</td>
+            </tr>
+            {% endfor %}
+            {% if jobs|length > 50 %}
+            <tr><td colspan="5" style="text-align:center; color:var(--muted);">... and {{ jobs|length - 50 }} more</td></tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+{% if recent_runs %}
+<div class="card">
+    <h2>Recent Runs from this Matrix</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Project</th>
+                <th>Test</th>
+                <th>Ref</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Started</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in recent_runs %}
+            <tr>
+                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td>{{ run.project }}</td>
+                <td>{{ run.test_type }}</td>
+                <td>{{ run.git_ref or "-" }}</td>
+                <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
+                <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
+                <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="empty">No runs have been triggered from this matrix yet.</p>
+{% endif %}
+
+<p style="margin-top:1rem;"><a href="/matrices">&larr; Back to matrices</a></p>
+{% endblock %}

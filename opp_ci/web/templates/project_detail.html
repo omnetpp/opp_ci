@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — {{ project.name }}{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">{{ project.name }}</h2>
+
+<div class="stats">
+    <div class="stat"><div class="value">{{ total }}</div><div class="label">Total Runs</div></div>
+    <div class="stat"><div class="value" style="color:var(--pass)">{{ passed }}</div><div class="label">Passed</div></div>
+    <div class="stat"><div class="value" style="color:var(--fail)">{{ failed }}</div><div class="label">Failed</div></div>
+</div>
+
+<div class="card">
+    <h2>Details</h2>
+    <table>
+        <tr><th style="width:150px;">Name</th><td>{{ project.name }}</td></tr>
+        <tr><th>Tier</th><td>{{ project.tier }}</td></tr>
+        <tr><th>opp_env name</th><td>{{ project.opp_env_name or "-" }}</td></tr>
+        <tr><th>GitHub</th><td>
+            {% if project.github_owner and project.github_repo %}
+            <a href="https://github.com/{{ project.github_owner }}/{{ project.github_repo }}">{{ project.github_owner }}/{{ project.github_repo }}</a>
+            {% else %}-{% endif %}
+        </td></tr>
+        <tr><th>Git URL</th><td>{{ project.git_url or "-" }}</td></tr>
+        <tr><th>Dependencies</th><td>{{ project.dependency_names|join(", ") if project.dependency_names else "-" }}</td></tr>
+    </table>
+</div>
+
+{% if versions %}
+<div class="card">
+    <h2>Registered Versions</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Label</th>
+                <th>Git Ref</th>
+                <th>opp_env Version</th>
+                <th>Resolved Dependencies</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for v in versions %}
+            <tr>
+                <td>{{ v.label or "-" }}</td>
+                <td><code>{{ v.git_ref or "-" }}</code></td>
+                <td>{{ v.opp_env_version or "-" }}</td>
+                <td>{{ v.resolved_dependencies if v.resolved_dependencies else "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if recent_runs %}
+<div class="card">
+    <h2>Recent Runs</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Test</th>
+                <th>Ref</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Started</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in recent_runs %}
+            <tr>
+                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td>{{ run.test_type }}</td>
+                <td>{{ run.git_ref or "-" }}</td>
+                <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
+                <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
+                <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="empty">No runs yet for this project.</p>
+{% endif %}
+
+<p style="margin-top:1rem;"><a href="/projects">&larr; Back to projects</a></p>
+{% endblock %}

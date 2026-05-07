@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Projects{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Projects</h2>
+
+{% if projects %}
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Tier</th>
+            <th>opp_env</th>
+            <th>GitHub</th>
+            <th>Dependencies</th>
+            <th>Runs</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for p in projects %}
+        <tr>
+            <td><a href="/projects/{{ p.name }}">{{ p.name }}</a></td>
+            <td>{{ p.tier }}</td>
+            <td>{{ p.opp_env_name or "-" }}</td>
+            <td>
+                {% if p.github_owner and p.github_repo %}
+                <a href="https://github.com/{{ p.github_owner }}/{{ p.github_repo }}">{{ p.github_owner }}/{{ p.github_repo }}</a>
+                {% else %}-{% endif %}
+            </td>
+            <td>{{ p.dependency_names|join(", ") if p.dependency_names else "-" }}</td>
+            <td>{{ run_counts.get(p.name, 0) }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty">No projects registered. Run <code>opp_ci seed-projects</code> to add them.</p>
+{% endif %}
+{% endblock %}
