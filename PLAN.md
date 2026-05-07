@@ -180,23 +180,26 @@ Results are displayed in **two switchable formats**:
 
 ---
 
-### Stage 3 — Multiple test types, project versions, and git branches (partially done)
+### Stage 3 — Multiple test types, project versions, and git branches ✅
 
 **Goal**: Support all test types for Tier 1 projects, test specific versions/branches, query results from CLI.
 
 - [x] Executor supports all test types: smoke, fingerprint, statistical, feature, speed, sanitizer, chart, release, build, all (via `COMMAND_MAP`)
 - [x] `Project` table with seed data from catalog (`opp_ci seed-projects`)
-- [ ] `Version` table and version resolution
-- [ ] Dependency resolution: query `opp_env` `required_projects` to auto-resolve compatible dependency versions
-- [ ] Git branch/tag/commit support: test a specific git ref of a project
+- [x] `Version` table and version resolution
+- [x] Dependency resolution: query `opp_env` `required_projects` to auto-resolve compatible dependency versions
+- [x] Git branch/tag/commit support: test a specific git ref of a project
   - CLI: `opp_ci run --project inet --ref topic/my-feature --test smoke`
   - Executor checks out the specified ref before building/testing
   - For opp_env projects: use `opp_env run <project>-git -c <cmd>` with appropriate git ref
   - For local/direct mode: `git checkout <ref>` in the project working copy
-- [ ] Version labels: map human-readable names (e.g. "master", "4.5", "topic/my-feature") to git refs
-- [ ] Track tested ref (branch, tag, or SHA) in `TestRun` for result filtering and history
-- [ ] Support testing multiple refs in a single matrix: `--project-versions "master,topic/my-feature"`
-- [ ] Dependency version pinning: test inet branch X against a specific omnetpp version
+- [x] Version labels: map human-readable names (e.g. "master", "4.5", "topic/my-feature") to git refs
+- [x] Track tested ref (branch, tag, or SHA) in `TestRun` for result filtering and history
+- [x] Support testing multiple refs in a single matrix: `--refs "master,topic/my-feature"`
+- [x] Dependency version pinning: test inet branch X against a specific omnetpp version
+  - [x] Version model stores `resolved_dependencies` JSON for pinning
+  - [x] CLI: `opp_ci run --pin omnetpp=6.1` validates and pins dependency versions
+  - [x] CLI: `opp_ci resolve-deps inet-4.5 --pin omnetpp=6.0.2` for standalone resolution
 - [x] CLI: `opp_ci run --project <name> --test fingerprint,smoke` — comma-separated test types
 - [x] CLI: `opp_ci list-runs`, `opp_ci show-run <id>`, `opp_ci show-results --project <name> --test <type> --status <status>`
 - **Deliverable**: can test any Tier 1 project at any git ref with any test type, browse results via CLI
@@ -284,7 +287,7 @@ Results are displayed in **two switchable formats**:
 |---|---|---|
 | 1 | Run one smoke test, store in DB | executor, minimal DB, CLI | ✅ done |
 | 2 | Web results browsing (local + cloud) | FastAPI, dashboard, runs list, search, comparison | 🔧 in progress |
-| 3 | All test types, multiple projects | test types, project catalog, dependency resolution | 🔧 partially done |
+| 3 | All test types, multiple projects | test types, project catalog, dependency resolution | ✅ done |
 | 4 | Multi-dimensional matrices | matrix expansion, platform/compiler axes, scheduler | ✅ done |
 | 5 | Remote execution | worker agent, coordinator deployment, Python client |
 | 6 | GitHub automation | webhooks, status checks, PR comments |
