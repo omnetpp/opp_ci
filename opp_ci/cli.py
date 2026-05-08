@@ -471,7 +471,7 @@ def run_matrix(matrix_name, skip_install):
                 details=outcome.get("details"),
             ))
             session.commit()
-            update_ci_note(job["project"], test_run.commit_sha, session)
+            update_ci_note(job["project"], test_run.commit_sha, session, opp_file=matrix.opp_file)
 
             if outcome["result_code"] == "PASS":
                 passed += 1

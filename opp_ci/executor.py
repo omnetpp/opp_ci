@@ -67,17 +67,23 @@ def checkout_ref(project, git_ref):
     return project_dir
 
 
-def resolve_commit_sha(project, git_ref=None):
+def resolve_commit_sha(project, opp_file=None):
     """
     Resolve the current HEAD SHA for a project.
 
+    Uses the opp_file's parent directory if provided, otherwise falls back
+    to OPP_CI_PROJECT_DIR env vars.
+
     Returns the 40-char commit hash, or None if it cannot be determined.
     """
-    env_key = f"OPP_CI_PROJECT_DIR_{project.upper().replace('-', '_')}"
-    project_dir = os.environ.get(env_key)
-    if not project_dir:
-        base_dir = os.environ.get("OPP_CI_PROJECT_DIR", ".")
-        project_dir = os.path.join(base_dir, project)
+    if opp_file:
+        project_dir = os.path.dirname(os.path.abspath(opp_file))
+    else:
+        env_key = f"OPP_CI_PROJECT_DIR_{project.upper().replace('-', '_')}"
+        project_dir = os.environ.get(env_key)
+        if not project_dir:
+            base_dir = os.environ.get("OPP_CI_PROJECT_DIR", ".")
+            project_dir = os.path.join(base_dir, project)
 
     try:
         result = subprocess.run(
@@ -170,7 +176,7 @@ def run_test(project, test_type, git_ref=None, opp_file=None):
             except OSError:
                 pass
 
-    commit_sha = resolve_commit_sha(project)
+    commit_sha = resolve_commit_sha(project, opp_file=opp_file)
 
     _logger.info("Test finished: %s (%.1fs)", result_code, duration)
     return {

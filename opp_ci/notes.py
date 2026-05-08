@@ -11,7 +11,9 @@ from opp_ci.db.models import TestRun
 _logger = logging.getLogger(__name__)
 
 
-def _project_dir(project):
+def _project_dir(project, opp_file=None):
+    if opp_file:
+        return os.path.dirname(os.path.abspath(opp_file))
     env_key = f"OPP_CI_PROJECT_DIR_{project.upper().replace('-', '_')}"
     project_dir = os.environ.get(env_key)
     if not project_dir:
@@ -20,7 +22,7 @@ def _project_dir(project):
     return project_dir
 
 
-def update_ci_note(project, commit_sha, session):
+def update_ci_note(project, commit_sha, session, opp_file=None):
     """
     Write a git note (refs/notes/ci) summarizing all test results for a commit.
 
@@ -43,7 +45,7 @@ def update_ci_note(project, commit_sha, session):
 
     note_content = json.dumps({"results": results}, indent=2)
 
-    project_dir = _project_dir(project)
+    project_dir = _project_dir(project, opp_file)
     tmp_path = None
 
     try:
