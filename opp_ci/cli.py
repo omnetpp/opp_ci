@@ -7,6 +7,7 @@ from sqlalchemy import select
 from opp_ci.db.connection import engine, SessionLocal
 from opp_ci.db.models import Base, Project, Version, TestMatrix, TestRun, TestRunStatus, TestResult, Worker, ApiToken, AutoTestRule
 from opp_ci.executor import install_project, run_test
+from opp_ci.notes import update_ci_note
 
 
 @click.group()
@@ -110,6 +111,7 @@ def run_cmd(ctx, project, test_types, git_ref, pins, skip_install):
                 details=outcome.get("details"),
             ))
             session.commit()
+            update_ci_note(project, test_run.commit_sha, session)
             click.echo(f"  Result: {outcome['result_code']} ({outcome['duration_seconds']:.1f}s)")
     finally:
         session.close()
@@ -469,6 +471,7 @@ def run_matrix(matrix_name, skip_install):
                 details=outcome.get("details"),
             ))
             session.commit()
+            update_ci_note(job["project"], test_run.commit_sha, session)
 
             if outcome["result_code"] == "PASS":
                 passed += 1
