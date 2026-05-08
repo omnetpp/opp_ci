@@ -321,15 +321,58 @@ Results are displayed in **two switchable formats**:
 - **OS** — name, version, arch
 - **Compiler** — name, version
 - **TestMatrix** — project FK, list of version combos + platforms + features
+- **Worker** — name (unique), token (auto-generated), tags (JSON list of capabilities), concurrency, status (online/offline/busy), last_heartbeat, current_job_count
+- **ApiToken** — token (auto-generated), name, role (readonly/submitter/worker/admin), enabled, created_at
 - **AutoTestRule** — project FK, rule_type (branch/pr/tag), pattern (glob), matrix FK, enabled
-- **TestRun** — matrix entry, git_ref, version, timestamp, status (queued/running/passed/failed/error), triggerer (manual/webhook/schedule)
+- **TestRun** — matrix entry, worker FK, git_ref, version, timestamp, status (queued/running/passed/failed/error), trigger (manual/webhook/schedule/remote)
 - **TestResult** — run FK, test_type (smoke/fingerprint/statistical/…), test_name, result_code, duration, stdout/stderr (raw with ANSI codes), details (JSON: structured per-test results from opp_repl)
 
 Migrations via Alembic (`opp_ci/db/migrations/`). Connection pool in `opp_ci/db/connection.py`, config from env vars.
 
 ### Configuration
 
-`opp_ci/config.py` — YAML/TOML config file for: DB connection, GitHub tokens, project definitions, default matrices. Environment variable overrides.
+`opp_ci/config.py` — Environment variable configuration:
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPP_CI_DATABASE_URL` | `sqlite:///opp_ci.db` | SQLAlchemy connection string (use `postgresql://...` in production) |
+| `OPP_CI_USE_OPP_ENV` | `0` | Set to `1` to run tests via `opp_env` instead of directly |
+| `OPP_CI_COORDINATOR_URL` | `http://localhost:8000` | Coordinator API base URL (for `--remote` mode and workers) |
+| `OPP_CI_API_TOKEN` | *(empty)* | API token for remote CLI submission (`--remote`) |
+| `OPP_CI_WORKER_POLL_INTERVAL` | `10` | Seconds between worker job polls |
+| `OPP_CI_WORKER_HEARTBEAT_INTERVAL` | `30` | Seconds between worker heartbeats |
+| `OPP_CI_WORKER_HEARTBEAT_TIMEOUT` | `120` | Seconds before a worker is considered offline |
+
+### REST API
+
+`opp_ci/web/api.py` — JSON API mounted at `/api/`, authenticated via Bearer tokens:
+
+| Endpoint | Method | Role | Description |
+|---|---|---|---|
+| `/api/runs` | POST | submitter | Submit a single test run to the queue |
+| `/api/runs/matrix` | POST | submitter | Expand a named matrix and queue all jobs |
+| `/api/runs` | GET | readonly | List test runs (filterable by project, test_type, status) |
+| `/api/runs/{id}` | GET | readonly | Get run detail including results |
+| `/api/workers/register` | POST | admin | Register a new worker, returns its token |
+| `/api/workers/heartbeat` | POST | worker | Worker keepalive (updates last_heartbeat) |
+| `/api/workers/poll` | POST | worker | Worker polls for the next queued job |
+| `/api/workers/result` | POST | worker | Worker reports job completion with results |
+| `/api/workers` | GET | readonly | List registered workers |
+| `/api/tokens` | POST | admin | Create a new API token |
+| `/api/tokens` | GET | admin | List API tokens (values masked) |
+
+### Authentication (`opp_ci/auth.py`)
+
+Role-based access with four privilege levels:
+
+| Role | Level | Can do |
+|---|---|---|
+| `readonly` | 0 | View runs, results, workers |
+| `submitter` | 1 | Submit runs + everything above |
+| `worker` | 2 | Poll jobs, report results, heartbeat |
+| `admin` | 3 | Register workers, manage tokens + everything above |
+
+Tokens are checked in order: `api_tokens` table → `workers` table. Workers authenticate with their per-worker token (auto-generated at registration). All other callers use API tokens created via CLI or API.
 
 ### Phase 3 — GitHub Integration Details
 
@@ -428,47 +471,86 @@ Not every combination is tested — the matrix config defines which axes to cros
 
 ### Python Client (from your machine)
 
+`opp_ci/client.py` — `OppCiClient` class wrapping the REST API:
+
 ```python
 from opp_ci.client import OppCiClient
 
 ci = OppCiClient(url="https://ci.omnetpp.org/api", token="...")
 
 # Submit a test run
-run = ci.submit_run(
-    project="inet",
-    omnetpp_ref="master",
-    inet_ref="topic/my-feature",
-    test_types=["fingerprint", "statistical"],
-    modes=["release"],
-)
+run = ci.submit_run(project="inet", test_type="smoke", git_ref="topic/my-feature")
+print(run)  # {"id": 42, "status": "queued"}
+
+# Submit all jobs from a matrix
+ci.submit_matrix(matrix_name="inet-full")
 
 # Check status
-ci.get_run(run.id)
+ci.get_run(run["id"])
 
 # Query results
-results = ci.search_results(project="inet", test_type="fingerprint", status="failed")
+results = ci.list_runs(project="inet", status="failed")
+
+# Admin operations
+ci.register_worker(name="builder-1", tags=["linux", "amd64"], concurrency=4)
+ci.create_token(name="github-bot", role="submitter")
+ci.list_workers()
+```
+
+CLI equivalent with `--remote`:
+
+```bash
+export OPP_CI_COORDINATOR_URL=https://ci.omnetpp.org
+export OPP_CI_API_TOKEN=<submitter-token>
+
+opp_ci --remote run --project inet-4.5 --test smoke,fingerprint --ref master
 ```
 
 ### Worker Registration
 
-Workers register with the coordinator on startup and poll for jobs:
+Workers are registered on the coordinator, then started on the worker machine.
+
+**Step 1 — Register on coordinator** (admin):
 
 ```bash
-# On the worker machine (self-hosted)
+# Via CLI (on coordinator machine)
+opp_ci worker register --name builder-1 --tags linux,amd64,perf-counters --concurrency 4
+# → Worker 'builder-1' registered.
+# →   Token: <auto-generated-token>
+
+# Or via API
+curl -X POST https://ci.omnetpp.org/api/workers/register \
+  -H "Authorization: Bearer <admin-token>" \
+  -d '{"name": "builder-1", "tags": ["linux", "amd64"], "concurrency": 4}'
+```
+
+**Step 2 — Start on worker machine**:
+
+```bash
 opp_ci worker start \
-    --coordinator https://ci.omnetpp.org/api \
+    --coordinator https://ci.omnetpp.org \
     --token <worker-token> \
     --tags "linux,amd64,perf-counters" \
-    --concurrency 4
+    --concurrency 4 \
+    --poll-interval 10 \
+    --heartbeat-interval 30
 ```
+
+The worker agent (`opp_ci/worker.py`):
+1. Sends periodic heartbeats to stay marked as `online`
+2. Polls `/api/workers/poll` for queued jobs
+3. Executes each job via `executor.install_project()` + `executor.run_test()`
+4. Reports results back to `/api/workers/result`
+5. Handles SIGINT/SIGTERM for clean shutdown
 
 Workers self-describe their capabilities (OS, arch, compilers, features) — the scheduler matches jobs to compatible workers.
 
 ### Security
 
-- **API authentication**: token-based (separate tokens for admin, submitter, worker, read-only)
-- **Webhook verification**: GitHub webhook secret for HMAC signature validation
-- **Worker auth**: per-worker tokens, revocable from admin page
+- **API authentication**: Bearer token-based with four roles (readonly, submitter, worker, admin) — see [Authentication](#authentication-opp_ciauthpy)
+- **Token management**: `opp_ci token create --name <name> --role <role>`, `opp_ci token list`, `opp_ci token revoke <id>`
+- **Worker auth**: per-worker tokens auto-generated at registration, checked on every poll/heartbeat/result call
+- **Webhook verification**: GitHub webhook secret for HMAC signature validation (Stage 6)
 - **HTTPS everywhere**: coordinator behind Caddy/nginx with auto-TLS
 
 ## Key Design Decisions
