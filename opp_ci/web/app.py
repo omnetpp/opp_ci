@@ -3,8 +3,8 @@ import re
 from html import escape as html_escape
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Query
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Form, Request, Query
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 from sqlalchemy import select, func
@@ -370,6 +370,153 @@ def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
     return rows
 
 
+@app.get("/runs/new", response_class=HTMLResponse)
+def run_new_form(request: Request, message: str = Query(default=None), message_type: str = Query(default=None)):
+    session = SessionLocal()
+    try:
+        projects = session.execute(select(Project).order_by(Project.tier, Project.name)).scalars().all()
+        matrices = session.execute(select(TestMatrix).order_by(TestMatrix.name)).scalars().all()
+        os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
+        compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
+        return templates.TemplateResponse(request, "run_new.html", {
+            "projects": projects,
+            "matrices": matrices,
+            "os_entries": os_entries,
+            "compilers": compilers,
+            "message": message,
+            "message_type": message_type,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/runs/new")
+def run_new_submit(
+    request: Request,
+    project: str = Form(...),
+    test_type: str = Form(...),
+    mode: str = Form(default=""),
+    git_ref: str = Form(default=""),
+    os: str = Form(default="", alias="os"),
+    compiler: str = Form(default=""),
+):
+    import datetime
+    session = SessionLocal()
+    try:
+        run = TestRun(
+            project=project,
+            test_type=test_type,
+            mode=mode or None,
+            git_ref=git_ref or None,
+            os=os or None,
+            compiler=compiler or None,
+            status=TestRunStatus.queued,
+            trigger="web",
+            started_at=datetime.datetime.utcnow(),
+        )
+        session.add(run)
+        session.commit()
+        return RedirectResponse(url=f"/runs/{run.id}", status_code=303)
+    finally:
+        session.close()
+
+
+@app.post("/runs/new/matrix")
+def run_new_matrix(request: Request, matrix_name: str = Form(...)):
+    import datetime
+    from opp_ci.scheduler import expand_matrix
+
+    session = SessionLocal()
+    try:
+        matrix = session.execute(
+            select(TestMatrix).where(TestMatrix.name == matrix_name)
+        ).scalar_one_or_none()
+        if matrix is None:
+            return RedirectResponse(
+                url=f"/runs/new?message=Matrix+not+found&message_type=error",
+                status_code=303,
+            )
+
+        jobs = expand_matrix(matrix.project, matrix.config)
+        for job in jobs:
+            run = TestRun(
+                project=job.get("project", matrix.project),
+                test_type=job.get("test_type", "smoke"),
+                mode=job.get("mode"),
+                git_ref=job.get("git_ref"),
+                os=job.get("os"),
+                os_version=job.get("os_version"),
+                compiler=job.get("compiler"),
+                compiler_version=job.get("compiler_version"),
+                platform_desc=job.get("platform_desc"),
+                matrix_id=matrix.id,
+                status=TestRunStatus.queued,
+                trigger="web",
+            )
+            session.add(run)
+        session.commit()
+        return RedirectResponse(
+            url=f"/runs/new?message=Queued+{len(jobs)}+jobs+from+matrix+{matrix_name}&message_type=success",
+            status_code=303,
+        )
+    finally:
+        session.close()
+
+
+@app.post("/runs/{run_id}/rerun")
+def run_rerun(run_id: int):
+    import datetime
+    session = SessionLocal()
+    try:
+        original = session.execute(
+            select(TestRun).where(TestRun.id == run_id)
+        ).scalar_one_or_none()
+        if original is None:
+            return RedirectResponse(url="/runs", status_code=303)
+
+        new_run = TestRun(
+            project=original.project,
+            test_type=original.test_type,
+            mode=original.mode,
+            git_ref=original.git_ref,
+            os=original.os,
+            os_version=original.os_version,
+            compiler=original.compiler,
+            compiler_version=original.compiler_version,
+            platform_desc=original.platform_desc,
+            matrix_id=original.matrix_id,
+            status=TestRunStatus.queued,
+            trigger="rerun",
+        )
+        session.add(new_run)
+        session.commit()
+        return RedirectResponse(url=f"/runs/{new_run.id}", status_code=303)
+    finally:
+        session.close()
+
+
+@app.post("/runs/{run_id}/cancel")
+def run_cancel(run_id: int):
+    import datetime
+    session = SessionLocal()
+    try:
+        run = session.execute(
+            select(TestRun).where(TestRun.id == run_id)
+        ).scalar_one_or_none()
+        if run and run.status in (TestRunStatus.queued, TestRunStatus.running):
+            run.status = TestRunStatus.error
+            run.finished_at = datetime.datetime.utcnow()
+            session.add(TestResult(
+                test_run_id=run.id,
+                result_code="CANCELLED",
+                stderr="Cancelled from web UI",
+            ))
+            session.commit()
+        return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
+    finally:
+        session.close()
+
+
 @app.get("/runs/{run_id}", response_class=HTMLResponse)
 def run_detail(request: Request, run_id: int):
     session = SessionLocal()
@@ -502,6 +649,55 @@ def matrix_detail(request: Request, matrix_id: int):
         session.close()
 
 
+@app.post("/matrices/create")
+def matrix_create(
+    name: str = Form(...),
+    project: str = Form(...),
+    config_json: str = Form(default="{}"),
+):
+    import json
+    session = SessionLocal()
+    try:
+        try:
+            config = json.loads(config_json) if config_json.strip() else {}
+        except json.JSONDecodeError:
+            return RedirectResponse(
+                url="/matrices?error=Invalid+JSON",
+                status_code=303,
+            )
+
+        existing = session.execute(
+            select(TestMatrix).where(TestMatrix.name == name)
+        ).scalar_one_or_none()
+        if existing:
+            return RedirectResponse(
+                url="/matrices?error=Matrix+already+exists",
+                status_code=303,
+            )
+
+        matrix = TestMatrix(name=name, project=project, config=config)
+        session.add(matrix)
+        session.commit()
+        return RedirectResponse(url=f"/matrices/{matrix.id}", status_code=303)
+    finally:
+        session.close()
+
+
+@app.post("/matrices/{matrix_id}/delete")
+def matrix_delete(matrix_id: int):
+    session = SessionLocal()
+    try:
+        matrix = session.execute(
+            select(TestMatrix).where(TestMatrix.id == matrix_id)
+        ).scalar_one_or_none()
+        if matrix:
+            session.delete(matrix)
+            session.commit()
+        return RedirectResponse(url="/matrices", status_code=303)
+    finally:
+        session.close()
+
+
 @app.get("/os", response_class=HTMLResponse)
 def os_list(request: Request):
     session = SessionLocal()
@@ -562,9 +758,66 @@ def rules_list(request: Request):
                 "enabled": rule.enabled,
             })
 
+        projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
+        matrices = session.execute(select(TestMatrix).order_by(TestMatrix.name)).scalars().all()
+
         return templates.TemplateResponse(request, "rules.html", {
             "rules": rule_data,
+            "projects": projects,
+            "matrices": matrices,
         })
+    finally:
+        session.close()
+
+
+@app.post("/rules/create")
+def rule_create_web(
+    project_name: str = Form(...),
+    rule_type: str = Form(...),
+    pattern: str = Form(...),
+    matrix_name: str = Form(default=""),
+):
+    session = SessionLocal()
+    try:
+        proj = session.execute(
+            select(Project).where(Project.name == project_name)
+        ).scalar_one_or_none()
+        if proj is None:
+            return RedirectResponse(url="/rules", status_code=303)
+
+        matrix_id = None
+        if matrix_name:
+            matrix = session.execute(
+                select(TestMatrix).where(TestMatrix.name == matrix_name)
+            ).scalar_one_or_none()
+            if matrix:
+                matrix_id = matrix.id
+
+        rule = AutoTestRule(
+            project_id=proj.id,
+            rule_type=rule_type,
+            pattern=pattern,
+            matrix_id=matrix_id,
+            enabled=1,
+        )
+        session.add(rule)
+        session.commit()
+        return RedirectResponse(url="/rules", status_code=303)
+    finally:
+        session.close()
+
+
+@app.post("/rules/{rule_id}/delete")
+def rule_delete_web(rule_id: int):
+    session = SessionLocal()
+    try:
+        rule = session.execute(
+            select(AutoTestRule).where(AutoTestRule.id == rule_id)
+        ).scalar_one_or_none()
+        if rule:
+            session.delete(rule)
+            session.commit()
+        return RedirectResponse(url="/rules", status_code=303)
     finally:
         session.close()
 
@@ -599,10 +852,114 @@ def admin_page(request: Request):
             select(TestRun).where(TestRun.status == TestRunStatus.error).order_by(TestRun.id.desc()).limit(10)
         ).scalars().all()
 
+        tokens = session.execute(
+            select(ApiToken).order_by(ApiToken.id)
+        ).scalars().all()
+
+        rules = session.execute(
+            select(AutoTestRule).order_by(AutoTestRule.id)
+        ).scalars().all()
+
         return templates.TemplateResponse(request, "admin.html", {
             "stats": stats,
             "workers": workers,
+            "tokens": tokens,
+            "rules": rules,
             "recent_errors": recent_errors,
         })
+    finally:
+        session.close()
+
+
+@app.post("/admin/workers/register")
+def admin_register_worker(
+    name: str = Form(...),
+    tags: str = Form(default=""),
+    concurrency: int = Form(default=1),
+):
+    import secrets
+    session = SessionLocal()
+    try:
+        existing = session.execute(
+            select(Worker).where(Worker.name == name)
+        ).scalar_one_or_none()
+        if existing:
+            return RedirectResponse(url="/admin?error=Worker+already+exists", status_code=303)
+
+        worker = Worker(
+            name=name,
+            token=secrets.token_urlsafe(32),
+            tags=[t.strip() for t in tags.split(",") if t.strip()] if tags else [],
+            concurrency=concurrency,
+            status="offline",
+        )
+        session.add(worker)
+        session.commit()
+        return RedirectResponse(url=f"/admin?worker_token={worker.token}", status_code=303)
+    finally:
+        session.close()
+
+
+@app.post("/admin/tokens/create")
+def admin_create_token(
+    name: str = Form(...),
+    role: str = Form(default="readonly"),
+):
+    import secrets
+    session = SessionLocal()
+    try:
+        token = ApiToken(
+            token=secrets.token_urlsafe(32),
+            name=name,
+            role=role,
+        )
+        session.add(token)
+        session.commit()
+        return RedirectResponse(url=f"/admin?new_token={token.token}", status_code=303)
+    finally:
+        session.close()
+
+
+@app.post("/admin/tokens/{token_id}/revoke")
+def admin_revoke_token(token_id: int):
+    session = SessionLocal()
+    try:
+        token = session.execute(
+            select(ApiToken).where(ApiToken.id == token_id)
+        ).scalar_one_or_none()
+        if token:
+            token.enabled = False
+            session.commit()
+        return RedirectResponse(url="/admin", status_code=303)
+    finally:
+        session.close()
+
+
+@app.post("/admin/projects/register")
+def admin_register_project(
+    name: str = Form(...),
+    opp_env_name: str = Form(default=""),
+    github_owner: str = Form(default=""),
+    github_repo: str = Form(default=""),
+    tier: int = Form(default=2),
+):
+    session = SessionLocal()
+    try:
+        existing = session.execute(
+            select(Project).where(Project.name == name)
+        ).scalar_one_or_none()
+        if existing:
+            return RedirectResponse(url="/admin?error=Project+already+exists", status_code=303)
+
+        project = Project(
+            name=name,
+            opp_env_name=opp_env_name or None,
+            github_owner=github_owner or None,
+            github_repo=github_repo or None,
+            tier=tier,
+        )
+        session.add(project)
+        session.commit()
+        return RedirectResponse(url="/admin", status_code=303)
     finally:
         session.close()

@@ -5,22 +5,141 @@
 
 <div class="stats">
     <div class="stat"><div class="value">{{ stats.projects }}</div><div class="label">Projects</div></div>
-    <div class="stat"><div class="value">{{ stats.versions }}</div><div class="label">Versions</div></div>
-    <div class="stat"><div class="value">{{ stats.matrices }}</div><div class="label">Matrices</div></div>
-    <div class="stat"><div class="value">{{ stats.os_entries }}</div><div class="label">OS</div></div>
-    <div class="stat"><div class="value">{{ stats.compilers }}</div><div class="label">Compilers</div></div>
+    <div class="stat"><div class="value">{{ stats.runs_total }}</div><div class="label">Runs</div></div>
+    <div class="stat"><div class="value">{{ stats.workers_total }}</div><div class="label">Workers</div></div>
+    <div class="stat"><div class="value">{{ stats.workers_online }}</div><div class="label">Online</div></div>
+    <div class="stat"><div class="value">{{ stats.tokens }}</div><div class="label">Tokens</div></div>
 </div>
 
 <div class="card">
-    <h2>Test Runs</h2>
+    <h2>System Health</h2>
     <table>
-        <tr><th style="width:150px;">Total</th><td>{{ stats.runs_total }}</td></tr>
+        <tr><th style="width:150px;">Total Runs</th><td>{{ stats.runs_total }}</td></tr>
         <tr><th>Passed</th><td style="color:var(--pass)">{{ stats.runs_passed }}</td></tr>
         <tr><th>Failed</th><td style="color:var(--fail)">{{ stats.runs_failed }}</td></tr>
         <tr><th>Errors</th><td style="color:var(--error)">{{ stats.runs_error }}</td></tr>
         <tr><th>Running</th><td style="color:var(--running)">{{ stats.runs_running }}</td></tr>
+        <tr><th>Queued</th><td>{{ stats.runs_queued }}</td></tr>
         <tr><th>Results stored</th><td>{{ stats.results }}</td></tr>
+        <tr><th>Matrices</th><td>{{ stats.matrices }}</td></tr>
+        <tr><th>Versions</th><td>{{ stats.versions }}</td></tr>
     </table>
+</div>
+
+<!-- Workers -->
+<div class="card">
+    <h2>Workers ({{ workers|length }})</h2>
+    {% if workers %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Tags</th>
+                <th>Jobs</th>
+                <th>Concurrency</th>
+                <th>Last Heartbeat</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for w in workers %}
+            <tr>
+                <td>{{ w.name }}</td>
+                <td>
+                    {% if w.status == "online" %}<span class="badge badge-passed">online</span>
+                    {% elif w.status == "busy" %}<span class="badge badge-running">busy</span>
+                    {% else %}<span class="badge badge-queued">offline</span>{% endif %}
+                </td>
+                <td>{{ (w.tags or [])|join(", ") or "-" }}</td>
+                <td>{{ w.current_job_count }}</td>
+                <td>{{ w.concurrency }}</td>
+                <td>{{ w.last_heartbeat.strftime("%Y-%m-%d %H:%M:%S") if w.last_heartbeat else "never" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--muted);">No workers registered.</p>
+    {% endif %}
+
+    <h3 style="margin-top:1rem; font-size:0.9rem;">Register Worker</h3>
+    <form method="post" action="/admin/workers/register">
+        <div class="form-row">
+            <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="builder-1"></div>
+            <div class="form-group"><label>Tags (comma-sep)</label><input type="text" name="tags" placeholder="linux,amd64"></div>
+            <div class="form-group"><label>Concurrency</label><input type="number" name="concurrency" value="1" min="1"></div>
+        </div>
+        <button type="submit" class="btn btn-success btn-sm">Register</button>
+    </form>
+</div>
+
+<!-- API Tokens -->
+<div class="card">
+    <h2>API Tokens ({{ tokens|length }})</h2>
+    {% if tokens %}
+    <table>
+        <thead>
+            <tr><th>ID</th><th>Name</th><th>Role</th><th>Enabled</th><th>Created</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+            {% for t in tokens %}
+            <tr style="{{ 'opacity:0.5;' if not t.enabled else '' }}">
+                <td>{{ t.id }}</td>
+                <td>{{ t.name }}</td>
+                <td><span class="badge" style="background:#e2e3e5; color:var(--text);">{{ t.role }}</span></td>
+                <td>{{ "Yes" if t.enabled else "No" }}</td>
+                <td>{{ t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "-" }}</td>
+                <td>
+                    {% if t.enabled %}
+                    <form method="post" action="/admin/tokens/{{ t.id }}/revoke" class="inline-form">
+                        <button type="submit" class="btn btn-danger btn-sm">Revoke</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--muted);">No API tokens.</p>
+    {% endif %}
+
+    <h3 style="margin-top:1rem; font-size:0.9rem;">Create Token</h3>
+    <form method="post" action="/admin/tokens/create">
+        <div class="form-row">
+            <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="my-token"></div>
+            <div class="form-group">
+                <label>Role</label>
+                <select name="role">
+                    <option value="readonly">readonly</option>
+                    <option value="submitter">submitter</option>
+                    <option value="worker">worker</option>
+                    <option value="admin">admin</option>
+                </select>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-success btn-sm">Create Token</button>
+    </form>
+</div>
+
+<!-- Project Registration -->
+<div class="card">
+    <h2>Register Project</h2>
+    <form method="post" action="/admin/projects/register">
+        <div class="form-row">
+            <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="inet-4.5"></div>
+            <div class="form-group"><label>opp_env name</label><input type="text" name="opp_env_name" placeholder="inet-4.5"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>GitHub owner</label><input type="text" name="github_owner" placeholder="inet-framework"></div>
+            <div class="form-group"><label>GitHub repo</label><input type="text" name="github_repo" placeholder="inet"></div>
+            <div class="form-group">
+                <label>Tier</label>
+                <select name="tier"><option value="1">1 (full testing)</option><option value="2" selected>2 (smoke only)</option></select>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-success btn-sm">Register Project</button>
+    </form>
 </div>
 
 {% if recent_errors %}
@@ -28,13 +147,7 @@
     <h2>Recent Errors</h2>
     <table>
         <thead>
-            <tr>
-                <th>ID</th>
-                <th>Project</th>
-                <th>Test</th>
-                <th>Ref</th>
-                <th>Started</th>
-            </tr>
+            <tr><th>ID</th><th>Project</th><th>Test</th><th>Ref</th><th>Started</th></tr>
         </thead>
         <tbody>
             {% for run in recent_errors %}
@@ -56,9 +169,9 @@
     <table>
         <tr><td><a href="/projects">Projects</a> ({{ stats.projects }})</td></tr>
         <tr><td><a href="/matrices">Matrices</a> ({{ stats.matrices }})</td></tr>
-        <tr><td><a href="/os">Operating Systems</a> ({{ stats.os_entries }})</td></tr>
-        <tr><td><a href="/compilers">Compilers</a> ({{ stats.compilers }})</td></tr>
+        <tr><td><a href="/rules">Auto-Test Rules</a></td></tr>
         <tr><td><a href="/runs">All Runs</a> ({{ stats.runs_total }})</td></tr>
+        <tr><td><a href="/runs/new">Start New Run</a></td></tr>
         <tr><td><a href="/results">Results Search</a></td></tr>
         <tr><td><a href="/compare">Compare</a></td></tr>
     </table>

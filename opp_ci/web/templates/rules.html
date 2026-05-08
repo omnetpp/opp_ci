@@ -7,6 +7,47 @@
     Rules define which GitHub branches, pull requests, and tags are automatically tested when events arrive via webhook.
 </p>
 
+<div class="card">
+    <h2>Create Rule</h2>
+    <form method="post" action="/rules/create">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="project_name">Project</label>
+                <select name="project_name" id="project_name" required>
+                    <option value="">— select —</option>
+                    {% for p in projects %}
+                    <option value="{{ p.name }}">{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="rule_type">Type</label>
+                <select name="rule_type" id="rule_type" required>
+                    <option value="branch">branch</option>
+                    <option value="pr">pr</option>
+                    <option value="tag">tag</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="pattern">Pattern (glob)</label>
+                <input type="text" name="pattern" id="pattern" required placeholder="master, topic/*, *, v6.*">
+            </div>
+            <div class="form-group">
+                <label for="matrix_name">Matrix (optional)</label>
+                <select name="matrix_name" id="matrix_name">
+                    <option value="">— smoke only —</option>
+                    {% for m in matrices %}
+                    <option value="{{ m.name }}">{{ m.name }} ({{ m.project }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-success">Create Rule</button>
+    </form>
+</div>
+
 {% if rules %}
 <table>
     <thead>
@@ -17,6 +58,7 @@
             <th>Pattern</th>
             <th>Matrix</th>
             <th>Enabled</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -32,6 +74,11 @@
                 {% else %}-{% endif %}
             </td>
             <td>{{ "Yes" if r.enabled else "No" }}</td>
+            <td>
+                <form method="post" action="/rules/{{ r.id }}/delete" class="inline-form">
+                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete rule #{{ r.id }}?')">Delete</button>
+                </form>
+            </td>
         </tr>
         {% endfor %}
     </tbody>

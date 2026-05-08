@@ -67,5 +67,15 @@
 </div>
 {% endfor %}
 
-<p style="margin-top:1rem;"><a href="/runs">&larr; Back to runs</a></p>
+<div class="actions">
+    <form method="post" action="/runs/{{ run.id }}/rerun" class="inline-form">
+        <button type="submit" class="btn btn-primary btn-sm">Re-run</button>
+    </form>
+    {% if run.status.value in ("queued", "running") %}
+    <form method="post" action="/runs/{{ run.id }}/cancel" class="inline-form">
+        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Cancel this run?')">Cancel</button>
+    </form>
+    {% endif %}
+    <a href="/runs" class="btn btn-secondary btn-sm">&larr; Back to runs</a>
+</div>
 {% endblock %}

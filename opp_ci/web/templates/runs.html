@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block title %}opp_ci — Runs{% endblock %}
 {% block content %}
-<h2 style="margin-bottom: 1rem;">Test Runs</h2>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+    <h2>Test Runs</h2>
+    <a href="/runs/new" class="btn btn-success">+ New Run</a>
+</div>
 
 <form class="filters" method="get" action="/runs">
     <input type="text" name="project" placeholder="Project" value="{{ filter_project }}">
@@ -26,6 +29,7 @@
             <th>Status</th>
             <th>Duration</th>
             <th>Started</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -37,6 +41,16 @@
             <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
             <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
             <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
+            <td>
+                <form method="post" action="/runs/{{ run.id }}/rerun" class="inline-form">
+                    <button type="submit" class="btn btn-primary btn-sm">Re-run</button>
+                </form>
+                {% if run.status.value in ("queued", "running") %}
+                <form method="post" action="/runs/{{ run.id }}/cancel" class="inline-form">
+                    <button type="submit" class="btn btn-danger btn-sm">Cancel</button>
+                </form>
+                {% endif %}
+            </td>
         </tr>
         {% endfor %}
     </tbody>

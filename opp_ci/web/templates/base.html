@@ -57,6 +57,27 @@
         .filters button { padding: 0.4rem 0.8rem; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
 
         .empty { text-align: center; padding: 2rem; color: var(--muted); }
+
+        .btn { display: inline-block; padding: 0.4rem 0.8rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; font-weight: 500; text-decoration: none; }
+        .btn:hover { opacity: 0.9; text-decoration: none; }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-success { background: var(--pass); color: white; }
+        .btn-danger { background: var(--fail); color: white; }
+        .btn-secondary { background: var(--muted); color: white; }
+        .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+
+        .form-group { margin-bottom: 0.75rem; }
+        .form-group label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem; color: var(--muted); }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 0.5rem 0.6rem; border: 1px solid var(--border); border-radius: 4px; font-size: 0.85rem; }
+        .form-group textarea { resize: vertical; min-height: 80px; font-family: monospace; }
+        .form-row { display: flex; gap: 1rem; }
+        .form-row .form-group { flex: 1; }
+
+        .actions { display: flex; gap: 0.5rem; align-items: center; margin: 1rem 0; }
+        .inline-form { display: inline; }
+        .flash { padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1rem; font-size: 0.9rem; }
+        .flash-success { background: #d1e7dd; color: var(--pass); }
+        .flash-error { background: #f8d7da; color: var(--fail); }
     </style>
 </head>
 <body>
@@ -66,6 +87,7 @@
             <nav>
                 <a href="/">Dashboard</a> &nbsp;
                 <a href="/runs">Runs</a> &nbsp;
+                <a href="/runs/new" style="color:var(--pass); font-weight:600;">+ New Run</a> &nbsp;
                 <a href="/queue">Queue</a> &nbsp;
                 <a href="/results">Results</a> &nbsp;
                 <a href="/compare">Compare</a> &nbsp;

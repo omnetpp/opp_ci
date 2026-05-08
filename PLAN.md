@@ -275,14 +275,22 @@ Results are displayed in **two switchable formats**:
 
 ---
 
-### Stage 7 — Web UI: actions and admin
+### Stage 7 — Web UI: actions and admin ✅
 
 **Goal**: Start tests, manage matrices, and administer workers from the web.
 
-- Start test run page (`/runs/new`): form to select project, versions, platforms, test types, features, trigger mode; validate version compatibility via opp_env
-- Matrix configuration page (`/matrices`): create/edit/clone/delete matrix templates, link to webhooks
-- Admin page (`/admin`): worker status, system health, token management, project registration
-- Re-run and cancel actions from run detail and runs list pages
+- [x] Start test run page (`/runs/new`): form to select project, test type, mode, git ref, OS, compiler; also "Run from Matrix" section
+- [x] `POST /runs/new` queues a single run, `POST /runs/new/matrix` expands and queues all matrix jobs
+- [x] Matrix configuration page (`/matrices`): create form (name, project, JSON config), delete button on detail page
+- [x] `POST /matrices/create`, `POST /matrices/{id}/delete` routes
+- [x] Admin page (`/admin`): system health stats, workers table with status/tags/heartbeat, register worker form, API tokens table with revoke buttons, create token form, register project form
+- [x] `POST /admin/workers/register`, `POST /admin/tokens/create`, `POST /admin/tokens/{id}/revoke`, `POST /admin/projects/register`
+- [x] Re-run and cancel actions from run detail page (`POST /runs/{id}/rerun`, `POST /runs/{id}/cancel`)
+- [x] Re-run and cancel buttons in runs list table
+- [x] Rules page (`/rules`): create rule form with project/type/pattern/matrix selectors, delete button per rule
+- [x] `POST /rules/create`, `POST /rules/{id}/delete` routes
+- [x] Nav bar: added "+ New Run" link
+- [x] Shared CSS: button styles (.btn), form layouts (.form-group, .form-row), flash messages
 - **Deliverable**: full web-based management of the CI system
 
 ---
@@ -310,7 +318,7 @@ Results are displayed in **two switchable formats**:
 | 4 | Multi-dimensional matrices | matrix expansion, platform/compiler axes, scheduler | ✅ done |
 | 5 | Remote execution | worker agent, coordinator deployment, Python client | ✅ done |
 | 6 | GitHub automation | webhooks, status checks, PR comments | ✅ done |
-| 7 | Web management | start runs, manage matrices, admin |
+| 7 | Web management | start runs, manage matrices, admin | ✅ done |
 | 8 | Full ecosystem | Tier 2 projects, nightly runs, compatibility reports |
 
 ---
