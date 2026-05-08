@@ -10,7 +10,7 @@ from markupsafe import Markup
 from sqlalchemy import select, func
 
 from opp_ci.db.connection import SessionLocal
-from opp_ci.db.models import Project, Version, OS, Compiler, TestMatrix, AutoTestRule, TestRun, TestRunStatus, TestResult
+from opp_ci.db.models import Project, Version, OS, Compiler, TestMatrix, AutoTestRule, TestRun, TestRunStatus, TestResult, Worker, ApiToken
 
 _ANSI_RE = re.compile(r'\x1b\[([0-9;]*)m')
 
@@ -69,6 +69,9 @@ def _resolve_ansi_style(codes):
 
 
 app = FastAPI(title="opp_ci")
+
+from opp_ci.web.api import router as api_router
+app.include_router(api_router)
 
 templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
@@ -581,8 +584,16 @@ def admin_page(request: Request):
             "runs_failed": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.failed)).scalar(),
             "runs_error": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.error)).scalar(),
             "runs_running": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.running)).scalar(),
+            "runs_queued": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.queued)).scalar(),
             "results": session.execute(select(func.count(TestResult.id))).scalar(),
+            "workers_total": session.execute(select(func.count(Worker.id))).scalar(),
+            "workers_online": session.execute(select(func.count(Worker.id)).where(Worker.status == "online")).scalar(),
+            "tokens": session.execute(select(func.count(ApiToken.id))).scalar(),
         }
+
+        workers = session.execute(
+            select(Worker).order_by(Worker.name)
+        ).scalars().all()
 
         recent_errors = session.execute(
             select(TestRun).where(TestRun.status == TestRunStatus.error).order_by(TestRun.id.desc()).limit(10)
@@ -590,6 +601,7 @@ def admin_page(request: Request):
 
         return templates.TemplateResponse(request, "admin.html", {
             "stats": stats,
+            "workers": workers,
             "recent_errors": recent_errors,
         })
     finally:

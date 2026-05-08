@@ -33,6 +33,10 @@ web = [
     "fastapi",
     "uvicorn[standard]",
     "jinja2",
+    "pydantic>=2.0",
+]
+client = [
+    "requests",
 ]
 
 [project.urls]

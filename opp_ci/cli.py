@@ -5,14 +5,18 @@ import click
 from sqlalchemy import select
 
 from opp_ci.db.connection import engine, SessionLocal
-from opp_ci.db.models import Base, Project, Version, TestMatrix, TestRun, TestRunStatus, TestResult
+from opp_ci.db.models import Base, Project, Version, TestMatrix, TestRun, TestRunStatus, TestResult, Worker, ApiToken
 from opp_ci.executor import install_project, run_test
 
 
 @click.group()
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
-def main(verbose):
+@click.option("--remote", is_flag=True, help="Submit to remote coordinator instead of running locally")
+@click.pass_context
+def main(ctx, verbose, remote):
     """opp_ci — CI for OMNeT++ simulation projects."""
+    ctx.ensure_object(dict)
+    ctx.obj["remote"] = remote
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -30,8 +34,13 @@ def init_db():
 @click.option("--ref", "git_ref", default=None, help="Git branch, tag, or commit to test (e.g. master, topic/my-feature)")
 @click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
-def run_cmd(project, test_types, git_ref, pins, skip_install):
+@click.pass_context
+def run_cmd(ctx, project, test_types, git_ref, pins, skip_install):
     """Run test(s) for a project and store the results."""
+    if ctx.obj.get("remote"):
+        _run_remote(project, test_types, git_ref)
+        return
+
     from opp_ci.dependency import resolve_dependencies, parse_pins, format_resolved_deps
 
     Base.metadata.create_all(engine)
@@ -103,6 +112,27 @@ def run_cmd(project, test_types, git_ref, pins, skip_install):
             click.echo(f"  Result: {outcome['result_code']} ({outcome['duration_seconds']:.1f}s)")
     finally:
         session.close()
+
+
+def _run_remote(project, test_types, git_ref):
+    """Submit test run(s) to the remote coordinator."""
+    from opp_ci.config import COORDINATOR_URL, API_TOKEN
+    from opp_ci.client import OppCiClient
+
+    if not API_TOKEN:
+        click.echo("ERROR: Set OPP_CI_API_TOKEN env var for remote submission.")
+        return
+
+    client = OppCiClient(url=COORDINATOR_URL, token=API_TOKEN)
+    for test_type in test_types.split(","):
+        test_type = test_type.strip()
+        if not test_type:
+            continue
+        try:
+            result = client.submit_run(project=project, test_type=test_type, git_ref=git_ref)
+            click.echo(f"Submitted run #{result['id']}: {project} / {test_type} → {result['status']}")
+        except Exception as e:
+            click.echo(f"ERROR submitting {project}/{test_type}: {e}")
 
 
 @main.command("serve")
@@ -573,3 +603,156 @@ def resolve_deps_cmd(project_version, pins):
 
     if resolved:
         click.echo(f"\nResolved: {format_resolved_deps(resolved)}")
+
+
+# ── Worker commands ────────────────────────────────────────────────────
+
+@main.group("worker")
+def worker_group():
+    """Worker management commands."""
+    pass
+
+
+@worker_group.command("start")
+@click.option("--coordinator", required=True, help="Coordinator URL (e.g. https://ci.omnetpp.org)")
+@click.option("--token", required=True, help="Worker token")
+@click.option("--tags", default="", help="Comma-separated capability tags (e.g. linux,amd64,perf-counters)")
+@click.option("--concurrency", default=1, help="Max concurrent jobs (default: 1)")
+@click.option("--poll-interval", default=10, help="Seconds between polls (default: 10)")
+@click.option("--heartbeat-interval", default=30, help="Seconds between heartbeats (default: 30)")
+def worker_start(coordinator, token, tags, concurrency, poll_interval, heartbeat_interval):
+    """Start a worker agent that polls the coordinator for jobs."""
+    from opp_ci.worker import WorkerAgent
+
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    agent = WorkerAgent(
+        coordinator_url=coordinator,
+        token=token,
+        tags=tag_list,
+        concurrency=concurrency,
+    )
+    click.echo(f"Starting worker — coordinator={coordinator} tags={tag_list} concurrency={concurrency}")
+    agent.start(poll_interval=poll_interval, heartbeat_interval=heartbeat_interval)
+
+
+@worker_group.command("register")
+@click.option("--name", required=True, help="Worker name (unique)")
+@click.option("--tags", default="", help="Comma-separated capability tags")
+@click.option("--concurrency", default=1, help="Max concurrent jobs")
+def worker_register(name, tags, concurrency):
+    """Register a new worker in the local database and print its token."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        existing = session.execute(
+            select(Worker).where(Worker.name == name)
+        ).scalar_one_or_none()
+        if existing is not None:
+            click.echo(f"Worker '{name}' already exists (token: {existing.token})")
+            return
+
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+        worker = Worker(name=name, tags=tag_list, concurrency=concurrency)
+        session.add(worker)
+        session.commit()
+        click.echo(f"Worker '{name}' registered.")
+        click.echo(f"  ID:          {worker.id}")
+        click.echo(f"  Token:       {worker.token}")
+        click.echo(f"  Tags:        {worker.tags}")
+        click.echo(f"  Concurrency: {worker.concurrency}")
+    finally:
+        session.close()
+
+
+@worker_group.command("list")
+def worker_list():
+    """List registered workers."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        workers = session.execute(
+            select(Worker).order_by(Worker.name)
+        ).scalars().all()
+        if not workers:
+            click.echo("No workers registered.")
+            return
+
+        click.echo(f"{'ID':<6} {'Name':<20} {'Status':<10} {'Jobs':<6} {'Cap':<6} {'Tags':<30} {'Last Heartbeat'}")
+        click.echo("-" * 110)
+        for w in workers:
+            hb = w.last_heartbeat.strftime("%Y-%m-%d %H:%M:%S") if w.last_heartbeat else "-"
+            tags_str = ", ".join(w.tags) if w.tags else "-"
+            click.echo(f"{w.id:<6} {w.name:<20} {w.status:<10} {w.current_job_count:<6} {w.concurrency:<6} {tags_str:<30} {hb}")
+    finally:
+        session.close()
+
+
+# ── Token commands ─────────────────────────────────────────────────────
+
+@main.group("token")
+def token_group():
+    """API token management commands."""
+    pass
+
+
+@token_group.command("create")
+@click.option("--name", required=True, help="Token name/description")
+@click.option("--role", required=True, type=click.Choice(["readonly", "submitter", "worker", "admin"]), help="Token role")
+def token_create(name, role):
+    """Create a new API token."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        token = ApiToken(name=name, role=role)
+        session.add(token)
+        session.commit()
+        click.echo(f"Token created:")
+        click.echo(f"  Name:  {token.name}")
+        click.echo(f"  Role:  {token.role}")
+        click.echo(f"  Token: {token.token}")
+    finally:
+        session.close()
+
+
+@token_group.command("list")
+def token_list():
+    """List API tokens."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        tokens = session.execute(
+            select(ApiToken).order_by(ApiToken.id)
+        ).scalars().all()
+        if not tokens:
+            click.echo("No tokens.")
+            return
+
+        click.echo(f"{'ID':<6} {'Name':<20} {'Role':<12} {'Enabled':<10} {'Token (prefix)':<20} {'Created'}")
+        click.echo("-" * 90)
+        for t in tokens:
+            prefix = t.token[:12] + "..." if t.token else "-"
+            created = t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "-"
+            enabled = "yes" if t.enabled else "no"
+            click.echo(f"{t.id:<6} {t.name:<20} {t.role:<12} {enabled:<10} {prefix:<20} {created}")
+    finally:
+        session.close()
+
+
+@token_group.command("revoke")
+@click.argument("token_id", type=int)
+def token_revoke(token_id):
+    """Disable an API token by ID."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        token = session.execute(
+            select(ApiToken).where(ApiToken.id == token_id)
+        ).scalar_one_or_none()
+        if token is None:
+            click.echo(f"Token #{token_id} not found.")
+            return
+        token.enabled = False
+        session.commit()
+        click.echo(f"Token #{token_id} ({token.name}) revoked.")
+    finally:
+        session.close()

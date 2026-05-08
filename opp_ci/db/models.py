@@ -1,6 +1,7 @@
 import datetime
+import secrets
 
-from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Text, Enum, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Text, Enum, JSON, Boolean
 from sqlalchemy.orm import declarative_base, relationship
 import enum
 
@@ -82,6 +83,41 @@ class TestMatrix(Base):
     config = Column(JSON, nullable=False)
 
 
+class Worker(Base):
+    __tablename__ = "workers"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, unique=True, nullable=False)
+    token = Column(String, unique=True, nullable=False, default=lambda: secrets.token_urlsafe(32))
+    tags = Column(JSON, default=list)  # ["linux", "amd64", "perf-counters"]
+    concurrency = Column(Integer, default=1)
+    status = Column(String, default="offline")  # online, offline, busy
+    last_heartbeat = Column(DateTime, nullable=True)
+    registered_at = Column(DateTime, default=datetime.datetime.utcnow)
+    current_job_count = Column(Integer, default=0)
+
+    def __repr__(self):
+        return f"<Worker(name={self.name!r}, status={self.status!r}, tags={self.tags})>"
+
+    @property
+    def is_available(self):
+        return self.status == "online" and self.current_job_count < self.concurrency
+
+
+class ApiToken(Base):
+    __tablename__ = "api_tokens"
+
+    id = Column(Integer, primary_key=True)
+    token = Column(String, unique=True, nullable=False, default=lambda: secrets.token_urlsafe(32))
+    name = Column(String, nullable=False)
+    role = Column(String, nullable=False, default="readonly")  # admin, submitter, worker, readonly
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    def __repr__(self):
+        return f"<ApiToken(name={self.name!r}, role={self.role!r})>"
+
+
 class AutoTestRule(Base):
     __tablename__ = "auto_test_rules"
 
@@ -122,13 +158,15 @@ class TestRun(Base):
     git_ref = Column(String, nullable=True)
     version = Column(String, nullable=True)
     matrix_id = Column(Integer, ForeignKey("test_matrices.id"), nullable=True)
+    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=True)
     status = Column(Enum(TestRunStatus), nullable=False, default=TestRunStatus.queued)
     started_at = Column(DateTime, default=datetime.datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
     duration_seconds = Column(Float, nullable=True)
-    trigger = Column(String, default="manual")
+    trigger = Column(String, default="manual")  # manual, webhook, schedule, remote
 
     results = relationship("TestResult", back_populates="test_run", cascade="all, delete-orphan")
+    worker = relationship("Worker", backref="test_runs")
 
     def __repr__(self):
         return f"<TestRun(id={self.id}, project={self.project!r}, test_type={self.test_type!r}, status={self.status.value!r})>"

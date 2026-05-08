@@ -228,17 +228,21 @@ Results are displayed in **two switchable formats**:
 
 ---
 
-### Stage 5 — Remote workers and deployment
+### Stage 5 — Remote workers and deployment ✅
 
 **Goal**: Deploy the coordinator to a cloud VPS, run jobs on remote workers.
 
-- Worker agent: `opp_ci worker start --coordinator <url> --token <token>` (see [Worker Registration](#worker-registration))
-- Workers poll coordinator for jobs, report results back via REST API
-- Worker capability tags (os, arch, compilers, perf-counters) matched to job requirements
-- Deploy coordinator (scheduler + API + Postgres) to a cloud VPS (see [Deployment Architecture](#deployment-architecture))
-- Python client library for remote job submission (see [Python Client](#python-client-from-your-machine))
-- CLI works both locally and against remote coordinator: `opp_ci --remote run --project inet-4.5 --test smoke`
-- Token-based authentication (see [Security](#security))
+- [x] Worker agent: `opp_ci worker start --coordinator <url> --token <token>` (see [Worker Registration](#worker-registration))
+- [x] Workers poll coordinator for jobs, report results back via REST API
+- [x] Worker capability tags (os, arch, compilers, perf-counters) matched to job requirements
+- [ ] Deploy coordinator (scheduler + API + Postgres) to a cloud VPS (see [Deployment Architecture](#deployment-architecture))
+- [x] Python client library for remote job submission (see [Python Client](#python-client-from-your-machine))
+- [x] CLI works both locally and against remote coordinator: `opp_ci --remote run --project inet-4.5 --test smoke`
+- [x] Token-based authentication (see [Security](#security))
+- [x] `Worker` and `ApiToken` DB models with role-based access (readonly, submitter, worker, admin)
+- [x] REST API (`/api/`) for workers (poll, heartbeat, result), run submission, token management
+- [x] CLI: `opp_ci worker register`, `opp_ci worker list`, `opp_ci worker start`
+- [x] CLI: `opp_ci token create`, `opp_ci token list`, `opp_ci token revoke`
 - **Deliverable**: coordinator running on a VPS, workers on self-hosted machines, jobs submitted remotely
 
 ---
@@ -299,7 +303,7 @@ Results are displayed in **two switchable formats**:
 | 2 | Web results browsing (local + cloud) | FastAPI, dashboard, runs list, search, comparison | ✅ done |
 | 3 | All test types, multiple projects | test types, project catalog, dependency resolution | ✅ done |
 | 4 | Multi-dimensional matrices | matrix expansion, platform/compiler axes, scheduler | ✅ done |
-| 5 | Remote execution | worker agent, coordinator deployment, Python client |
+| 5 | Remote execution | worker agent, coordinator deployment, Python client | ✅ done |
 | 6 | GitHub automation | webhooks, status checks, PR comments |
 | 7 | Web management | start runs, manage matrices, admin |
 | 8 | Full ecosystem | Tier 2 projects, nightly runs, compatibility reports |
