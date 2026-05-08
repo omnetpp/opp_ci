@@ -1,5 +1,5 @@
 """
-REST API for opp_ci Stage 5 — remote workers and job submission.
+REST API for opp_ci — remote workers, job submission, and GitHub integration.
 
 Endpoints:
     POST /api/runs              — submit a test run (submitter+)
@@ -15,12 +15,16 @@ Endpoints:
 
     POST /api/tokens            — create an API token (admin)
     GET  /api/tokens            — list tokens (admin)
+
+    POST /api/github/webhook    — GitHub webhook receiver (push, pull_request)
+    GET  /api/github/rules      — list auto-test rules (readonly+)
+    POST /api/github/rules      — create auto-test rule (admin)
 """
 
 import datetime
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -28,6 +32,7 @@ from opp_ci.auth import require_role, require_worker_token
 from opp_ci.db.connection import SessionLocal
 from opp_ci.db.models import (
     Base, Worker, ApiToken, TestRun, TestRunStatus, TestResult, TestMatrix,
+    Project, AutoTestRule,
 )
 
 _logger = logging.getLogger(__name__)
@@ -369,6 +374,14 @@ async def worker_report_result(
 
         session.commit()
         _logger.info("Run #%d result: %s (worker '%s')", run.id, req.result_code, worker_info["worker_name"])
+
+        # Post GitHub commit status if this was a webhook-triggered run
+        try:
+            from opp_ci.github.status import update_github_status
+            update_github_status(run.id)
+        except Exception as e:
+            _logger.warning("GitHub status update failed for run #%d: %s", run.id, e)
+
         return {"status": "ok", "run_id": run.id, "result_code": req.result_code}
     finally:
         session.close()
@@ -448,6 +461,137 @@ async def list_tokens(
         session.close()
 
 
+# ── GitHub integration ─────────────────────────────────────────────────
+
+class CreateRuleRequest(BaseModel):
+    project_name: str
+    rule_type: str  # branch, pr, tag
+    pattern: str    # glob, e.g. "master", "topic/*", "*"
+    matrix_name: str | None = None
+    enabled: bool = True
+
+
+@router.post("/github/webhook")
+async def github_webhook(request: Request):
+    """Receive GitHub webhook events (push, pull_request, ping)."""
+    from opp_ci.github.webhook import verify_signature, handle_webhook_event
+
+    body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "")
+
+    if not verify_signature(body, signature):
+        raise HTTPException(status_code=403, detail="Invalid webhook signature")
+
+    event_type = request.headers.get("X-GitHub-Event", "")
+    if not event_type:
+        raise HTTPException(status_code=400, detail="Missing X-GitHub-Event header")
+
+    import json
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    result = handle_webhook_event(event_type, payload)
+    return result
+
+
+@router.get("/github/rules")
+async def list_rules(
+    _identity: dict = Depends(require_role("readonly")),
+):
+    """List auto-test rules."""
+    session = SessionLocal()
+    try:
+        rules = session.execute(
+            select(AutoTestRule).order_by(AutoTestRule.id)
+        ).scalars().all()
+        return [
+            {
+                "id": r.id,
+                "project_id": r.project_id,
+                "project_name": r.project_rel.name if r.project_rel else None,
+                "rule_type": r.rule_type,
+                "pattern": r.pattern,
+                "matrix_id": r.matrix_id,
+                "matrix_name": r.matrix_rel.name if r.matrix_rel else None,
+                "enabled": bool(r.enabled),
+            }
+            for r in rules
+        ]
+    finally:
+        session.close()
+
+
+@router.post("/github/rules")
+async def create_rule(
+    req: CreateRuleRequest,
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Create an auto-test rule (admin only)."""
+    if req.rule_type not in ("branch", "pr", "tag"):
+        raise HTTPException(status_code=400, detail=f"Invalid rule_type: {req.rule_type}")
+
+    session = SessionLocal()
+    try:
+        project = session.execute(
+            select(Project).where(Project.name == req.project_name)
+        ).scalar_one_or_none()
+        if project is None:
+            raise HTTPException(status_code=404, detail=f"Project '{req.project_name}' not found")
+
+        matrix_id = None
+        if req.matrix_name:
+            matrix = session.execute(
+                select(TestMatrix).where(TestMatrix.name == req.matrix_name)
+            ).scalar_one_or_none()
+            if matrix is None:
+                raise HTTPException(status_code=404, detail=f"Matrix '{req.matrix_name}' not found")
+            matrix_id = matrix.id
+
+        rule = AutoTestRule(
+            project_id=project.id,
+            rule_type=req.rule_type,
+            pattern=req.pattern,
+            matrix_id=matrix_id,
+            enabled=1 if req.enabled else 0,
+        )
+        session.add(rule)
+        session.commit()
+        _logger.info("Auto-test rule created: %s %s '%s' -> matrix %s",
+                     req.project_name, req.rule_type, req.pattern, req.matrix_name)
+        return {
+            "id": rule.id,
+            "project_name": req.project_name,
+            "rule_type": rule.rule_type,
+            "pattern": rule.pattern,
+            "matrix_name": req.matrix_name,
+            "enabled": bool(rule.enabled),
+        }
+    finally:
+        session.close()
+
+
+@router.delete("/github/rules/{rule_id}")
+async def delete_rule(
+    rule_id: int,
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Delete an auto-test rule (admin only)."""
+    session = SessionLocal()
+    try:
+        rule = session.execute(
+            select(AutoTestRule).where(AutoTestRule.id == rule_id)
+        ).scalar_one_or_none()
+        if rule is None:
+            raise HTTPException(status_code=404, detail=f"Rule #{rule_id} not found")
+        session.delete(rule)
+        session.commit()
+        return {"status": "deleted", "id": rule_id}
+    finally:
+        session.close()
+
+
 # ── Helpers ────────────────────────────────────────────────────────────
 
 def _run_to_dict(run):
@@ -469,4 +613,8 @@ def _run_to_dict(run):
         "duration_seconds": run.duration_seconds,
         "worker_id": run.worker_id,
         "matrix_id": run.matrix_id,
+        "github_owner": run.github_owner,
+        "github_repo": run.github_repo,
+        "github_commit_sha": run.github_commit_sha,
+        "github_pr_number": run.github_pr_number,
     }

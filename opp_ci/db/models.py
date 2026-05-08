@@ -164,6 +164,11 @@ class TestRun(Base):
     finished_at = Column(DateTime, nullable=True)
     duration_seconds = Column(Float, nullable=True)
     trigger = Column(String, default="manual")  # manual, webhook, schedule, remote
+    github_owner = Column(String, nullable=True)
+    github_repo = Column(String, nullable=True)
+    github_commit_sha = Column(String, nullable=True)
+    github_pr_number = Column(Integer, nullable=True)
+    github_status_url = Column(String, nullable=True)
 
     results = relationship("TestResult", back_populates="test_run", cascade="all, delete-orphan")
     worker = relationship("Worker", backref="test_runs")

@@ -5,7 +5,7 @@ import click
 from sqlalchemy import select
 
 from opp_ci.db.connection import engine, SessionLocal
-from opp_ci.db.models import Base, Project, Version, TestMatrix, TestRun, TestRunStatus, TestResult, Worker, ApiToken
+from opp_ci.db.models import Base, Project, Version, TestMatrix, TestRun, TestRunStatus, TestResult, Worker, ApiToken, AutoTestRule
 from opp_ci.executor import install_project, run_test
 
 
@@ -754,5 +754,151 @@ def token_revoke(token_id):
         token.enabled = False
         session.commit()
         click.echo(f"Token #{token_id} ({token.name}) revoked.")
+    finally:
+        session.close()
+
+
+# ── GitHub rule commands ───────────────────────────────────────────────
+
+@main.group("rule")
+def rule_group():
+    """Auto-test rule management (GitHub integration)."""
+    pass
+
+
+@rule_group.command("create")
+@click.option("--project", required=True, help="Project name")
+@click.option("--type", "rule_type", required=True, type=click.Choice(["branch", "pr", "tag"]), help="Rule type")
+@click.option("--pattern", required=True, help="Glob pattern (e.g. 'master', 'topic/*', '*')")
+@click.option("--matrix", "matrix_name", default=None, help="Matrix name to run (omit for smoke-only)")
+def rule_create(project, rule_type, pattern, matrix_name):
+    """Create an auto-test rule for GitHub events."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        proj = session.execute(
+            select(Project).where(Project.name == project)
+        ).scalar_one_or_none()
+        if proj is None:
+            click.echo(f"Project '{project}' not found.")
+            return
+
+        matrix_id = None
+        if matrix_name:
+            matrix = session.execute(
+                select(TestMatrix).where(TestMatrix.name == matrix_name)
+            ).scalar_one_or_none()
+            if matrix is None:
+                click.echo(f"Matrix '{matrix_name}' not found.")
+                return
+            matrix_id = matrix.id
+
+        rule = AutoTestRule(
+            project_id=proj.id,
+            rule_type=rule_type,
+            pattern=pattern,
+            matrix_id=matrix_id,
+            enabled=1,
+        )
+        session.add(rule)
+        session.commit()
+        matrix_desc = matrix_name or "(smoke only)"
+        click.echo(f"Rule #{rule.id}: {project} {rule_type} '{pattern}' -> {matrix_desc}")
+    finally:
+        session.close()
+
+
+@rule_group.command("list")
+def rule_list():
+    """List auto-test rules."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        rules = session.execute(
+            select(AutoTestRule).order_by(AutoTestRule.id)
+        ).scalars().all()
+        if not rules:
+            click.echo("No auto-test rules.")
+            return
+
+        click.echo(f"{'ID':<6} {'Project':<20} {'Type':<8} {'Pattern':<20} {'Matrix':<20} {'Enabled'}")
+        click.echo("-" * 90)
+        for r in rules:
+            proj_name = r.project_rel.name if r.project_rel else "?"
+            matrix_name = r.matrix_rel.name if r.matrix_rel else "-"
+            enabled = "yes" if r.enabled else "no"
+            click.echo(f"{r.id:<6} {proj_name:<20} {r.rule_type:<8} {r.pattern:<20} {matrix_name:<20} {enabled}")
+    finally:
+        session.close()
+
+
+@rule_group.command("delete")
+@click.argument("rule_id", type=int)
+def rule_delete(rule_id):
+    """Delete an auto-test rule by ID."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        rule = session.execute(
+            select(AutoTestRule).where(AutoTestRule.id == rule_id)
+        ).scalar_one_or_none()
+        if rule is None:
+            click.echo(f"Rule #{rule_id} not found.")
+            return
+        session.delete(rule)
+        session.commit()
+        click.echo(f"Rule #{rule_id} deleted.")
+    finally:
+        session.close()
+
+
+@rule_group.command("test-webhook")
+@click.option("--project", required=True, help="Project name")
+@click.option("--ref", required=True, help="Branch, tag, or PR branch to simulate")
+@click.option("--type", "event_type", default="push", type=click.Choice(["push", "pr"]), help="Event type")
+@click.option("--sha", default="0000000000000000000000000000000000000000", help="Commit SHA (default: dummy)")
+@click.option("--pr-number", default=None, type=int, help="PR number (for pr events)")
+def rule_test_webhook(project, ref, event_type, sha, pr_number):
+    """Simulate a webhook event to test rule matching (dry-run style)."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        proj = session.execute(
+            select(Project).where(Project.name == project)
+        ).scalar_one_or_none()
+        if proj is None:
+            click.echo(f"Project '{project}' not found.")
+            return
+        if not proj.github_owner or not proj.github_repo:
+            click.echo(f"Project '{project}' has no GitHub owner/repo configured.")
+            return
+
+        from opp_ci.github.webhook import handle_webhook_event
+
+        if event_type == "push":
+            payload = {
+                "ref": f"refs/heads/{ref}",
+                "after": sha,
+                "repository": {
+                    "name": proj.github_repo,
+                    "owner": {"login": proj.github_owner},
+                },
+            }
+            result = handle_webhook_event("push", payload)
+        else:
+            payload = {
+                "action": "synchronize",
+                "pull_request": {
+                    "number": pr_number or 1,
+                    "head": {"sha": sha, "ref": ref},
+                },
+                "repository": {
+                    "name": proj.github_repo,
+                    "owner": {"login": proj.github_owner},
+                },
+            }
+            result = handle_webhook_event("pull_request", payload)
+
+        click.echo(f"Result: {result}")
     finally:
         session.close()

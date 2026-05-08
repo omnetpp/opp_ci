@@ -247,11 +247,11 @@ Results are displayed in **two switchable formats**:
 
 ---
 
-### Stage 6 — GitHub integration
+### Stage 6 — GitHub integration ✅
 
 **Goal**: Automatically test on push/PR, post status checks back to GitHub.
 
-- **AutoTestRule** model in DB — configures which branches/PRs are automatically tested:
+- [x] **AutoTestRule** model in DB — configures which branches/PRs are automatically tested:
   - project FK
   - rule_type: `branch`, `pr`, `tag`
   - pattern: glob/regex for matching (e.g. `master`, `topic/*`, `*` for all PRs)
@@ -261,11 +261,16 @@ Results are displayed in **two switchable formats**:
     - "test inet master with full matrix on every push"
     - "test inet PRs with smoke only"
     - "test omnetpp tags matching `v6.*` with release matrix"
-- Webhook receiver at `/api/github/webhook` (see [GitHub integration](#phase-3--github-integration-details))
-- Listen for `push` and `pull_request` events on configured repos
-- Match incoming events against AutoTestRule patterns → enqueue matching matrix jobs
-- GitHub API client: post commit statuses, PR comments with result summaries (see [GitHub API client](#phase-3--github-integration-details))
-- Reuse token from `~/.ssh/github_repo_token` (same as opp_repl)
+- [x] Webhook receiver at `POST /api/github/webhook` — HMAC-SHA256 signature verification, handles `push`, `pull_request`, `ping` events
+- [x] Listen for `push` and `pull_request` events on configured repos
+- [x] Match incoming events against AutoTestRule patterns (glob via `fnmatch`) → enqueue matching matrix jobs
+- [x] GitHub API client (`opp_ci/github/client.py`): post commit statuses, PR comments with result summaries
+- [x] Status updater (`opp_ci/github/status.py`): automatically posts GitHub status when worker reports result
+- [x] PR comments with Markdown result tables, auto-updated on subsequent runs (hidden marker for idempotent updates)
+- [x] Reuse token from `~/.ssh/github_repo_token` or `OPP_CI_GITHUB_TOKEN` env var
+- [x] GitHub fields on TestRun: `github_owner`, `github_repo`, `github_commit_sha`, `github_pr_number`, `github_status_url`
+- [x] REST API: `GET/POST /api/github/rules`, `DELETE /api/github/rules/{id}`
+- [x] CLI: `opp_ci rule create`, `opp_ci rule list`, `opp_ci rule delete`, `opp_ci rule test-webhook`
 - **Deliverable**: push to inet master → tests auto-triggered → green/red status check on GitHub
 
 ---
@@ -304,7 +309,7 @@ Results are displayed in **two switchable formats**:
 | 3 | All test types, multiple projects | test types, project catalog, dependency resolution | ✅ done |
 | 4 | Multi-dimensional matrices | matrix expansion, platform/compiler axes, scheduler | ✅ done |
 | 5 | Remote execution | worker agent, coordinator deployment, Python client | ✅ done |
-| 6 | GitHub automation | webhooks, status checks, PR comments |
+| 6 | GitHub automation | webhooks, status checks, PR comments | ✅ done |
 | 7 | Web management | start runs, manage matrices, admin |
 | 8 | Full ecosystem | Tier 2 projects, nightly runs, compatibility reports |
 
@@ -374,10 +379,38 @@ Role-based access with four privilege levels:
 
 Tokens are checked in order: `api_tokens` table → `workers` table. Workers authenticate with their per-worker token (auto-generated at registration). All other callers use API tokens created via CLI or API.
 
-### Phase 3 — GitHub Integration Details
+### GitHub Integration Details
 
-- **Webhook receiver** (`opp_ci/github/webhook.py`) — listen for `push` and `pull_request` events, map to matrix configs, enqueue jobs, post status checks
-- **GitHub API client** (`opp_ci/github/client.py`) — reuse token from `~/.ssh/github_repo_token`, post commit statuses, PR comments with result summaries, query PR metadata
+`opp_ci/github/` package:
+
+- **`client.py`** — `GitHubClient` class wrapping the GitHub REST API v3:
+  - `create_commit_status()` — post pending/success/failure/error commit statuses
+  - `set_status_pending()`, `set_status_from_run()` — convenience methods
+  - `create_pr_comment()`, `update_or_create_pr_comment()` — post/update PR comments with hidden marker for idempotent updates
+  - `get_pr()`, `get_commit()` — query metadata
+  - Token from `~/.ssh/github_repo_token` or `OPP_CI_GITHUB_TOKEN` env var
+
+- **`webhook.py`** — Webhook receiver logic:
+  - `verify_signature()` — HMAC-SHA256 verification of `X-Hub-Signature-256`
+  - `handle_webhook_event()` — dispatch `push`, `pull_request`, `ping` events
+  - `_handle_push()` — extract branch/tag from `refs/heads/...` or `refs/tags/...`
+  - `_handle_pull_request()` — handle `opened`, `synchronize`, `reopened` actions
+  - `_match_and_queue()` — look up Project by github_owner/repo, match AutoTestRule patterns via `fnmatch`, expand linked matrices, queue TestRuns, post pending statuses
+  - `format_results_comment()` — generate Markdown table for PR comments
+
+- **`status.py`** — Status updater called when runs complete:
+  - `update_github_status()` — post final commit status + update PR comment
+  - Automatically triggered from `/api/workers/result` endpoint
+
+Configuration (`config.py`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPP_CI_GITHUB_TOKEN` | *(empty)* | GitHub API token (env var, takes precedence) |
+| `OPP_CI_GITHUB_TOKEN_FILE` | `~/.ssh/github_repo_token` | File containing GitHub API token |
+| `OPP_CI_GITHUB_WEBHOOK_SECRET` | *(empty)* | Webhook HMAC secret for signature verification |
+| `OPP_CI_GITHUB_STATUS_CONTEXT` | `opp_ci` | Context string for commit statuses |
+| `OPP_CI_GITHUB_BASE_URL` | `https://api.github.com` | GitHub API base URL |
 
 ### Web UI Pages
 
