@@ -119,7 +119,7 @@ def run_test(project, test_type, git_ref=None, opp_file=None):
         args = [cmd, "--load", "@opp"]
         if opp_file:
             args += ["--load", opp_file]
-        args += ["-p", project, "--result-file", result_file.name]
+        args += ["-p", project, "-b", "task", "--result-file", result_file.name]
 
     _logger.info("Running test: %s", " ".join(args))
     start = time.time()
