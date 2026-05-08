@@ -19,6 +19,7 @@ COMMAND_MAP = {
     "chart": "opp_run_chart_tests",
     "release": "opp_run_release_tests",
     "build": "opp_build_project",
+    "opp": "opp_run_opp_tests",
     "all": "opp_run_all_tests",
 }
 
