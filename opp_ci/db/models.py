@@ -157,6 +157,7 @@ class TestRun(Base):
     compiler_version = Column(String, nullable=True)
     platform_desc = Column(String, nullable=True)
     git_ref = Column(String, nullable=True)
+    commit_sha = Column(String, nullable=True)
     version = Column(String, nullable=True)
     matrix_id = Column(Integer, ForeignKey("test_matrices.id"), nullable=True)
     worker_id = Column(Integer, ForeignKey("workers.id"), nullable=True)

@@ -67,6 +67,31 @@ def checkout_ref(project, git_ref):
     return project_dir
 
 
+def resolve_commit_sha(project, git_ref=None):
+    """
+    Resolve the current HEAD SHA for a project.
+
+    Returns the 40-char commit hash, or None if it cannot be determined.
+    """
+    env_key = f"OPP_CI_PROJECT_DIR_{project.upper().replace('-', '_')}"
+    project_dir = os.environ.get(env_key)
+    if not project_dir:
+        base_dir = os.environ.get("OPP_CI_PROJECT_DIR", ".")
+        project_dir = os.path.join(base_dir, project)
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_dir, capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (OSError, FileNotFoundError):
+        pass
+    _logger.debug("Could not resolve commit SHA for %s", project)
+    return None
+
+
 def install_project(project, git_ref=None):
     """Install a project via opp_env. No-op in direct mode."""
     if not USE_OPP_ENV:
@@ -145,6 +170,8 @@ def run_test(project, test_type, git_ref=None, opp_file=None):
             except OSError:
                 pass
 
+    commit_sha = resolve_commit_sha(project)
+
     _logger.info("Test finished: %s (%.1fs)", result_code, duration)
     return {
         "result_code": result_code,
@@ -152,4 +179,5 @@ def run_test(project, test_type, git_ref=None, opp_file=None):
         "stdout": result.stdout,
         "stderr": result.stderr,
         "details": details,
+        "commit_sha": commit_sha,
     }

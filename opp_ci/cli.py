@@ -101,6 +101,7 @@ def run_cmd(ctx, project, test_types, git_ref, pins, skip_install):
             test_run.status = TestRunStatus.passed if outcome["result_code"] == "PASS" else TestRunStatus.failed
             test_run.finished_at = datetime.datetime.utcnow()
             test_run.duration_seconds = outcome["duration_seconds"]
+            test_run.commit_sha = outcome.get("commit_sha")
             session.add(TestResult(
                 test_run_id=test_run.id,
                 result_code=outcome["result_code"],
@@ -459,6 +460,7 @@ def run_matrix(matrix_name, skip_install):
             test_run.status = TestRunStatus.passed if outcome["result_code"] == "PASS" else TestRunStatus.failed
             test_run.finished_at = datetime.datetime.utcnow()
             test_run.duration_seconds = outcome["duration_seconds"]
+            test_run.commit_sha = outcome.get("commit_sha")
             session.add(TestResult(
                 test_run_id=test_run.id,
                 result_code=outcome["result_code"],
