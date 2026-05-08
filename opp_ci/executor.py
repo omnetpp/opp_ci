@@ -87,7 +87,7 @@ def install_project(project, git_ref=None):
     _logger.info("Installation of %s complete", effective_project)
 
 
-def run_test(project, test_type, git_ref=None):
+def run_test(project, test_type, git_ref=None, opp_file=None):
     """
     Run a test for the given project.
 
@@ -116,7 +116,10 @@ def run_test(project, test_type, git_ref=None):
             prefix="opp_ci_result_", suffix=".json", delete=False
         )
         result_file.close()
-        args = [cmd, "--load", "@opp", "-p", project, "--result-file", result_file.name]
+        args = [cmd, "--load", "@opp"]
+        if opp_file:
+            args += ["--load", opp_file]
+        args += ["-p", project, "--result-file", result_file.name]
 
     _logger.info("Running test: %s", " ".join(args))
     start = time.time()

@@ -307,7 +307,8 @@ def list_projects():
 @click.option("--compiler-version", "compiler_versions", default=None, help="Comma-separated compiler versions for cross-product (e.g. '14,18')")
 @click.option("--tests", "test_types", required=True, help="Comma-separated test types")
 @click.option("--refs", default=None, help="Comma-separated git refs to test (e.g. 'master,topic/my-feature')")
-def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs):
+@click.option("--opp-file", "opp_file", default=None, help="Path to the project's .opp file (for opp_repl project discovery)")
+def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs, opp_file):
     """Create a test matrix configuration.
 
     Platform axes support two styles:
@@ -336,7 +337,7 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
             config["compiler"] = [c.strip() for c in compilers.split(",")]
         if compiler_versions:
             config["compiler_version"] = [c.strip() for c in compiler_versions.split(",")]
-        matrix = TestMatrix(name=name, project=project, config=config)
+        matrix = TestMatrix(name=name, project=project, opp_file=opp_file, config=config)
         session.add(matrix)
         session.commit()
 
@@ -441,7 +442,7 @@ def run_matrix(matrix_name, skip_install):
             click.echo(f"  [{i}/{len(jobs)}] {' × '.join(parts)}", nl=False)
 
             try:
-                outcome = run_test(job["project"], job["test_type"], git_ref=job.get("git_ref"))
+                outcome = run_test(job["project"], job["test_type"], git_ref=job.get("git_ref"), opp_file=matrix.opp_file)
             except Exception as e:
                 test_run.status = TestRunStatus.error
                 test_run.finished_at = datetime.datetime.utcnow()

@@ -80,6 +80,7 @@ class TestMatrix(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, unique=True, nullable=False)
     project = Column(String, nullable=False)
+    opp_file = Column(String, nullable=True)
     config = Column(JSON, nullable=False)
 
 
