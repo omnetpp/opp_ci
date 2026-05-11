@@ -308,6 +308,81 @@ Results are displayed in **two switchable formats**:
 
 ---
 
+### Stage 9 — Git notes: local result delivery via fetch
+
+**Goal**: Developers see test result summaries per-commit locally (in lazygit or `git log`) without querying the web UI. Results arrive automatically on `git fetch`.
+
+#### Design
+
+opp_ci pushes results as **git notes** (`refs/notes/ci`) to each tested repository. Notes are short summaries (one line per test type) with a URL to the full result page. Developers configure a fetch refspec once and results arrive on every `git fetch`/`git pull`.
+
+#### Permission model
+
+opp_ci does **not** push notes directly — it has no `Contents: Write` token. Instead:
+
+1. opp_ci holds a fine-grained GitHub PAT with only **Actions: Write** permission.
+2. opp_ci triggers a `workflow_dispatch` on the target repo's `ci-notes.yml` workflow.
+3. The GitHub Action fetches pending results from opp_ci's HTTP API, writes git notes, and pushes them using the built-in `GITHUB_TOKEN`.
+4. The Action deletes all its previous completed runs to minimize its footprint on the Actions tab.
+
+This ensures opp_ci cannot modify branches, tags, or file contents in any repository.
+
+#### Data flow
+
+```
+opp_ci coordinator                    GitHub
+  │                                     │
+  │── POST workflow_dispatch ──────────▶│  (Actions:Write PAT)
+  │                                     │
+  │◀── GET /api/notes/{repo}/pending ──│  (Action queries opp_ci)
+  │                                     │
+  │── 200 [{sha, note}, ...] ─────────▶│
+  │                                     │
+  │                              git notes --ref=ci add ...
+  │                              git push origin refs/notes/ci
+  │                                     │
+  │◀── POST /api/notes/{repo}/ack ────│  (Action marks synced)
+```
+
+#### Note format
+
+```
+✅ smoke PASS | fingerprint 46/48 PASS, 2 FAIL | https://ci.omnetpp.org/runs/42
+```
+
+One line per commit. Compact enough for lazygit's commit detail pane, with a URL for drill-down.
+
+#### Implementation tasks
+
+- [ ] **API endpoint** `GET /api/notes/{owner}/{repo}` — returns `[{sha, note}]` for all commits with results in that repo
+- [ ] **Note formatter**: generate compact one-line summary from `TestRun` + `TestResult` rows grouped by commit SHA
+- [ ] **Sync trigger**: after a batch of runs completes for a repo, call `workflow_dispatch` on the target repo
+- [ ] **Config**: `OPP_CI_GITHUB_ACTIONS_TOKEN` — fine-grained PAT with Actions:Write scope
+- [ ] **GitHub Action template** (`.github/workflows/ci-notes.yml`) — provided to each repo:
+  - `workflow_dispatch` trigger (no inputs needed)
+  - Delete previous completed runs of itself (minimize trail)
+  - Fetch all notes from opp_ci API
+  - Write notes (`git notes --ref=ci add -f`) and push `refs/notes/ci`
+- [ ] **Developer setup docs**: one-time fetch refspec config:
+  ```
+  git config --add remote.origin.fetch "+refs/notes/ci:refs/notes/ci"
+  ```
+- [ ] **lazygit integration docs**: custom command to display note for selected commit:
+  ```yaml
+  customCommands:
+    - key: "N"
+      context: "commits"
+      command: "git notes --ref=ci show {{.SelectedLocalCommit.Hash}} 2>/dev/null || echo 'No CI results'"
+      description: "Show CI results"
+      showOutput: true
+  ```
+
+#### Deliverable
+
+Push to a tested repo → opp_ci runs tests → triggers note sync → developer does `git fetch` → sees per-commit CI summaries locally in lazygit or `git log --notes=ci`.
+
+---
+
 ### Summary
 
 | Stage | What you get | Key components |
@@ -320,6 +395,7 @@ Results are displayed in **two switchable formats**:
 | 6 | GitHub automation | webhooks, status checks, PR comments | ✅ done |
 | 7 | Web management | start runs, manage matrices, admin | ✅ done |
 | 8 | Full ecosystem | Tier 2 projects, nightly runs, compatibility reports |
+| 9 | Local result delivery via git notes | notes API, GitHub Action, lazygit integration |
 
 ---
 
