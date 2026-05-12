@@ -198,12 +198,14 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
                 # No matrix linked — create a single smoke test job
                 jobs = [{"project": project.name, "test_type": "smoke"}]
 
+            opp_file = matrix.opp_file if matrix else None
             for job in jobs:
                 run = TestRun(
                     project=job.get("project", project.name),
                     test_type=job.get("test_type", "smoke"),
                     mode=job.get("mode"),
                     git_ref=git_ref,
+                    opp_file=opp_file,
                     os=job.get("os"),
                     os_version=job.get("os_version"),
                     compiler=job.get("compiler"),
