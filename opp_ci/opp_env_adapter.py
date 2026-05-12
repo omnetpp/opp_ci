@@ -7,6 +7,7 @@ dependencies in a normalized format suitable for catalog sync.
 
 import json
 import logging
+import re
 import subprocess
 
 _logger = logging.getLogger(__name__)
@@ -128,6 +129,52 @@ def _parse_github_url(url):
     return (None, None)
 
 
+def list_platforms():
+    """
+    Extract available OS and compiler options from opp_env.
+
+    Returns a dict:
+        {
+            "os": [{"name": "nixos", "version": "24.05"}],
+            "compilers": [{"name": "clang"}, {"name": "gcc", "version": "7"}],
+        }
+    """
+    result = subprocess.run(
+        ["opp_env", "info", "--raw"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        _logger.error("opp_env info --raw failed: %s", result.stderr.strip())
+        return {"os": [], "compilers": []}
+
+    try:
+        entries = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError) as e:
+        _logger.error("Failed to parse opp_env info output: %s", e)
+        return {"os": [], "compilers": []}
+
+    os_set = set()
+    compiler_set = set()
+    for entry in entries:
+        options = entry.get("options", {})
+        for key, opt in options.items():
+            cat = opt.get("option_category", "")
+            if cat == "compiler":
+                # Extract name and version from option key (e.g. "gcc7" -> gcc/7, "clang" -> clang/None)
+                m = re.match(r"([a-zA-Z]+)(\d+.*)?", key)
+                if m:
+                    compiler_set.add((m.group(1), m.group(2) or None))
+            elif cat == "nixos":
+                nixos_ver = opt.get("nixos", "")
+                if nixos_ver:
+                    os_set.add(("nixos", nixos_ver))
+
+    return {
+        "os": [{"name": name, "version": ver} for name, ver in sorted(os_set)],
+        "compilers": [{"name": name, "version": ver} for name, ver in sorted(compiler_set)],
+    }
+
+
 def sync_catalog(session):
     """
     Sync the full opp_env catalog into the opp_ci database.
@@ -135,11 +182,12 @@ def sync_catalog(session):
     - Inserts new projects as Tier 2
     - Adds new versions for existing projects
     - Generates a default TestMatrix for new projects
+    - Seeds OS and Compiler tables from opp_env options
 
     Returns (new_projects, new_versions) counts.
     """
     from opp_ci.config import REFERENCE_PLATFORM
-    from opp_ci.db.models import Project, Version, TestMatrix
+    from opp_ci.db.models import Project, Version, TestMatrix, OS, Compiler
     from opp_ci.scheduler import _parse_os, _parse_compiler
 
     projects = list_all_projects()
@@ -221,6 +269,19 @@ def sync_catalog(session):
                 )
                 session.add(version)
                 new_versions += 1
+
+    # Seed OS and Compiler tables from opp_env options
+    platforms = list_platforms()
+    for os_entry in platforms["os"]:
+        exists = session.query(OS).filter_by(name=os_entry["name"], version=os_entry["version"]).first()
+        if not exists:
+            session.add(OS(name=os_entry["name"], version=os_entry["version"]))
+            _logger.info("New OS: %s %s", os_entry["name"], os_entry["version"])
+    for comp in platforms["compilers"]:
+        exists = session.query(Compiler).filter_by(name=comp["name"], version=comp["version"]).first()
+        if not exists:
+            session.add(Compiler(name=comp["name"], version=comp["version"]))
+            _logger.info("New compiler: %s %s", comp["name"], comp.get("version") or "")
 
     session.commit()
     _logger.info("Catalog sync complete: %d new projects, %d new versions",
