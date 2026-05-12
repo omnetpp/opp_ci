@@ -331,6 +331,7 @@ async def worker_poll(
                 "os_version": run.os_version,
                 "compiler": run.compiler,
                 "compiler_version": run.compiler_version,
+                "opp_file": run.opp_file,
             }
         }
     finally:

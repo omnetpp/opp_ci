@@ -97,6 +97,7 @@ class WorkerAgent:
         project = job["project"]
         test_type = job["test_type"]
         git_ref = job.get("git_ref")
+        opp_file = job.get("opp_file")
 
         _logger.info("Executing run #%d: %s / %s (ref=%s)", run_id, project, test_type, git_ref)
 
@@ -108,7 +109,7 @@ class WorkerAgent:
             return
 
         try:
-            outcome = run_test(project, test_type, git_ref=git_ref)
+            outcome = run_test(project, test_type, git_ref=git_ref, opp_file=opp_file)
         except Exception as e:
             _logger.error("Test execution failed for run #%d: %s", run_id, e)
             self._report_result(run_id, "ERROR", stderr=str(e))
