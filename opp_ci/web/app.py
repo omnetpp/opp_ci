@@ -126,6 +126,7 @@ def runs_list(
     request: Request,
     project: str = Query(default=None),
     test_type: str = Query(default=None),
+    git_ref: str = Query(default=None),
     status: str = Query(default=None),
     limit: int = Query(default=50),
 ):
@@ -136,6 +137,10 @@ def runs_list(
             query = query.where(TestRun.project == project)
         if test_type:
             query = query.where(TestRun.test_type == test_type)
+        if git_ref:
+            query = query.where(
+                (TestRun.git_ref == git_ref) | (TestRun.commit_sha.startswith(git_ref))
+            )
         if status:
             query = query.where(TestRun.status == TestRunStatus(status))
 
@@ -144,6 +149,7 @@ def runs_list(
             "runs": runs,
             "filter_project": project or "",
             "filter_test_type": test_type or "",
+            "filter_git_ref": git_ref or "",
             "filter_status": status or "",
         })
     finally:
@@ -561,17 +567,26 @@ def projects_list(request: Request):
             select(Project).order_by(Project.tier, Project.name)
         ).scalars().all()
 
-        # Collect run counts per project
+        # Collect run counts and last status per project
         run_counts = {}
+        last_status = {}
         for p in projects:
             count = session.execute(
                 select(func.count(TestRun.id)).where(TestRun.project == p.name)
             ).scalar()
             run_counts[p.name] = count
+            last_run = session.execute(
+                select(TestRun).where(
+                    TestRun.project == p.name,
+                    TestRun.status.in_([TestRunStatus.passed, TestRunStatus.failed, TestRunStatus.error]),
+                ).order_by(TestRun.id.desc()).limit(1)
+            ).scalar_one_or_none()
+            last_status[p.name] = last_run.status.value if last_run else None
 
         return templates.TemplateResponse(request, "projects.html", {
             "projects": projects,
             "run_counts": run_counts,
+            "last_status": last_status,
         })
     finally:
         session.close()

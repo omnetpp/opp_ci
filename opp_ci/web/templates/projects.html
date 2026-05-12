@@ -12,6 +12,7 @@
             <th>opp_env</th>
             <th>GitHub</th>
             <th>Dependencies</th>
+            <th>Last Status</th>
             <th>Runs</th>
         </tr>
     </thead>
@@ -27,6 +28,7 @@
                 {% else %}-{% endif %}
             </td>
             <td>{{ p.dependency_names|join(", ") if p.dependency_names else "-" }}</td>
+            <td>{% if last_status.get(p.name) %}<span class="badge badge-{{ last_status[p.name] }}">{{ last_status[p.name] }}</span>{% else %}-{% endif %}</td>
             <td>{{ run_counts.get(p.name, 0) }}</td>
         </tr>
         {% endfor %}
