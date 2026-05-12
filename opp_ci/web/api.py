@@ -66,6 +66,7 @@ class WorkerResultRequest(BaseModel):
     run_id: int
     result_code: str
     duration_seconds: float | None = None
+    commit_sha: str | None = None
     stdout: str | None = None
     stderr: str | None = None
     details: dict | None = None
@@ -357,6 +358,10 @@ async def worker_report_result(
         run.status = TestRunStatus.passed if req.result_code == "PASS" else TestRunStatus.failed
         run.finished_at = datetime.datetime.utcnow()
         run.duration_seconds = req.duration_seconds
+        if req.commit_sha:
+            run.commit_sha = req.commit_sha
+            if run.github_owner and run.github_repo and not run.github_commit_sha:
+                run.github_commit_sha = req.commit_sha
 
         session.add(TestResult(
             test_run_id=run.id,

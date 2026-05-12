@@ -119,6 +119,7 @@ class WorkerAgent:
             run_id,
             outcome["result_code"],
             duration_seconds=outcome["duration_seconds"],
+            commit_sha=outcome.get("commit_sha"),
             stdout=outcome["stdout"],
             stderr=outcome["stderr"],
             details=outcome.get("details"),
@@ -126,7 +127,7 @@ class WorkerAgent:
         _logger.info("Run #%d completed: %s (%.1fs)", run_id, outcome["result_code"], outcome["duration_seconds"])
 
     def _report_result(self, run_id, result_code, duration_seconds=None,
-                       stdout=None, stderr=None, details=None):
+                       commit_sha=None, stdout=None, stderr=None, details=None):
         """Report a job result back to the coordinator."""
         payload = {
             "run_id": run_id,
@@ -134,6 +135,8 @@ class WorkerAgent:
         }
         if duration_seconds is not None:
             payload["duration_seconds"] = duration_seconds
+        if commit_sha:
+            payload["commit_sha"] = commit_sha
         if stdout:
             payload["stdout"] = stdout
         if stderr:
