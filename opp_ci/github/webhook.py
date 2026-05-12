@@ -22,6 +22,7 @@ from opp_ci.db.models import (
     Project, AutoTestRule, TestMatrix, TestRun, TestRunStatus,
 )
 from opp_ci.github.client import GitHubClient
+from opp_ci.executor import find_existing_run
 from opp_ci.scheduler import expand_matrix
 
 _logger = logging.getLogger(__name__)
@@ -201,6 +202,19 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
             opp_file = matrix.opp_file if matrix else None
             for job in jobs:
                 job_ref = job.get("git_ref") or git_ref
+                existing = find_existing_run(
+                    session,
+                    project=job.get("project", project.name),
+                    test_type=job.get("test_type", "smoke"),
+                    mode=job.get("mode"),
+                    git_ref=job_ref,
+                    os=job.get("os"),
+                    os_version=job.get("os_version"),
+                    compiler=job.get("compiler"),
+                    compiler_version=job.get("compiler_version"),
+                )
+                if existing:
+                    continue
                 # Use the job's own ref as the GitHub status SHA when it
                 # looks like a commit hash (from ref-range expansion).
                 # Otherwise fall back to the push HEAD.
