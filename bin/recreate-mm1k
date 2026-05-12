@@ -1,11 +1,14 @@
 #!/bin/bash
 #
-# Add the mm1k project and its build matrices to the database.
+# Add the mm1k project, its build matrices, and auto-test rules to the database.
 #
-# Creates three matrices:
+# Creates two matrices:
 #   mm1k-master          build+smoke on master
-#   mm1k-topic           build+smoke on the topic branch
 #   mm1k-master-to-topic build for each commit in master..topic
+#
+# Creates auto-test rules:
+#   push to master -> mm1k-master
+#   push to topic  -> mm1k-master-to-topic
 #
 
 set -e
@@ -14,5 +17,7 @@ COMMON=(--project mm1k --os "Ubuntu 24.04" --compiler gcc-13 --opp-file /home/le
 
 opp_ci add-project --name mm1k --github levy/mm1k --git-url https://github.com/levy/mm1k.git --deps omnetpp || true
 opp_ci create-matrix --name mm1k-master          "${COMMON[@]}" --tests build,smoke,opp --refs master
-opp_ci create-matrix --name mm1k-topic            "${COMMON[@]}" --tests build,smoke,opp --refs topic
 opp_ci create-matrix --name mm1k-master-to-topic  "${COMMON[@]}" --tests build,smoke,opp --ref-range master..topic
+
+opp_ci rule create --project mm1k --type branch --pattern master --matrix mm1k-master --replace
+opp_ci rule create --project mm1k --type branch --pattern topic  --matrix mm1k-master-to-topic --replace
