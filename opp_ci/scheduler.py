@@ -119,9 +119,6 @@ def _resolve_ref_range(project_name, ref_range):
             raise ValueError(f"Project '{project_name}' has no GitHub owner/repo configured")
 
         client = GitHubClient()
-        if not client.is_configured:
-            raise ValueError("GitHub token not configured (set OPP_CI_GITHUB_TOKEN)")
-
         base = ref_range["base"]
         head = ref_range["head"]
         shas = client.list_commits_in_range(proj.github_owner, proj.github_repo, base, head)

@@ -712,12 +712,7 @@ def matrix_detail(request: Request, matrix_id: int):
         if matrix is None:
             return HTMLResponse("<h1>Matrix not found</h1>", status_code=404)
 
-        try:
-            jobs = expand_matrix(matrix.project, matrix.config)
-            expand_error = None
-        except Exception as e:
-            jobs = []
-            expand_error = str(e)
+        jobs = expand_matrix(matrix.project, matrix.config)
 
         recent_runs = session.execute(
             select(TestRun).where(TestRun.matrix_id == matrix_id).order_by(TestRun.id.desc()).limit(50)
@@ -726,7 +721,6 @@ def matrix_detail(request: Request, matrix_id: int):
         return templates.TemplateResponse(request, "matrix_detail.html", {
             "matrix": matrix,
             "jobs": jobs,
-            "expand_error": expand_error,
             "recent_runs": recent_runs,
         })
     finally:
