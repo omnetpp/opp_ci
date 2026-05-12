@@ -390,22 +390,34 @@ async def worker_report_result(
         except Exception as e:
             _logger.warning("GitHub status update failed for run #%d: %s", run.id, e)
 
-        # Trigger git notes sync if this run has GitHub metadata
-        gh_owner = run.github_owner
-        gh_repo = run.github_repo
-        if not gh_owner or not gh_repo:
-            proj = session.execute(
-                select(Project).where(Project.name == run.project)
-            ).scalar_one_or_none()
-            if proj:
-                gh_owner = gh_owner or proj.github_owner
-                gh_repo = gh_repo or proj.github_repo
-        if gh_owner and gh_repo:
-            try:
-                from opp_ci.notes import trigger_notes_sync
-                trigger_notes_sync(gh_owner, gh_repo)
-            except Exception as e:
-                _logger.warning("Notes sync trigger failed for run #%d: %s", run.id, e)
+        # Trigger git notes sync — once per matrix (when all runs finish),
+        # or immediately for non-matrix runs.
+        should_sync = True
+        if run.matrix_id:
+            pending = session.execute(
+                select(TestRun).where(
+                    TestRun.matrix_id == run.matrix_id,
+                    TestRun.status.in_([TestRunStatus.queued, TestRunStatus.running]),
+                )
+            ).first()
+            should_sync = pending is None
+
+        if should_sync:
+            gh_owner = run.github_owner
+            gh_repo = run.github_repo
+            if not gh_owner or not gh_repo:
+                proj = session.execute(
+                    select(Project).where(Project.name == run.project)
+                ).scalar_one_or_none()
+                if proj:
+                    gh_owner = gh_owner or proj.github_owner
+                    gh_repo = gh_repo or proj.github_repo
+            if gh_owner and gh_repo:
+                try:
+                    from opp_ci.notes import trigger_notes_sync
+                    trigger_notes_sync(gh_owner, gh_repo)
+                except Exception as e:
+                    _logger.warning("Notes sync trigger failed for run #%d: %s", run.id, e)
 
         return {"status": "ok", "run_id": run.id, "result_code": req.result_code}
     finally:
