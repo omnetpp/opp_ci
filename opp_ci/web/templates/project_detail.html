@@ -59,9 +59,11 @@
             <tr>
                 <th>ID</th>
                 <th>Test</th>
-                <th>Ref</th>
+                <th>Mode</th>
+                <th>Git ref</th>
                 <th>Status</th>
                 <th>Duration</th>
+                <th>Trigger</th>
                 <th>Started</th>
             </tr>
         </thead>
@@ -70,9 +72,12 @@
             <tr>
                 <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.test_type }}</td>
-                <td>{{ run.git_ref or "-" }}</td>
+                <td>{{ run.mode or "-" }}</td>
+                {% set sha = run.commit_sha or run.github_commit_sha %}
+                <td>{% if sha %}<code title="{{ sha }}">{{ sha[:8] }}</code>{% elif run.git_ref %}{{ run.git_ref }}{% else %}-{% endif %}</td>
                 <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
                 <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
+                <td>{{ run.trigger or "-" }}</td>
                 <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
             </tr>
             {% endfor %}

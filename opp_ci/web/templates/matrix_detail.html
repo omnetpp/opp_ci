@@ -8,9 +8,14 @@
     <table>
         <tr><th style="width:150px;">Name</th><td>{{ matrix.name }}</td></tr>
         <tr><th>Project</th><td><a href="/projects/{{ matrix.project }}">{{ matrix.project }}</a></td></tr>
+        <tr><th>opp file</th><td>{{ matrix.opp_file or "-" }}</td></tr>
         <tr><th>Test Types</th><td>{{ matrix.config.get("test_types", [])|join(", ") }}</td></tr>
         <tr><th>Modes</th><td>{{ matrix.config.get("modes", [])|join(", ") }}</td></tr>
         <tr><th>Versions</th><td>{{ matrix.config.get("versions", [])|join(", ") }}</td></tr>
+        {% set ref_range = matrix.config.get("ref_range") %}
+        {% if ref_range %}
+        <tr><th>Ref Range</th><td>{{ ref_range.base }}..{{ ref_range.head }}</td></tr>
+        {% endif %}
         {% set refs = matrix.config.get("refs", []) %}
         <tr><th>Refs</th><td>
             {% if refs|length > 10 %}
@@ -67,9 +72,11 @@
                 <th>ID</th>
                 <th>Project</th>
                 <th>Test</th>
-                <th>Ref</th>
+                <th>Mode</th>
+                <th>Git ref</th>
                 <th>Status</th>
                 <th>Duration</th>
+                <th>Trigger</th>
                 <th>Started</th>
             </tr>
         </thead>
@@ -79,9 +86,12 @@
                 <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.project }}</td>
                 <td>{{ run.test_type }}</td>
-                <td>{{ run.git_ref or "-" }}</td>
+                <td>{{ run.mode or "-" }}</td>
+                {% set sha = run.commit_sha or run.github_commit_sha %}
+                <td>{% if sha %}<code title="{{ sha }}">{{ sha[:8] }}</code>{% elif run.git_ref %}{{ run.git_ref }}{% else %}-{% endif %}</td>
                 <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
                 <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
+                <td>{{ run.trigger or "-" }}</td>
                 <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
             </tr>
             {% endfor %}
