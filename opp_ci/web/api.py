@@ -386,10 +386,19 @@ async def worker_report_result(
             _logger.warning("GitHub status update failed for run #%d: %s", run.id, e)
 
         # Trigger git notes sync if this run has GitHub metadata
-        if run.github_owner and run.github_repo:
+        gh_owner = run.github_owner
+        gh_repo = run.github_repo
+        if not gh_owner or not gh_repo:
+            proj = session.execute(
+                select(Project).where(Project.name == run.project)
+            ).scalar_one_or_none()
+            if proj:
+                gh_owner = gh_owner or proj.github_owner
+                gh_repo = gh_repo or proj.github_repo
+        if gh_owner and gh_repo:
             try:
                 from opp_ci.notes import trigger_notes_sync
-                trigger_notes_sync(run.github_owner, run.github_repo)
+                trigger_notes_sync(gh_owner, gh_repo)
             except Exception as e:
                 _logger.warning("Notes sync trigger failed for run #%d: %s", run.id, e)
 

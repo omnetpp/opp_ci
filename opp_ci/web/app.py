@@ -438,6 +438,14 @@ def run_new_matrix(request: Request, matrix_name: str = Form(...)):
             )
 
         jobs = expand_matrix(matrix.project, matrix.config)
+
+        # Resolve GitHub info from the project record
+        proj = session.execute(
+            select(Project).where(Project.name == matrix.project)
+        ).scalar_one_or_none()
+        gh_owner = proj.github_owner if proj else None
+        gh_repo = proj.github_repo if proj else None
+
         for job in jobs:
             run = TestRun(
                 project=job.get("project", matrix.project),
@@ -451,6 +459,8 @@ def run_new_matrix(request: Request, matrix_name: str = Form(...)):
                 platform_desc=job.get("platform_desc"),
                 opp_file=matrix.opp_file,
                 matrix_id=matrix.id,
+                github_owner=gh_owner,
+                github_repo=gh_repo,
                 status=TestRunStatus.queued,
                 trigger="web",
             )
@@ -487,6 +497,8 @@ def run_rerun(run_id: int):
             platform_desc=original.platform_desc,
             opp_file=original.opp_file,
             matrix_id=original.matrix_id,
+            github_owner=original.github_owner,
+            github_repo=original.github_repo,
             status=TestRunStatus.queued,
             trigger="rerun",
         )
