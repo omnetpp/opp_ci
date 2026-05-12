@@ -16,6 +16,7 @@ set -e
 COMMON=(--project mm1k --os "Ubuntu 24.04" --compiler gcc-13 --opp-file /home/levy/workspace/mm1k/mm1k.opp --replace)
 
 opp_ci add-project --name mm1k --github levy/mm1k --git-url https://github.com/levy/mm1k.git --deps omnetpp || true
+opp_ci add-version --project mm1k --label master --deps '{"omnetpp": ["6.0.0","6.0.1","6.0.2","6.0.3","6.1.0","6.2.0","6.3.0"]}'
 opp_ci create-matrix --name mm1k-master          "${COMMON[@]}" --tests build,smoke,opp --refs master
 opp_ci create-matrix --name mm1k-master-to-topic  "${COMMON[@]}" --tests build,smoke,opp --ref-range master..topic
 
