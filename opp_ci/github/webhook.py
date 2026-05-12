@@ -201,6 +201,10 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
             opp_file = matrix.opp_file if matrix else None
             for job in jobs:
                 job_ref = job.get("git_ref") or git_ref
+                # Use the job's own ref as the GitHub status SHA when it
+                # looks like a commit hash (from ref-range expansion).
+                # Otherwise fall back to the push HEAD.
+                job_sha = job_ref if job_ref and len(job_ref) >= 40 else commit_sha
                 run = TestRun(
                     project=job.get("project", project.name),
                     test_type=job.get("test_type", "smoke"),
@@ -212,12 +216,13 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
                     compiler=job.get("compiler"),
                     compiler_version=job.get("compiler_version"),
                     platform_desc=job.get("platform_desc"),
+                    resolved_deps=job.get("resolved_deps"),
                     matrix_id=rule.matrix_id,
                     status=TestRunStatus.queued,
                     trigger="webhook",
                     github_owner=owner,
                     github_repo=repo,
-                    github_commit_sha=commit_sha,
+                    github_commit_sha=job_sha,
                     github_pr_number=pr_number,
                 )
                 session.add(run)
