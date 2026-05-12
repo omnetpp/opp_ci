@@ -1,10 +1,23 @@
 import os
+import socket
 
 
 DATABASE_URL = os.environ.get("OPP_CI_DATABASE_URL", "sqlite:///opp_ci.db")
 USE_OPP_ENV = os.environ.get("OPP_CI_USE_OPP_ENV", "0") == "1"
 
-COORDINATOR_URL = os.environ.get("OPP_CI_COORDINATOR_URL", "http://localhost:8000")
+
+def _default_coordinator_url():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return f"http://{ip}:8080"
+    except OSError:
+        return "http://localhost:8080"
+
+
+COORDINATOR_URL = os.environ.get("OPP_CI_COORDINATOR_URL", _default_coordinator_url())
 API_TOKEN = os.environ.get("OPP_CI_API_TOKEN", "")
 
 REFERENCE_PLATFORM = os.environ.get("OPP_CI_REFERENCE_PLATFORM", "Ubuntu 24.04/gcc-13")
