@@ -1,3 +1,5 @@
+import contextlib
+import io
 import logging
 import os
 import subprocess
@@ -237,12 +239,17 @@ def _run_test_direct(project, test_type, opp_file, git_ref=None):
         _logger.info("Created worktree at %s for %s@%s", worktree_path, project, git_ref)
 
     _logger.info("Running %s test for %s (direct mode)", test_type, project)
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
     start = time.time()
     try:
         kwargs = {"simulation_project": simulation_project, "build": "task"}
         if test_type == "opp":
             kwargs["test_folder"] = simulation_project.get_full_path("test")
-        result = func(**kwargs)
+        with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+            result = func(**kwargs)
+            if result is not None:
+                print(repr(result))
         duration = time.time() - start
 
         if result is None:
@@ -261,8 +268,8 @@ def _run_test_direct(project, test_type, opp_file, git_ref=None):
         return {
             "result_code": "ERROR",
             "duration_seconds": duration,
-            "stdout": "",
-            "stderr": str(e),
+            "stdout": stdout_buf.getvalue(),
+            "stderr": stderr_buf.getvalue() + "\n" + repr(e),
             "details": None,
             "commit_sha": git_ref,
         }
@@ -275,8 +282,8 @@ def _run_test_direct(project, test_type, opp_file, git_ref=None):
     return {
         "result_code": result_code,
         "duration_seconds": duration,
-        "stdout": "",
-        "stderr": "",
+        "stdout": stdout_buf.getvalue(),
+        "stderr": stderr_buf.getvalue(),
         "details": details,
         "commit_sha": commit_sha,
     }
