@@ -35,10 +35,6 @@ jobs:
           git config user.name "opp_ci"
           git config user.email "opp_ci@omnetpp.org"
 
-      - name: Fetch existing notes
-        run: |
-          git fetch origin refs/notes/ci:refs/notes/ci || true
-
       - name: Fetch notes from opp_ci and write
         env:
           OPP_CI_API_URL: ${{ secrets.OPP_CI_API_URL }}
@@ -51,6 +47,9 @@ jobs:
           NOTES=$(curl -sf \
             -H "Authorization: Bearer ${OPP_CI_API_TOKEN}" \
             "${OPP_CI_API_URL}/api/notes/${REPO_OWNER}/${REPO_NAME}")
+
+          # Remove existing notes ref so the result is an exact mirror
+          git update-ref -d refs/notes/ci 2>/dev/null || true
 
           if [ -z "$NOTES" ] || [ "$NOTES" = "[]" ]; then
             echo "No notes to sync."

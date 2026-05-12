@@ -235,7 +235,7 @@ def _run_test_direct(project, test_type, opp_file, git_ref=None):
     _logger.info("Running %s test for %s (direct mode)", test_type, project)
     start = time.time()
     try:
-        kwargs = {"simulation_project": simulation_project}
+        kwargs = {"simulation_project": simulation_project, "build": "task"}
         if test_type == "opp":
             kwargs["test_folder"] = simulation_project.get_full_path("test")
         result = func(**kwargs)
