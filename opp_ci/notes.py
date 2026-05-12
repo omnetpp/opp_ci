@@ -47,43 +47,26 @@ def format_note(runs, run_url_base=None):
     if run_url_base is None:
         run_url_base = COORDINATOR_URL
 
-    # ── Summary line (grouped by test_type) ───────────────────────────
-    by_type = defaultdict(list)
-    for run in runs:
-        by_type[run.test_type].append(run)
+    # ── Summary line ────────────────────────────────────────────────
+    total_runs = len(runs)
+    total_passed = sum(1 for r in runs if r.status == TestRunStatus.passed)
+    total_failed = sum(1 for r in runs if r.status == TestRunStatus.failed)
+    total_errored = sum(1 for r in runs if r.status == TestRunStatus.error)
 
-    summary_parts = []
-    for test_type, type_runs in sorted(by_type.items()):
-        passed = sum(1 for r in type_runs if r.status == TestRunStatus.passed)
-        failed = sum(1 for r in type_runs if r.status == TestRunStatus.failed)
-        errored = sum(1 for r in type_runs if r.status == TestRunStatus.error)
-        pending = sum(1 for r in type_runs if r.status in (TestRunStatus.queued, TestRunStatus.running))
-        total = len(type_runs)
-
-        if total == 1:
-            run = type_runs[0]
-            icon = _STATUS_ICONS.get(run.status, "?")
-            label = run.status.value.upper()
-            summary_parts.append(f"{icon} {test_type} {label}")
-        else:
-            if passed == total:
-                summary_parts.append(f"\u2705 {test_type} {total}/{total} PASS")
-            elif failed + errored == total:
-                summary_parts.append(f"\u274c {test_type} 0/{total} PASS")
-            else:
-                segments = []
-                if passed:
-                    segments.append(f"{passed} PASS")
-                if failed:
-                    segments.append(f"{failed} FAIL")
-                if errored:
-                    segments.append(f"{errored} ERROR")
-                if pending:
-                    segments.append(f"{pending} pending")
-                icon = "\u2705" if (failed + errored == 0 and pending == 0) else "\u274c"
-                summary_parts.append(f"{icon} {test_type} {', '.join(segments)}")
-
-    summary = " | ".join(summary_parts)
+    if total_passed == total_runs:
+        summary = f"\u2705 PASS {total_passed}/{total_runs}"
+    elif total_failed + total_errored == total_runs:
+        summary = f"\u274c FAIL 0/{total_runs}"
+    else:
+        icon = "\u274c"
+        segments = []
+        if total_passed:
+            segments.append(f"{total_passed} PASS")
+        if total_failed:
+            segments.append(f"{total_failed} FAIL")
+        if total_errored:
+            segments.append(f"{total_errored} ERROR")
+        summary = f"{icon} {', '.join(segments)} ({total_runs} total)"
 
     # ── Per-run detail lines ──────────────────────────────────────────
     detail_lines = []
@@ -101,7 +84,7 @@ def format_note(runs, run_url_base=None):
     sha = first_run.commit_sha or first_run.github_commit_sha or ""
     url = f"{run_url_base}/commits/{first_run.project}/{sha}"
 
-    return "\n".join([summary] + detail_lines + [url])
+    return "\n".join([summary] + detail_lines + ["", url])
 
 
 def get_notes_for_repo(session, owner, repo):
