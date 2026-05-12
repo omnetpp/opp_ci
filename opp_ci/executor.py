@@ -246,7 +246,7 @@ def _run_test_direct(project, test_type, opp_file, git_ref=None, mode=None):
     stderr_buf = io.StringIO()
     start = time.time()
     try:
-        kwargs = {"simulation_project": simulation_project, "build": "task"}
+        kwargs = {"simulation_project": simulation_project, "build": "task", "build_mode": "task"}
         if mode:
             kwargs["mode"] = mode
         if test_type == "opp":
