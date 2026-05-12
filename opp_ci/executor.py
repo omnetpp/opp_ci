@@ -245,7 +245,7 @@ def _run_test_direct(project, test_type, opp_file, git_ref=None):
     try:
         kwargs = {"simulation_project": simulation_project, "build": "task"}
         if test_type == "opp":
-            kwargs["test_folder"] = simulation_project.get_full_path("test")
+            kwargs["test_folder"] = simulation_project.get_full_path(".")
         with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
             result = func(**kwargs)
             if result is not None:
