@@ -71,9 +71,8 @@ def resolve_git_project(project, git_ref):
     """
     Resolve the opp_env project name and git ref for testing.
 
-    If git_ref is specified:
-      - For opp_env mode: uses '<project>-git' package and sets the ref via env var
-      - For direct mode: checks out the ref in the project working copy
+    If git_ref is specified and opp_env mode is active, uses '<project>-git'
+    package and sets the ref via env var.
 
     Returns (effective_project, effective_ref) tuple.
     """
@@ -85,29 +84,35 @@ def resolve_git_project(project, git_ref):
     return project, git_ref
 
 
-def checkout_ref(project, git_ref):
-    """
-    Check out a specific git ref in the project working copy (direct mode).
-
-    Uses OPP_CI_PROJECT_DIR_<PROJECT> env var to find the working copy,
-    falling back to OPP_CI_PROJECT_DIR/<project>.
-    """
-    env_key = f"OPP_CI_PROJECT_DIR_{project.upper().replace('-', '_')}"
-    project_dir = os.environ.get(env_key)
-    if not project_dir:
-        base_dir = os.environ.get("OPP_CI_PROJECT_DIR", ".")
-        project_dir = os.path.join(base_dir, project)
-
-    _logger.info("Checking out ref %s in %s", git_ref, project_dir)
-    result = subprocess.run(
-        ["git", "checkout", git_ref],
-        cwd=project_dir, capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        _logger.error("git checkout failed:\n%s", result.stderr)
-        raise RuntimeError(f"git checkout {git_ref} in {project_dir} failed: {result.stderr.strip()}")
-    _logger.info("Checked out %s", git_ref)
-    return project_dir
+def _remove_git_worktree(worktree_path):
+    """Remove a git worktree directory."""
+    try:
+        git_root_result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=worktree_path, capture_output=True, text=True,
+        )
+        if git_root_result.returncode != 0:
+            _logger.warning("Could not determine git root for worktree %s", worktree_path)
+            return
+        # Find the main repo root (worktree's commondir)
+        common_result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=worktree_path, capture_output=True, text=True,
+        )
+        if common_result.returncode == 0:
+            main_git_dir = os.path.abspath(os.path.join(
+                worktree_path, common_result.stdout.strip(),
+            ))
+            main_repo = os.path.dirname(main_git_dir)
+        else:
+            main_repo = worktree_path
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", worktree_path],
+            cwd=main_repo, capture_output=True, text=True,
+        )
+        _logger.info("Removed worktree %s", worktree_path)
+    except (OSError, FileNotFoundError) as e:
+        _logger.warning("Failed to remove worktree %s: %s", worktree_path, e)
 
 
 def resolve_commit_sha(project, opp_file=None):
@@ -144,10 +149,7 @@ def resolve_commit_sha(project, opp_file=None):
 def install_project(project, git_ref=None):
     """Install a project via opp_env. No-op in direct mode."""
     if not USE_OPP_ENV:
-        if git_ref:
-            checkout_ref(project, git_ref)
-        else:
-            _logger.info("Skipping install (direct mode, OPP_CI_USE_OPP_ENV=0)")
+        _logger.info("Skipping install (direct mode, OPP_CI_USE_OPP_ENV=0)")
         return
 
     effective_project, _ = resolve_git_project(project, git_ref)
@@ -171,14 +173,14 @@ def run_test(project, test_type, git_ref=None, opp_file=None):
 
     If git_ref is provided:
       - opp_env mode: uses <project>-git and sets OPP_ENV_GIT_REF env var
-      - direct mode: assumes checkout_ref was already called during install
+      - direct mode: creates an isolated git worktree for that ref
 
     Returns a dict with keys: result_code, duration_seconds, stdout, stderr, details.
     """
     if USE_OPP_ENV:
         return _run_test_via_opp_env(project, test_type, git_ref)
     else:
-        return _run_test_direct(project, test_type, opp_file)
+        return _run_test_direct(project, test_type, opp_file, git_ref)
 
 
 def _run_test_via_opp_env(project, test_type, git_ref):
@@ -210,14 +212,25 @@ def _run_test_via_opp_env(project, test_type, git_ref):
     }
 
 
-def _run_test_direct(project, test_type, opp_file):
-    """Run a test by calling opp_repl functions directly (no subprocess)."""
+def _run_test_direct(project, test_type, opp_file, git_ref=None):
+    """Run a test by calling opp_repl functions directly (no subprocess).
+
+    When *git_ref* is set, an isolated git worktree is created for that
+    commit and removed after the test completes.
+    """
     test_functions = _get_test_functions()
     func = test_functions.get(test_type)
     if func is None:
         raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(test_functions.keys())}")
 
     _ws, simulation_project = _load_workspace(project, opp_file)
+
+    worktree_path = None
+    if git_ref:
+        from opp_repl.simulation.project import make_worktree_simulation_project
+        simulation_project = make_worktree_simulation_project(simulation_project, git_ref)
+        worktree_path = simulation_project.get_root_path()
+        _logger.info("Created worktree at %s for %s@%s", worktree_path, project, git_ref)
 
     _logger.info("Running %s test for %s (direct mode)", test_type, project)
     start = time.time()
@@ -241,17 +254,19 @@ def _run_test_direct(project, test_type, opp_file):
     except Exception as e:
         duration = time.time() - start
         _logger.error("Test %s raised exception: %s", test_type, e)
-        commit_sha = resolve_commit_sha(project, opp_file=opp_file)
         return {
             "result_code": "ERROR",
             "duration_seconds": duration,
             "stdout": "",
             "stderr": str(e),
             "details": None,
-            "commit_sha": commit_sha,
+            "commit_sha": git_ref,
         }
+    finally:
+        if worktree_path:
+            _remove_git_worktree(worktree_path)
 
-    commit_sha = resolve_commit_sha(project, opp_file=opp_file)
+    commit_sha = git_ref or resolve_commit_sha(project, opp_file=opp_file)
     _logger.info("Test finished: %s (%.1fs)", result_code, duration)
     return {
         "result_code": result_code,
