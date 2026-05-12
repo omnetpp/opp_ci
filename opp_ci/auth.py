@@ -104,6 +104,19 @@ def require_worker_token():
             worker.last_heartbeat = datetime.datetime.utcnow()
             if worker.status == "offline":
                 worker.status = "online"
+                # Re-queue any runs that were left in running state
+                from opp_ci.db.models import TestRun, TestRunStatus
+                orphans = session.execute(
+                    select(TestRun).where(
+                        TestRun.worker_id == worker.id,
+                        TestRun.status == TestRunStatus.running,
+                    )
+                ).scalars().all()
+                for run in orphans:
+                    run.status = TestRunStatus.queued
+                    run.worker_id = None
+                    run.started_at = None
+                worker.current_job_count = 0
             session.commit()
             return {"worker_id": worker.id, "worker_name": worker.name}
         finally:

@@ -28,7 +28,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from opp_ci.auth import require_role, require_worker_token
 from opp_ci.db.connection import SessionLocal
@@ -309,7 +309,27 @@ async def register_worker(
 async def worker_heartbeat(
     worker_info: dict = Depends(require_worker_token()),
 ):
-    """Worker heartbeat — keeps the worker marked as online."""
+    """Worker heartbeat — keeps the worker marked as online and reconciles job count."""
+    session = SessionLocal()
+    try:
+        worker = session.execute(
+            select(Worker).where(Worker.id == worker_info["worker_id"])
+        ).scalar_one_or_none()
+        if worker:
+            # Reconcile job count with actual running jobs
+            actual = session.execute(
+                select(func.count(TestRun.id)).where(
+                    TestRun.worker_id == worker.id,
+                    TestRun.status == TestRunStatus.running,
+                )
+            ).scalar() or 0
+            if worker.current_job_count != actual:
+                _logger.info("Reconciling worker '%s' job count: %d -> %d", worker.name, worker.current_job_count, actual)
+                worker.current_job_count = actual
+                worker.status = "busy" if actual >= worker.concurrency else "online"
+                session.commit()
+    finally:
+        session.close()
     return {"status": "ok", "worker_id": worker_info["worker_id"]}
 
 
