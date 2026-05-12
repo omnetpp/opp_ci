@@ -14,14 +14,14 @@
 {% endif %}
 
 {% for matrix in matrices %}
-<div class="card">
+<div class="card" style="padding: 0.75rem;">
     <div style="overflow-x: auto;">
-    <table>
+    <table class="compat-matrix">
         <thead>
             <tr>
                 <th>{{ project_name }} \ {{ matrix.dependency }}</th>
                 {% for dv in matrix.dep_versions %}
-                <th style="writing-mode: vertical-lr; text-orientation: mixed; white-space: nowrap; vertical-align: bottom; padding-bottom: 0.5rem;">{{ dv }}</th>
+                <th style="writing-mode: vertical-lr; text-orientation: mixed; white-space: nowrap; vertical-align: bottom; padding-bottom: 0.3rem;">{{ dv }}</th>
                 {% endfor %}
             </tr>
         </thead>
@@ -33,17 +33,17 @@
                 {% set cell = row.cells[dv] %}
                 <td>
                     {% if cell == "passed" %}
-                    <span class="badge badge-passed">PASS</span>
+                    <span class="cm-dot cm-passed" title="passed">&#x25cf;</span>
                     {% elif cell == "failed" %}
-                    <span class="badge badge-failed">FAIL</span>
+                    <span class="cm-dot cm-failed" title="failed">&#x25cf;</span>
                     {% elif cell == "error" %}
-                    <span class="badge badge-error">ERROR</span>
+                    <span class="cm-dot cm-error" title="error">&#x25cf;</span>
                     {% elif cell == "mixed" %}
-                    <span class="badge badge-error">MIXED</span>
+                    <span class="cm-dot cm-error" title="mixed">&#x25d2;</span>
                     {% elif cell == "compatible" %}
-                    <span class="badge badge-compatible">&check;</span>
+                    <span class="cm-dot cm-compatible" title="compatible">&#x25cf;</span>
                     {% else %}
-                    <span style="color: var(--muted);">—</span>
+                    <span class="cm-dot cm-none">·</span>
                     {% endif %}
                 </td>
                 {% endfor %}
@@ -57,11 +57,11 @@
 
 {% if matrices %}
 <p style="font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem;">
-    <span class="badge badge-compatible">&check;</span> declared compatible by opp_env &nbsp;
-    <span class="badge badge-passed">PASS</span> tested &amp; passed &nbsp;
-    <span class="badge badge-failed">FAIL</span> tested &amp; failed &nbsp;
-    <span class="badge badge-error">ERROR</span> build error &nbsp;
-    <span style="color: var(--muted);">—</span> not compatible
+    <span class="cm-dot cm-compatible">&#x25cf;</span> compatible &nbsp;
+    <span class="cm-dot cm-passed">&#x25cf;</span> passed &nbsp;
+    <span class="cm-dot cm-failed">&#x25cf;</span> failed &nbsp;
+    <span class="cm-dot cm-error">&#x25cf;</span> error &nbsp;
+    <span class="cm-dot cm-none">·</span> n/a
 </p>
 {% endif %}
 
