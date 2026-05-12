@@ -1,8 +1,6 @@
-import json
 import logging
 import os
 import subprocess
-import tempfile
 import time
 
 from opp_ci.config import USE_OPP_ENV
@@ -22,6 +20,51 @@ COMMAND_MAP = {
     "opp": "opp_run_opp_tests",
     "all": "opp_run_all_tests",
 }
+
+# Mapping from test_type to the opp_repl function that runs it.
+# Lazily imported to avoid pulling opp_repl at module load time.
+_TEST_FUNCTIONS = None
+
+
+def _get_test_functions():
+    global _TEST_FUNCTIONS
+    if _TEST_FUNCTIONS is None:
+        from opp_repl.test.smoke import run_smoke_tests
+        from opp_repl.test.fingerprint.task import run_fingerprint_tests
+        from opp_repl.test.statistical import run_statistical_tests
+        from opp_repl.test.feature import run_feature_tests
+        from opp_repl.test.speed.task import run_speed_tests
+        from opp_repl.test.sanitizer import run_sanitizer_tests
+        from opp_repl.test.chart import run_chart_tests
+        from opp_repl.test.release import run_release_tests
+        from opp_repl.test.opp import run_opp_tests
+        from opp_repl.test.all import run_all_tests
+        from opp_repl.simulation.build import build_project
+        _TEST_FUNCTIONS = {
+            "smoke": run_smoke_tests,
+            "fingerprint": run_fingerprint_tests,
+            "statistical": run_statistical_tests,
+            "feature": run_feature_tests,
+            "speed": run_speed_tests,
+            "sanitizer": run_sanitizer_tests,
+            "chart": run_chart_tests,
+            "release": run_release_tests,
+            "opp": run_opp_tests,
+            "all": run_all_tests,
+            "build": build_project,
+        }
+    return _TEST_FUNCTIONS
+
+
+def _load_workspace(project_name, opp_file=None):
+    """Create a fresh SimulationWorkspace, load .opp files, and return (workspace, project)."""
+    from opp_repl.simulation.workspace import SimulationWorkspace
+    ws = SimulationWorkspace()
+    ws.load_opp_file("@opp")
+    if opp_file:
+        ws.load_opp_file(opp_file)
+    simulation_project = ws.determine_default_simulation_project(name=project_name)
+    return ws, simulation_project
 
 
 def resolve_git_project(project, git_ref):
@@ -123,7 +166,7 @@ def run_test(project, test_type, git_ref=None, opp_file=None):
     """
     Run a test for the given project.
 
-    In direct mode (USE_OPP_ENV=0): runs the opp_repl command directly.
+    In direct mode (USE_OPP_ENV=0): calls opp_repl functions directly in-process.
     In opp_env mode (USE_OPP_ENV=1): runs via opp_env run <project> -c <cmd>.
 
     If git_ref is provided:
@@ -132,60 +175,89 @@ def run_test(project, test_type, git_ref=None, opp_file=None):
 
     Returns a dict with keys: result_code, duration_seconds, stdout, stderr, details.
     """
+    if USE_OPP_ENV:
+        return _run_test_via_opp_env(project, test_type, git_ref)
+    else:
+        return _run_test_direct(project, test_type, opp_file)
+
+
+def _run_test_via_opp_env(project, test_type, git_ref):
+    """Run a test via opp_env subprocess (isolated Nix environment)."""
     cmd = COMMAND_MAP.get(test_type)
     if cmd is None:
         raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(COMMAND_MAP.keys())}")
 
     env = os.environ.copy()
-    result_file = None
-    if USE_OPP_ENV:
-        effective_project, effective_ref = resolve_git_project(project, git_ref)
-        if effective_ref:
-            env["OPP_ENV_GIT_REF"] = effective_ref
-        args = ["opp_env", "run", effective_project, "-c", cmd]
-    else:
-        args = [cmd, "--load", "@opp"]
-        if opp_file:
-            args += ["--load", opp_file]
-        args += ["-p", project]
-        if test_type != "build":
-            result_file = tempfile.NamedTemporaryFile(
-                prefix="opp_ci_result_", suffix=".json", delete=False
-            )
-            result_file.close()
-            args += ["-b", "task", "--result-file", result_file.name]
+    effective_project, effective_ref = resolve_git_project(project, git_ref)
+    if effective_ref:
+        env["OPP_ENV_GIT_REF"] = effective_ref
+    args = ["opp_env", "run", effective_project, "-c", cmd]
 
     _logger.info("Running test: %s", " ".join(args))
     start = time.time()
     result = subprocess.run(args, capture_output=True, text=True, env=env)
     duration = time.time() - start
 
-    if result.returncode == 0:
-        result_code = "PASS"
-    else:
-        result_code = "FAIL"
-
-    details = None
-    if result_file:
-        try:
-            with open(result_file.name, "r") as f:
-                details = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            _logger.warning("Failed to read result file %s: %s", result_file.name, e)
-        finally:
-            try:
-                os.unlink(result_file.name)
-            except OSError:
-                pass
-
-    commit_sha = resolve_commit_sha(project, opp_file=opp_file)
-
+    result_code = "PASS" if result.returncode == 0 else "FAIL"
     _logger.info("Test finished: %s (%.1fs)", result_code, duration)
     return {
         "result_code": result_code,
         "duration_seconds": duration,
         "stdout": result.stdout,
         "stderr": result.stderr,
+        "details": None,
+        "commit_sha": None,
+    }
+
+
+def _run_test_direct(project, test_type, opp_file):
+    """Run a test by calling opp_repl functions directly (no subprocess)."""
+    test_functions = _get_test_functions()
+    func = test_functions.get(test_type)
+    if func is None:
+        raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(test_functions.keys())}")
+
+    _ws, simulation_project = _load_workspace(project, opp_file)
+
+    _logger.info("Running %s test for %s (direct mode)", test_type, project)
+    start = time.time()
+    try:
+        kwargs = {"simulation_project": simulation_project}
+        if test_type == "opp":
+            kwargs["test_folder"] = simulation_project.get_full_path("test")
+        result = func(**kwargs)
+        duration = time.time() - start
+
+        if result is None:
+            result_code = "PASS"
+            details = None
+        elif hasattr(result, "is_all_results_expected"):
+            result_code = "PASS" if result.is_all_results_expected() else "FAIL"
+            details = result.to_dict() if hasattr(result, "to_dict") else None
+        else:
+            result_code = "PASS"
+            details = None
+
+    except Exception as e:
+        duration = time.time() - start
+        _logger.error("Test %s raised exception: %s", test_type, e)
+        commit_sha = resolve_commit_sha(project, opp_file=opp_file)
+        return {
+            "result_code": "ERROR",
+            "duration_seconds": duration,
+            "stdout": "",
+            "stderr": str(e),
+            "details": None,
+            "commit_sha": commit_sha,
+        }
+
+    commit_sha = resolve_commit_sha(project, opp_file=opp_file)
+    _logger.info("Test finished: %s (%.1fs)", result_code, duration)
+    return {
+        "result_code": result_code,
+        "duration_seconds": duration,
+        "stdout": "",
+        "stderr": "",
         "details": details,
         "commit_sha": commit_sha,
     }
