@@ -3,6 +3,10 @@
 {% block content %}
 <h2 style="margin-bottom: 1rem;">Active Tests</h2>
 
+{% if message %}
+<div class="flash flash-{{ message_type or 'success' }}">{{ message }}</div>
+{% endif %}
+
 {% if running %}
 <div class="card">
     <h2>Running ({{ running|length }})</h2>

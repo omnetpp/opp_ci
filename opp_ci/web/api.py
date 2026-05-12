@@ -163,6 +163,7 @@ async def submit_matrix_run(
 ):
     """Expand a matrix and queue all jobs."""
     from opp_ci.scheduler import expand_matrix
+    from opp_ci.executor import find_existing_run
 
     session = SessionLocal()
     try:
@@ -174,7 +175,23 @@ async def submit_matrix_run(
 
         jobs = expand_matrix(matrix.project, matrix.config)
         run_ids = []
+        skipped = 0
         for job in jobs:
+            existing = find_existing_run(
+                session,
+                project=job["project"],
+                test_type=job["test_type"],
+                mode=job.get("mode"),
+                git_ref=job.get("git_ref"),
+                os=job.get("os"),
+                os_version=job.get("os_version"),
+                compiler=job.get("compiler"),
+                compiler_version=job.get("compiler_version"),
+            )
+            if existing:
+                skipped += 1
+                continue
+
             run = TestRun(
                 project=job["project"],
                 test_type=job["test_type"],
@@ -193,8 +210,8 @@ async def submit_matrix_run(
             session.flush()
             run_ids.append(run.id)
         session.commit()
-        _logger.info("Matrix '%s' queued %d jobs by %s", req.matrix_name, len(run_ids), identity.get("name"))
-        return {"matrix": req.matrix_name, "jobs_queued": len(run_ids), "run_ids": run_ids}
+        _logger.info("Matrix '%s' queued %d jobs (%d skipped) by %s", req.matrix_name, len(run_ids), skipped, identity.get("name"))
+        return {"matrix": req.matrix_name, "jobs_queued": len(run_ids), "jobs_skipped": skipped, "run_ids": run_ids}
     finally:
         session.close()
 

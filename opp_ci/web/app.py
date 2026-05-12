@@ -103,7 +103,7 @@ def dashboard(request: Request):
 
 
 @app.get("/queue", response_class=HTMLResponse)
-def queue_page(request: Request):
+def queue_page(request: Request, message: str = Query(default=None), message_type: str = Query(default=None)):
     session = SessionLocal()
     try:
         running = session.execute(
@@ -116,6 +116,8 @@ def queue_page(request: Request):
         return templates.TemplateResponse(request, "queue.html", {
             "running": running,
             "queued": queued,
+            "message": message,
+            "message_type": message_type,
         })
     finally:
         session.close()
@@ -431,6 +433,7 @@ def run_new_submit(
 def run_new_matrix(request: Request, matrix_name: str = Form(...)):
     import datetime
     from opp_ci.scheduler import expand_matrix
+    from opp_ci.executor import find_existing_run
 
     session = SessionLocal()
     try:
@@ -452,7 +455,24 @@ def run_new_matrix(request: Request, matrix_name: str = Form(...)):
         gh_owner = proj.github_owner if proj else None
         gh_repo = proj.github_repo if proj else None
 
+        queued = 0
+        skipped = 0
         for job in jobs:
+            existing = find_existing_run(
+                session,
+                project=job.get("project", matrix.project),
+                test_type=job.get("test_type", "smoke"),
+                mode=job.get("mode"),
+                git_ref=job.get("git_ref"),
+                os=job.get("os"),
+                os_version=job.get("os_version"),
+                compiler=job.get("compiler"),
+                compiler_version=job.get("compiler_version"),
+            )
+            if existing:
+                skipped += 1
+                continue
+
             run = TestRun(
                 project=job.get("project", matrix.project),
                 test_type=job.get("test_type", "smoke"),
@@ -471,9 +491,13 @@ def run_new_matrix(request: Request, matrix_name: str = Form(...)):
                 trigger="web",
             )
             session.add(run)
+            queued += 1
         session.commit()
+        msg = f"Queued+{queued}+jobs+from+matrix+{matrix_name}"
+        if skipped:
+            msg += f"+(skipped+{skipped}+already+completed)"
         return RedirectResponse(
-            url=f"/runs/new?message=Queued+{len(jobs)}+jobs+from+matrix+{matrix_name}&message_type=success",
+            url=f"/queue?message={msg}&message_type=success",
             status_code=303,
         )
     finally:
