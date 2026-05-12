@@ -69,13 +69,13 @@
     {% endif %}
 
     {% if result.stdout %}
-    <details>
+    <details open>
         <summary style="cursor:pointer; font-weight:600; margin-bottom:0.5rem;">stdout</summary>
         <pre>{{ result.stdout|ansi_to_html }}</pre>
     </details>
     {% endif %}
     {% if result.stderr %}
-    <details>
+    <details open>
         <summary style="cursor:pointer; font-weight:600; margin-bottom:0.5rem;">stderr</summary>
         <pre>{{ result.stderr|ansi_to_html }}</pre>
     </details>
