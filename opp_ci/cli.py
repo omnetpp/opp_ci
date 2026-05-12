@@ -918,7 +918,8 @@ def rule_group():
 @click.option("--type", "rule_type", required=True, type=click.Choice(["branch", "pr", "tag"]), help="Rule type")
 @click.option("--pattern", required=True, help="Glob pattern (e.g. 'master', 'topic/*', '*')")
 @click.option("--matrix", "matrix_name", default=None, help="Matrix name to run (omit for smoke-only)")
-def rule_create(project, rule_type, pattern, matrix_name):
+@click.option("--replace", is_flag=True, help="Replace existing rule with the same project/type/pattern/matrix")
+def rule_create(project, rule_type, pattern, matrix_name, replace):
     """Create an auto-test rule for GitHub events."""
     Base.metadata.create_all(engine)
     session = SessionLocal()
@@ -939,6 +940,19 @@ def rule_create(project, rule_type, pattern, matrix_name):
                 click.echo(f"Matrix '{matrix_name}' not found.")
                 return
             matrix_id = matrix.id
+
+        if replace:
+            existing = session.execute(
+                select(AutoTestRule).where(
+                    AutoTestRule.project_id == proj.id,
+                    AutoTestRule.rule_type == rule_type,
+                    AutoTestRule.pattern == pattern,
+                    AutoTestRule.matrix_id == matrix_id,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                session.delete(existing)
+                session.flush()
 
         rule = AutoTestRule(
             project_id=proj.id,
