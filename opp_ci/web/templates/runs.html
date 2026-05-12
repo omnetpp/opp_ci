@@ -44,7 +44,9 @@
             <td>{{ run.test_type }}</td>
             <td>{{ run.mode or "-" }}</td>
             {% set sha = run.commit_sha or run.github_commit_sha %}
-            <td>{% if run.git_ref and sha %}{{ run.git_ref }} (<code title="{{ sha }}">{{ sha[:8] }}</code>){% elif sha %}<code title="{{ sha }}">{{ sha[:8] }}</code>{% elif run.git_ref %}{{ run.git_ref }}{% else %}-{% endif %}</td>
+            {% set ref = run.git_ref %}
+            {% set ref_is_sha = ref and ref|length == 40 and ref == ref|lower and ref|replace('a','')|replace('b','')|replace('c','')|replace('d','')|replace('e','')|replace('f','')|replace('0','')|replace('1','')|replace('2','')|replace('3','')|replace('4','')|replace('5','')|replace('6','')|replace('7','')|replace('8','')|replace('9','') == '' %}
+            <td>{% if ref and sha and not ref_is_sha %}{{ ref }} (<code title="{{ sha }}">{{ sha[:8] }}</code>){% elif sha %}<code title="{{ sha }}">{{ sha[:8] }}</code>{% elif ref_is_sha %}<code title="{{ ref }}">{{ ref[:8] }}</code>{% elif ref %}{{ ref }}{% else %}-{% endif %}</td>
             <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
             <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
             <td>{{ run.trigger or "-" }}</td>
