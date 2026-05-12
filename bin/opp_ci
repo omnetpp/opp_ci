@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+
+from opp_ci.cli import main
+
+main()

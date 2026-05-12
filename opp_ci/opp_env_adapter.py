@@ -32,20 +32,20 @@ def list_all_projects():
         ]
     """
     result = subprocess.run(
-        ["opp_env", "list", "--raw"],
+        ["opp_env", "info", "--raw"],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        _logger.error("opp_env list --raw failed: %s", result.stderr.strip())
+        _logger.error("opp_env info --raw failed: %s", result.stderr.strip())
         return []
 
     try:
         entries = json.loads(result.stdout)
     except (json.JSONDecodeError, ValueError) as e:
-        _logger.error("Failed to parse opp_env list output: %s", e)
+        _logger.error("Failed to parse opp_env info output: %s", e)
         return []
 
-    # opp_env list --raw returns a flat list of version entries, each with
+    # opp_env info --raw returns a flat list of version entries, each with
     # "name" (project name) and "version" fields. Group by project name.
     by_project = {}
     for entry in entries:
@@ -56,7 +56,11 @@ def list_all_projects():
         deps = entry.get("required_projects", {})
 
         if name not in by_project:
-            by_project[name] = {"name": name, "versions": []}
+            # Extract GitHub info from first version's URLs
+            git_url = entry.get("git_url") or ""
+            download_url = entry.get("download_url") or ""
+            owner, repo = _parse_github_url(git_url or download_url)
+            by_project[name] = {"name": name, "versions": [], "github_owner": owner, "github_repo": repo}
 
         by_project[name]["versions"].append({
             "version": version,
@@ -155,8 +159,8 @@ def sync_catalog(session):
             existing = session.query(Project).filter_by(name=name).first()
 
         if existing is None:
-            # Discover GitHub info
-            owner, repo = get_project_github_info(name)
+            owner = proj_data.get("github_owner")
+            repo = proj_data.get("github_repo")
 
             # Collect dependency names from all versions
             all_deps = set()

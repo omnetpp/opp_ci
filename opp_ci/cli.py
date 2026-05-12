@@ -276,6 +276,53 @@ def seed_projects_cmd():
         session.close()
 
 
+@main.command("add-project")
+@click.option("--name", required=True, help="Project name (e.g. mm1k)")
+@click.option("--github", default=None, help="GitHub owner/repo (e.g. levy/mm1k)")
+@click.option("--git-url", default=None, help="Git clone URL")
+@click.option("--opp-env-name", default=None, help="opp_env project name (defaults to --name)")
+@click.option("--tier", default=1, type=int, help="Tier level (1 or 2, default: 1)")
+@click.option("--deps", default=None, help="Comma-separated dependency project names (e.g. omnetpp,inet)")
+def add_project_cmd(name, github, git_url, opp_env_name, tier, deps):
+    """Register a new project in the database."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        existing = session.execute(
+            select(Project).where(Project.name == name)
+        ).scalar_one_or_none()
+        if existing is not None:
+            click.echo(f"Project '{name}' already exists (tier={existing.tier}).")
+            return
+
+        github_owner = None
+        github_repo = None
+        if github:
+            parts = github.split("/", 1)
+            if len(parts) == 2:
+                github_owner, github_repo = parts
+            else:
+                click.echo(f"Invalid --github format: expected 'owner/repo'")
+                return
+
+        dep_list = [d.strip() for d in deps.split(",") if d.strip()] if deps else []
+
+        project = Project(
+            name=name,
+            opp_env_name=opp_env_name or name,
+            github_owner=github_owner,
+            github_repo=github_repo,
+            git_url=git_url,
+            tier=tier,
+            dependency_names=dep_list,
+        )
+        session.add(project)
+        session.commit()
+        click.echo(f"Project '{name}' added (tier={tier}, deps={dep_list}).")
+    finally:
+        session.close()
+
+
 @main.command("sync-catalog")
 def sync_catalog_cmd():
     """Sync projects from the opp_env catalog into the database.

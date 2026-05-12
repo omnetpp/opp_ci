@@ -1,0 +1,18 @@
+#!/bin/bash
+#
+# Recreate the opp_ci database from scratch:
+# - Seed Tier 1 projects and default matrices
+# - Add the mm1k project with its matrix
+# - Import Tier 2 projects from opp_env catalog
+#
+
+set -e
+
+rm -f opp_ci.db
+opp_ci init-db
+opp_ci seed-projects
+opp_ci seed-matrices
+opp_ci add-project --name mm1k --github levy/mm1k --git-url https://github.com/levy/mm1k.git --deps omnetpp
+opp_ci create-matrix --name mm1k-default --project mm1k --tests build,smoke --os "Ubuntu 24.04" --compiler gcc-13
+opp_ci sync-catalog
+opp_ci list-projects
