@@ -44,10 +44,11 @@ def reset_db(yes):
 @click.option("--project", required=True, help="opp_env project name (e.g. inet-4.5)")
 @click.option("--test", "test_types", required=True, help="Test type(s), comma-separated (e.g. smoke,fingerprint)")
 @click.option("--ref", "git_ref", default=None, help="Git branch, tag, or commit to test (e.g. master, topic/my-feature)")
+@click.option("--mode", default=None, type=click.Choice(["debug", "release"]), help="Build mode (debug or release)")
 @click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
 @click.pass_context
-def run_cmd(ctx, project, test_types, git_ref, pins, skip_install):
+def run_cmd(ctx, project, test_types, git_ref, mode, pins, skip_install):
     """Run test(s) for a project and store the results."""
     if ctx.obj.get("remote"):
         _run_remote(project, test_types, git_ref)
@@ -86,6 +87,7 @@ def run_cmd(ctx, project, test_types, git_ref, pins, skip_install):
             test_run = TestRun(
                 project=project,
                 test_type=test_type,
+                mode=mode,
                 git_ref=git_ref,
                 status=TestRunStatus.running,
                 started_at=datetime.datetime.utcnow(),
@@ -97,7 +99,7 @@ def run_cmd(ctx, project, test_types, git_ref, pins, skip_install):
             click.echo(f"Test run #{test_run.id}: {desc} / {test_type}")
 
             try:
-                outcome = run_test(project, test_type, git_ref=git_ref)
+                outcome = run_test(project, test_type, git_ref=git_ref, mode=mode)
             except Exception as e:
                 test_run.status = TestRunStatus.error
                 test_run.finished_at = datetime.datetime.utcnow()
@@ -641,7 +643,7 @@ def run_matrix(matrix_name, skip_install):
             click.echo(f"  [{i}/{len(jobs)}] {' × '.join(parts)}", nl=False)
 
             try:
-                outcome = run_test(job["project"], job["test_type"], git_ref=job.get("git_ref"), opp_file=matrix.opp_file)
+                outcome = run_test(job["project"], job["test_type"], git_ref=job.get("git_ref"), opp_file=matrix.opp_file, mode=job.get("mode"))
             except Exception as e:
                 test_run.status = TestRunStatus.error
                 test_run.finished_at = datetime.datetime.utcnow()

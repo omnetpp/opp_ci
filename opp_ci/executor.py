@@ -166,7 +166,7 @@ def install_project(project, git_ref=None):
     _logger.info("Installation of %s complete", effective_project)
 
 
-def run_test(project, test_type, git_ref=None, opp_file=None):
+def run_test(project, test_type, git_ref=None, opp_file=None, mode=None):
     """
     Run a test for the given project.
 
@@ -180,16 +180,19 @@ def run_test(project, test_type, git_ref=None, opp_file=None):
     Returns a dict with keys: result_code, duration_seconds, stdout, stderr, details.
     """
     if USE_OPP_ENV:
-        return _run_test_via_opp_env(project, test_type, git_ref)
+        return _run_test_via_opp_env(project, test_type, git_ref, mode=mode)
     else:
-        return _run_test_direct(project, test_type, opp_file, git_ref)
+        return _run_test_direct(project, test_type, opp_file, git_ref, mode=mode)
 
 
-def _run_test_via_opp_env(project, test_type, git_ref):
+def _run_test_via_opp_env(project, test_type, git_ref, mode=None):
     """Run a test via opp_env subprocess (isolated Nix environment)."""
     cmd = COMMAND_MAP.get(test_type)
     if cmd is None:
         raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(COMMAND_MAP.keys())}")
+
+    if mode:
+        cmd += f" --mode {mode}"
 
     env = os.environ.copy()
     effective_project, effective_ref = resolve_git_project(project, git_ref)
@@ -214,7 +217,7 @@ def _run_test_via_opp_env(project, test_type, git_ref):
     }
 
 
-def _run_test_direct(project, test_type, opp_file, git_ref=None):
+def _run_test_direct(project, test_type, opp_file, git_ref=None, mode=None):
     """Run a test by calling opp_repl functions directly (no subprocess).
 
     When *git_ref* is set, an isolated git worktree is created for that
@@ -244,6 +247,8 @@ def _run_test_direct(project, test_type, opp_file, git_ref=None):
     start = time.time()
     try:
         kwargs = {"simulation_project": simulation_project, "build": "task"}
+        if mode:
+            kwargs["mode"] = mode
         if test_type == "opp":
             kwargs["test_folder"] = simulation_project.get_full_path(".")
         with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
