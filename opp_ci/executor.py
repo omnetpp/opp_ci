@@ -241,6 +241,9 @@ def _run_test_direct(project, test_type, opp_file, git_ref=None, mode=None):
         worktree_path = simulation_project.get_root_path()
         _logger.info("Created worktree at %s for %s@%s", worktree_path, project, git_ref)
 
+    from opp_repl.common.util import ensure_logging_initialized
+    ensure_logging_initialized("DEBUG", "DEBUG", None)
+
     _logger.info("Running %s test for %s (direct mode)", test_type, project)
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
