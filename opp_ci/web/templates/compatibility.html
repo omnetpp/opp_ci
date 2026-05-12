@@ -15,12 +15,11 @@
 
 {% for matrix in matrices %}
 <div class="card">
-    <h2>{{ project_name }} vs. {{ matrix.dependency }}</h2>
     <div style="overflow-x: auto;">
     <table>
         <thead>
             <tr>
-                <th>{{ project_name }}</th>
+                <th>{{ project_name }} \ {{ matrix.dependency }}</th>
                 {% for dv in matrix.dep_versions %}
                 <th style="writing-mode: vertical-lr; text-orientation: mixed; white-space: nowrap; vertical-align: bottom; padding-bottom: 0.5rem;">{{ dv }}</th>
                 {% endfor %}
