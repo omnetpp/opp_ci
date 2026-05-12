@@ -439,11 +439,13 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
             if not replace:
                 click.echo(f"Matrix '{name}' already exists. Use --replace to overwrite.")
                 return
-            session.delete(existing)
-            session.flush()
-
-        matrix = TestMatrix(name=name, project=project, opp_file=opp_file, config=config)
-        session.add(matrix)
+            existing.project = project
+            existing.opp_file = opp_file
+            existing.config = config
+            matrix = existing
+        else:
+            matrix = TestMatrix(name=name, project=project, opp_file=opp_file, config=config)
+            session.add(matrix)
         session.commit()
 
         from opp_ci.scheduler import expand_matrix
