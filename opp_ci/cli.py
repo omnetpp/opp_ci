@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from opp_ci.db.connection import engine, SessionLocal
 from opp_ci.db.models import Base, Project, Version, TestMatrix, TestRun, TestRunStatus, TestResult, Worker, ApiToken, AutoTestRule
-from opp_ci.executor import install_project, run_test
+from opp_ci.executor import install_project, run_test, find_existing_run
 from opp_ci.notes import update_ci_note
 
 
@@ -46,9 +46,10 @@ def reset_db(yes):
 @click.option("--ref", "git_ref", default=None, help="Git branch, tag, or commit to test (e.g. master, topic/my-feature)")
 @click.option("--mode", default=None, type=click.Choice(["debug", "release"]), help="Build mode (debug or release)")
 @click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
+@click.option("--force", is_flag=True, help="Re-run even if an identical run already exists")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
 @click.pass_context
-def run_cmd(ctx, project, test_types, git_ref, mode, pins, skip_install):
+def run_cmd(ctx, project, test_types, git_ref, mode, pins, force, skip_install):
     """Run test(s) for a project and store the results."""
     if ctx.obj.get("remote"):
         _run_remote(project, test_types, git_ref)
@@ -83,6 +84,12 @@ def run_cmd(ctx, project, test_types, git_ref, mode, pins, skip_install):
             test_type = test_type.strip()
             if not test_type:
                 continue
+
+            if not force:
+                existing = find_existing_run(session, project=project, test_type=test_type, mode=mode, git_ref=git_ref)
+                if existing:
+                    click.echo(f"Skipping {project} / {test_type}: already has run #{existing.id} ({existing.status.value})")
+                    continue
 
             test_run = TestRun(
                 project=project,
@@ -583,8 +590,9 @@ def list_matrices():
 
 @main.command("run-matrix")
 @click.option("--matrix", "matrix_name", required=True, help="Matrix name to run")
+@click.option("--force", is_flag=True, help="Re-run even if identical runs already exist")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
-def run_matrix(matrix_name, skip_install):
+def run_matrix(matrix_name, force, skip_install):
     """Expand a matrix and run all jobs sequentially."""
     from opp_ci.scheduler import expand_matrix
 
@@ -617,7 +625,25 @@ def run_matrix(matrix_name, skip_install):
         passed = 0
         failed = 0
         errors = 0
+        skipped = 0
         for i, job in enumerate(jobs, 1):
+            if not force:
+                existing = find_existing_run(
+                    session,
+                    project=job["project"],
+                    test_type=job["test_type"],
+                    mode=job.get("mode"),
+                    git_ref=job.get("git_ref"),
+                    os=job.get("os"),
+                    os_version=job.get("os_version"),
+                    compiler=job.get("compiler"),
+                    compiler_version=job.get("compiler_version"),
+                )
+                if existing:
+                    click.echo(f"  [{i}/{len(jobs)}] SKIP (run #{existing.id} {existing.status.value})")
+                    skipped += 1
+                    continue
+
             test_run = TestRun(
                 project=job["project"],
                 test_type=job["test_type"],
@@ -678,7 +704,7 @@ def run_matrix(matrix_name, skip_install):
                 failed += 1
                 click.echo(f" → FAIL ({outcome['duration_seconds']:.1f}s)")
 
-        click.echo(f"\nMatrix complete: {passed} passed, {failed} failed, {errors} errors")
+        click.echo(f"\nMatrix complete: {passed} passed, {failed} failed, {errors} errors, {skipped} skipped")
 
         # Trigger GitHub Action notes sync once for the whole matrix
         proj = session.execute(

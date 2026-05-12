@@ -53,6 +53,7 @@ class SubmitRunRequest(BaseModel):
     os_version: str | None = None
     compiler: str | None = None
     compiler_version: str | None = None
+    force: bool = False
 
 class SubmitMatrixRequest(BaseModel):
     matrix_name: str
@@ -112,8 +113,25 @@ async def submit_run(
     identity: dict = Depends(require_role("submitter")),
 ):
     """Submit a single test run to the queue."""
+    from opp_ci.executor import find_existing_run
+
     session = SessionLocal()
     try:
+        if not req.force:
+            existing = find_existing_run(
+                session,
+                project=req.project,
+                test_type=req.test_type,
+                mode=req.mode,
+                git_ref=req.git_ref,
+                os=req.os,
+                os_version=req.os_version,
+                compiler=req.compiler,
+                compiler_version=req.compiler_version,
+            )
+            if existing:
+                return {"id": existing.id, "status": existing.status.value, "skipped": True}
+
         from opp_ci.scheduler import _build_platform_desc
         platform_desc = _build_platform_desc(req.os, req.os_version, req.compiler, req.compiler_version)
 

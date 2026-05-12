@@ -5,9 +5,40 @@ import os
 import subprocess
 import time
 
+from sqlalchemy import select
+
 from opp_ci.config import USE_OPP_ENV
+from opp_ci.db.connection import SessionLocal
+from opp_ci.db.models import TestRun, TestRunStatus
 
 _logger = logging.getLogger(__name__)
+
+
+def find_existing_run(session, *, project, test_type, mode=None, git_ref=None,
+                      os=None, os_version=None, compiler=None, compiler_version=None):
+    """Return an existing TestRun with matching params and terminal status, or None.
+
+    Matches on (project, test_type, mode, git_ref, os, os_version, compiler,
+    compiler_version).  Only runs that have completed (passed, failed, or error)
+    are considered — queued/running runs do not block a new submission.
+    """
+    query = (
+        select(TestRun)
+        .where(
+            TestRun.project == project,
+            TestRun.test_type == test_type,
+            TestRun.mode == mode,
+            TestRun.git_ref == git_ref,
+            TestRun.os == os,
+            TestRun.os_version == os_version,
+            TestRun.compiler == compiler,
+            TestRun.compiler_version == compiler_version,
+            TestRun.status.in_([TestRunStatus.passed, TestRunStatus.failed, TestRunStatus.error]),
+        )
+        .order_by(TestRun.id.desc())
+        .limit(1)
+    )
+    return session.execute(query).scalar_one_or_none()
 
 COMMAND_MAP = {
     "smoke": "opp_run_smoke_tests",
