@@ -3,6 +3,27 @@
 {% block content %}
 <h2 style="margin-bottom: 1rem;">Operating Systems</h2>
 
+<div class="card">
+    <h2>Add OS</h2>
+    <form method="post" action="/os/create">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="name">Name</label>
+                <input type="text" name="name" id="name" required placeholder="ubuntu, fedora, macos">
+            </div>
+            <div class="form-group">
+                <label for="version">Version</label>
+                <input type="text" name="version" id="version" placeholder="22.04, 40, 14">
+            </div>
+            <div class="form-group">
+                <label for="arch">Architecture</label>
+                <input type="text" name="arch" id="arch" value="x86_64" placeholder="x86_64, aarch64">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-success">Add</button>
+    </form>
+</div>
+
 {% if os_entries %}
 <table>
     <thead>
@@ -11,6 +32,7 @@
             <th>Name</th>
             <th>Version</th>
             <th>Architecture</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -20,6 +42,11 @@
             <td>{{ o.name }}</td>
             <td>{{ o.version or "-" }}</td>
             <td>{{ o.arch }}</td>
+            <td>
+                <form method="post" action="/os/{{ o.id }}/delete" class="inline-form">
+                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete?')">Delete</button>
+                </form>
+            </td>
         </tr>
         {% endfor %}
     </tbody>

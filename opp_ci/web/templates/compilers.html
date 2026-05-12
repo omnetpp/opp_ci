@@ -3,6 +3,23 @@
 {% block content %}
 <h2 style="margin-bottom: 1rem;">Compilers</h2>
 
+<div class="card">
+    <h2>Add Compiler</h2>
+    <form method="post" action="/compilers/create">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="name">Name</label>
+                <input type="text" name="name" id="name" required placeholder="gcc, clang">
+            </div>
+            <div class="form-group">
+                <label for="version">Version</label>
+                <input type="text" name="version" id="version" placeholder="14, 18">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-success">Add</button>
+    </form>
+</div>
+
 {% if compilers %}
 <table>
     <thead>
@@ -10,6 +27,7 @@
             <th>ID</th>
             <th>Name</th>
             <th>Version</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -18,6 +36,11 @@
             <td>{{ c.id }}</td>
             <td>{{ c.name }}</td>
             <td>{{ c.version or "-" }}</td>
+            <td>
+                <form method="post" action="/compilers/{{ c.id }}/delete" class="inline-form">
+                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete?')">Delete</button>
+                </form>
+            </td>
         </tr>
         {% endfor %}
     </tbody>

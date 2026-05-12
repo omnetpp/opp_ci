@@ -820,6 +820,30 @@ def os_list(request: Request):
         session.close()
 
 
+@app.post("/os/create")
+def os_create(name: str = Form(...), version: str = Form(default=""), arch: str = Form(default="x86_64")):
+    session = SessionLocal()
+    try:
+        session.add(OS(name=name, version=version or None, arch=arch or "x86_64"))
+        session.commit()
+        return RedirectResponse(url="/os", status_code=303)
+    finally:
+        session.close()
+
+
+@app.post("/os/{os_id}/delete")
+def os_delete(os_id: int):
+    session = SessionLocal()
+    try:
+        entry = session.execute(select(OS).where(OS.id == os_id)).scalar_one_or_none()
+        if entry:
+            session.delete(entry)
+            session.commit()
+        return RedirectResponse(url="/os", status_code=303)
+    finally:
+        session.close()
+
+
 @app.get("/compilers", response_class=HTMLResponse)
 def compilers_list(request: Request):
     session = SessionLocal()
@@ -831,6 +855,30 @@ def compilers_list(request: Request):
         return templates.TemplateResponse(request, "compilers.html", {
             "compilers": compilers,
         })
+    finally:
+        session.close()
+
+
+@app.post("/compilers/create")
+def compiler_create(name: str = Form(...), version: str = Form(default="")):
+    session = SessionLocal()
+    try:
+        session.add(Compiler(name=name, version=version or None))
+        session.commit()
+        return RedirectResponse(url="/compilers", status_code=303)
+    finally:
+        session.close()
+
+
+@app.post("/compilers/{compiler_id}/delete")
+def compiler_delete(compiler_id: int):
+    session = SessionLocal()
+    try:
+        entry = session.execute(select(Compiler).where(Compiler.id == compiler_id)).scalar_one_or_none()
+        if entry:
+            session.delete(entry)
+            session.commit()
+        return RedirectResponse(url="/compilers", status_code=303)
     finally:
         session.close()
 
