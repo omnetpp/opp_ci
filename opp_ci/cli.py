@@ -402,7 +402,8 @@ def list_projects():
 @click.option("--tests", "test_types", required=True, help="Comma-separated test types")
 @click.option("--refs", default=None, help="Comma-separated git refs to test (e.g. 'master,topic/my-feature')")
 @click.option("--opp-file", "opp_file", default=None, help="Path to the project's .opp file (for opp_repl project discovery)")
-def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs, opp_file):
+@click.option("--replace", is_flag=True, help="Replace existing matrix with the same name")
+def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs, opp_file, replace):
     """Create a test matrix configuration.
 
     Platform axes support two styles:
@@ -431,6 +432,16 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
             config["compiler"] = [c.strip() for c in compilers.split(",")]
         if compiler_versions:
             config["compiler_version"] = [c.strip() for c in compiler_versions.split(",")]
+        existing = session.execute(
+            select(TestMatrix).where(TestMatrix.name == name)
+        ).scalar_one_or_none()
+        if existing is not None:
+            if not replace:
+                click.echo(f"Matrix '{name}' already exists. Use --replace to overwrite.")
+                return
+            session.delete(existing)
+            session.flush()
+
         matrix = TestMatrix(name=name, project=project, opp_file=opp_file, config=config)
         session.add(matrix)
         session.commit()

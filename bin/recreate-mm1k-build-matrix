@@ -1,0 +1,9 @@
+#!/bin/bash
+#
+# Add the mm1k project and its build matrix to the database.
+#
+
+set -e
+
+opp_ci add-project --name mm1k --github levy/mm1k --git-url https://github.com/levy/mm1k.git --deps omnetpp || true
+opp_ci create-matrix --name mm1k-default --project mm1k --tests build,smoke --os "Ubuntu 24.04" --compiler gcc-13 --opp-file /home/levy/workspace/mm1k/mm1k.opp --replace
