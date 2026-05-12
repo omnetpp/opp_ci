@@ -144,14 +144,16 @@ def run_test(project, test_type, git_ref=None, opp_file=None):
             env["OPP_ENV_GIT_REF"] = effective_ref
         args = ["opp_env", "run", effective_project, "-c", cmd]
     else:
-        result_file = tempfile.NamedTemporaryFile(
-            prefix="opp_ci_result_", suffix=".json", delete=False
-        )
-        result_file.close()
         args = [cmd, "--load", "@opp"]
         if opp_file:
             args += ["--load", opp_file]
-        args += ["-p", project, "-b", "task", "--result-file", result_file.name]
+        args += ["-p", project]
+        if test_type != "build":
+            result_file = tempfile.NamedTemporaryFile(
+                prefix="opp_ci_result_", suffix=".json", delete=False
+            )
+            result_file.close()
+            args += ["-b", "task", "--result-file", result_file.name]
 
     _logger.info("Running test: %s", " ".join(args))
     start = time.time()
