@@ -228,6 +228,10 @@ def _run_test_direct(project, test_type, opp_file, git_ref=None):
     worktree_path = None
     if git_ref:
         from opp_repl.simulation.project import make_worktree_simulation_project
+        root = simulation_project.get_root_path()
+        if root:
+            subprocess.run(["git", "fetch", "origin"], cwd=root,
+                           capture_output=True, timeout=120)
         simulation_project = make_worktree_simulation_project(simulation_project, git_ref)
         worktree_path = simulation_project.get_root_path()
         _logger.info("Created worktree at %s for %s@%s", worktree_path, project, git_ref)

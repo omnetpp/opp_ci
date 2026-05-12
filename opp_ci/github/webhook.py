@@ -96,7 +96,7 @@ def _handle_push(payload):
             rule_type="branch",
             ref_name=branch,
             commit_sha=after,
-            git_ref=branch,
+            git_ref=after,
         )
     elif ref.startswith("refs/tags/"):
         tag = ref[len("refs/tags/"):]
@@ -106,7 +106,7 @@ def _handle_push(payload):
             rule_type="tag",
             ref_name=tag,
             commit_sha=after,
-            git_ref=tag,
+            git_ref=after,
         )
     else:
         return {"action": "skipped", "reason": f"unrecognized ref: {ref}"}
