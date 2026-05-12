@@ -1,9 +1,9 @@
 """
-Compatibility report generation for opp_ci (Stage 8).
+Compatibility report generation for opp_ci.
 
-Computes cross-project compatibility matrices from existing TestRun data.
-For each project, shows which versions of its dependencies produced passing
-vs. failing builds.
+Builds cross-project compatibility matrices from opp_env declared
+compatibility data (Version.resolved_dependencies) and overlays empirical
+pass/fail results from TestRun records where available.
 """
 
 import logging
@@ -18,28 +18,33 @@ _logger = logging.getLogger(__name__)
 
 def get_compatibility_matrix(session, project_name):
     """
-    Build a compatibility matrix for a project against its dependencies.
+    Build compatibility matrices for a project against each of its dependencies.
 
-    Returns a dict:
+    The grid is populated primarily from opp_env's declared compatibility
+    (Version.resolved_dependencies).  Where test runs exist and the
+    dependency version used can be determined, empirical pass/fail results
+    are overlaid on the declared-compatible cells.
+
+    Returns a list of dicts, one per dependency:
         {
             "project": "inet",
             "dependency": "omnetpp",
             "rows": [
                 {
-                    "version": "4.5",
-                    "cells": {
-                        "6.1.0": "passed",
-                        "6.0.3": "passed",
-                        "5.7.0": "failed",
-                    },
+                    "version": "inet-4.5",
+                    "cells": {"6.1": "passed", "6.0.3": "compatible"},
                 },
-                ...
             ],
-            "dep_versions": ["6.1.0", "6.0.3", "5.7.0"],
+            "dep_versions": ["6.1", "6.0.3"],
         }
 
-    If the project has multiple dependencies, returns a list of such dicts
-    (one per dependency).
+    Cell values:
+        "compatible" - declared compatible by opp_env, not yet tested
+        "passed"     - tested and all runs passed
+        "failed"     - tested and at least one run failed
+        "error"      - tested, at least one errored (none failed)
+        "mixed"      - tested with mixed results
+        None         - not declared compatible
     """
     project = session.execute(
         select(Project).where(Project.name == project_name)
@@ -52,34 +57,18 @@ def get_compatibility_matrix(session, project_name):
     if not dep_names:
         return []
 
-    # Get all finished runs for this project
-    finished = (TestRunStatus.passed, TestRunStatus.failed, TestRunStatus.error)
-    runs = session.execute(
-        select(TestRun).where(
-            TestRun.project == project_name,
-            TestRun.status.in_(finished),
-        )
-    ).scalars().all()
-
-    if not runs:
-        return []
-
-    # Also get version records to map version labels to dependency info
     versions = session.execute(
         select(Version).where(Version.project_id == project.id)
     ).scalars().all()
 
-    # Build a lookup: version_label -> resolved_dependencies
-    version_deps = {}
-    for v in versions:
-        if v.resolved_dependencies:
-            version_deps[v.opp_env_version] = v.resolved_dependencies
-            if v.label and v.label != v.opp_env_version:
-                version_deps[v.label] = v.resolved_dependencies
+    if not versions:
+        return []
+
+    test_overlays = _collect_test_overlays(session, project_name, versions)
 
     results = []
     for dep_name in dep_names:
-        matrix = _build_dep_matrix(runs, dep_name, version_deps)
+        matrix = _build_declared_matrix(versions, dep_name, test_overlays)
         if matrix:
             matrix["project"] = project_name
             matrix["dependency"] = dep_name
@@ -88,63 +77,131 @@ def get_compatibility_matrix(session, project_name):
     return results
 
 
-def _build_dep_matrix(runs, dep_name, version_deps):
+def _version_label(v):
+    """Return a display label for a Version record."""
+    return v.opp_env_version or v.label or f"id-{v.id}"
+
+
+def _dep_compatible_versions(resolved_deps, dep_name):
     """
-    Build the compatibility grid for one dependency.
+    Extract the list of compatible versions for dep_name.
 
-    Groups runs by (project_version, dep_version) and determines the
-    aggregate status for each cell.
+    Handles both formats stored in Version.resolved_dependencies:
+    - List: {"omnetpp": ["6.0", "6.1"]}  (from sync_catalog)
+    - String: {"omnetpp": "6.1"}  (from add-version CLI)
     """
-    # cells[(project_version, dep_version)] -> list of statuses
-    cells = defaultdict(list)
+    if not resolved_deps or dep_name not in resolved_deps:
+        return []
+    val = resolved_deps[dep_name]
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        return [val]
+    return []
 
-    for run in runs:
-        project_version = run.version or run.git_ref
-        if not project_version:
-            continue
 
-        # Determine which version of the dependency was used
-        dep_version = _get_dep_version_for_run(run, dep_name, version_deps)
-        if not dep_version:
-            continue
+def _build_declared_matrix(versions, dep_name, test_overlays):
+    """
+    Build the compatibility grid for one dependency from declared data.
 
-        cells[(project_version, dep_version)].append(run.status)
+    Cells start as "compatible" and are overridden by test results
+    where available in test_overlays.
+    """
+    declared = set()
+    all_dep_versions = set()
 
-    if not cells:
+    for v in versions:
+        vlabel = _version_label(v)
+        for dv in _dep_compatible_versions(v.resolved_dependencies, dep_name):
+            declared.add((vlabel, dv))
+            all_dep_versions.add(dv)
+
+    if not all_dep_versions:
         return None
 
-    # Collect all project versions and dep versions seen
-    project_versions = sorted(set(pv for pv, _ in cells.keys()), reverse=True)
-    dep_versions = sorted(set(dv for _, dv in cells.keys()), reverse=True)
+    project_versions = sorted(
+        {_version_label(v) for v in versions
+         if _dep_compatible_versions(v.resolved_dependencies, dep_name)},
+        reverse=True,
+    )
+    dep_versions = sorted(all_dep_versions, reverse=True)
 
     rows = []
     for pv in project_versions:
         row_cells = {}
         for dv in dep_versions:
-            statuses = cells.get((pv, dv), [])
-            if not statuses:
+            if (pv, dv) not in declared:
                 row_cells[dv] = None
+            elif (pv, dep_name, dv) in test_overlays:
+                row_cells[dv] = _aggregate_status(test_overlays[(pv, dep_name, dv)])
             else:
-                row_cells[dv] = _aggregate_status(statuses)
+                row_cells[dv] = "compatible"
         rows.append({"version": pv, "cells": row_cells})
 
     return {"rows": rows, "dep_versions": dep_versions}
 
 
-def _get_dep_version_for_run(run, dep_name, version_deps):
+def _collect_test_overlays(session, project_name, versions):
     """
-    Determine which version of dep_name was used for a given run.
+    Match finished test runs to (version_label, dep_name, dep_version) triples.
 
-    Checks (in order):
-    1. The run's version field mapped through version_deps
-    2. The run's git_ref mapped through version_deps
+    A run is matched to a version record via run.version, run.git_ref, or
+    run.project.  The dependency version is inferred from the version
+    record's resolved_dependencies — only when a dep resolves to exactly
+    one version (string format or single-element list).
+
+    Returns: {(version_label, dep_name, dep_version): [TestRunStatus, ...]}
     """
-    for key in (run.version, run.git_ref):
-        if key and key in version_deps:
-            deps = version_deps[key]
-            if dep_name in deps:
-                return deps[dep_name]
-    return None
+    # All keys that might appear as TestRun.project for this project
+    project_keys = {project_name}
+    for v in versions:
+        if v.opp_env_version:
+            project_keys.add(v.opp_env_version)
+        if v.label:
+            project_keys.add(v.label)
+
+    finished = (TestRunStatus.passed, TestRunStatus.failed, TestRunStatus.error)
+    runs = session.execute(
+        select(TestRun).where(
+            TestRun.project.in_(project_keys),
+            TestRun.status.in_(finished),
+        )
+    ).scalars().all()
+
+    if not runs:
+        return {}
+
+    # key -> (version_label, resolved_dependencies)
+    key_to_version = {}
+    for v in versions:
+        info = (_version_label(v), v.resolved_dependencies)
+        if v.opp_env_version:
+            key_to_version[v.opp_env_version] = info
+        if v.label and v.label != v.opp_env_version:
+            key_to_version[v.label] = info
+
+    overlays = defaultdict(list)
+    for run in runs:
+        matched = None
+        for candidate in (run.version, run.git_ref, run.project):
+            if candidate and candidate in key_to_version:
+                matched = key_to_version[candidate]
+                break
+        if not matched:
+            continue
+
+        vlabel, resolved_deps = matched
+        if not resolved_deps:
+            continue
+
+        # Overlay only when the exact dep version is deterministic
+        for dep_name, dep_val in resolved_deps.items():
+            if isinstance(dep_val, str):
+                overlays[(vlabel, dep_name, dep_val)].append(run.status)
+            elif isinstance(dep_val, list) and len(dep_val) == 1:
+                overlays[(vlabel, dep_name, dep_val[0])].append(run.status)
+
+    return overlays
 
 
 def _aggregate_status(statuses):

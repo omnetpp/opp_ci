@@ -7,8 +7,8 @@
 <div class="empty">
     <p>No compatibility data available for <strong>{{ project_name }}</strong>.</p>
     <p style="font-size: 0.85rem; margin-top: 0.5rem;">
-        Compatibility data is derived from test runs. Run tests with resolved
-        dependency versions to populate this matrix.
+        Run <code>opp_ci sync-catalog</code> to import version compatibility
+        data from opp_env.
     </p>
 </div>
 {% endif %}
@@ -39,6 +39,10 @@
                     <span class="badge badge-failed">FAIL</span>
                     {% elif cell == "error" %}
                     <span class="badge badge-error">ERROR</span>
+                    {% elif cell == "mixed" %}
+                    <span class="badge badge-error">MIXED</span>
+                    {% elif cell == "compatible" %}
+                    <span class="badge badge-compatible">&check;</span>
                     {% else %}
                     <span style="color: var(--muted);">—</span>
                     {% endif %}
@@ -52,7 +56,17 @@
 </div>
 {% endfor %}
 
+{% if matrices %}
+<p style="font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem;">
+    <span class="badge badge-compatible">&check;</span> declared compatible by opp_env &nbsp;
+    <span class="badge badge-passed">PASS</span> tested &amp; passed &nbsp;
+    <span class="badge badge-failed">FAIL</span> tested &amp; failed &nbsp;
+    <span class="badge badge-error">ERROR</span> build error &nbsp;
+    <span style="color: var(--muted);">—</span> not compatible
+</p>
+{% endif %}
+
 <div style="margin-top: 1rem;">
-    <a href="/projects">&larr; All Projects</a>
+    <a href="/compatibility">&larr; All Projects</a>
 </div>
 {% endblock %}
