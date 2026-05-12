@@ -877,6 +877,73 @@ def rules_list(request: Request):
         session.close()
 
 
+@app.get("/rules/{rule_id}", response_class=HTMLResponse)
+def rule_detail(request: Request, rule_id: int):
+    session = SessionLocal()
+    try:
+        rule = session.execute(
+            select(AutoTestRule).where(AutoTestRule.id == rule_id)
+        ).scalar_one_or_none()
+        if rule is None:
+            return HTMLResponse("<h1>Rule not found</h1>", status_code=404)
+
+        proj_name = session.execute(
+            select(Project.name).where(Project.id == rule.project_id)
+        ).scalar_one_or_none() or "?"
+        matrix_name = None
+        if rule.matrix_id:
+            matrix_name = session.execute(
+                select(TestMatrix.name).where(TestMatrix.id == rule.matrix_id)
+            ).scalar_one_or_none()
+
+        projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
+        matrices = session.execute(select(TestMatrix).order_by(TestMatrix.name)).scalars().all()
+
+        return templates.TemplateResponse(request, "rule_detail.html", {
+            "rule": rule,
+            "project_name": proj_name,
+            "matrix_name": matrix_name,
+            "projects": projects,
+            "matrices": matrices,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/rules/{rule_id}/edit")
+def rule_edit_web(
+    rule_id: int,
+    rule_type: str = Form(...),
+    pattern: str = Form(...),
+    matrix_name: str = Form(default=""),
+    enabled: int = Form(default=0),
+):
+    session = SessionLocal()
+    try:
+        rule = session.execute(
+            select(AutoTestRule).where(AutoTestRule.id == rule_id)
+        ).scalar_one_or_none()
+        if rule is None:
+            return RedirectResponse(url="/rules", status_code=303)
+
+        rule.rule_type = rule_type
+        rule.pattern = pattern
+        rule.enabled = enabled
+
+        if matrix_name:
+            matrix = session.execute(
+                select(TestMatrix).where(TestMatrix.name == matrix_name)
+            ).scalar_one_or_none()
+            rule.matrix_id = matrix.id if matrix else None
+        else:
+            rule.matrix_id = None
+
+        session.commit()
+        return RedirectResponse(url=f"/rules/{rule_id}", status_code=303)
+    finally:
+        session.close()
+
+
 @app.post("/rules/create")
 def rule_create_web(
     project_name: str = Form(...),

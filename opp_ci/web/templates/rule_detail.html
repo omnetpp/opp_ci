@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Rule #{{ rule.id }}{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Rule #{{ rule.id }}</h2>
+
+<div class="card">
+    <h2>Edit Rule</h2>
+    <form method="post" action="/rules/{{ rule.id }}/edit">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Project</label>
+                <input type="text" value="{{ project_name }}" disabled>
+            </div>
+            <div class="form-group">
+                <label for="rule_type">Type</label>
+                <select name="rule_type" id="rule_type" required>
+                    <option value="branch" {{ "selected" if rule.rule_type == "branch" }}>branch</option>
+                    <option value="pr" {{ "selected" if rule.rule_type == "pr" }}>pr</option>
+                    <option value="tag" {{ "selected" if rule.rule_type == "tag" }}>tag</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="pattern">Pattern (glob)</label>
+                <input type="text" name="pattern" id="pattern" required value="{{ rule.pattern }}">
+            </div>
+            <div class="form-group">
+                <label for="matrix_name">Matrix</label>
+                <select name="matrix_name" id="matrix_name">
+                    <option value="">— smoke only —</option>
+                    {% for m in matrices %}
+                    <option value="{{ m.name }}" {{ "selected" if m.id == rule.matrix_id }}>{{ m.name }} ({{ m.project }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="enabled">Enabled</label>
+                <select name="enabled" id="enabled">
+                    <option value="1" {{ "selected" if rule.enabled }}>Yes</option>
+                    <option value="0" {{ "selected" if not rule.enabled }}>No</option>
+                </select>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save</button>
+    </form>
+</div>
+
+<div class="actions" style="margin-top: 1rem;">
+    <form method="post" action="/rules/{{ rule.id }}/delete" class="inline-form">
+        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete rule #{{ rule.id }}?')">Delete</button>
+    </form>
+    <a href="/rules" class="btn btn-secondary btn-sm">&larr; Back to rules</a>
+</div>
+{% endblock %}
