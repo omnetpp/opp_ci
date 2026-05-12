@@ -22,7 +22,7 @@
             <tr>
                 <th>{{ project_name }}</th>
                 {% for dv in matrix.dep_versions %}
-                <th style="writing-mode: vertical-lr; text-orientation: mixed; white-space: nowrap; vertical-align: bottom; padding-bottom: 0.5rem;">{{ matrix.dependency }}-{{ dv }}</th>
+                <th style="writing-mode: vertical-lr; text-orientation: mixed; white-space: nowrap; vertical-align: bottom; padding-bottom: 0.5rem;">{{ dv }}</th>
                 {% endfor %}
             </tr>
         </thead>
