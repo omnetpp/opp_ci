@@ -145,10 +145,15 @@ def trigger_notes_sync(owner, repo):
 
     client = GitHubClient(token=token)
     try:
+        # Look up the repo's default branch
+        repo_url = f"{client.base_url}/repos/{owner}/{repo}"
+        resp = client._session.get(repo_url, timeout=15)
+        ref = resp.json().get("default_branch", "main") if resp.status_code == 200 else "main"
+
         success = client.trigger_workflow_dispatch(
             owner, repo,
             workflow_id="ci-notes.yml",
-            ref="main",
+            ref=ref,
         )
         if success:
             _logger.info("Triggered ci-notes.yml on %s/%s", owner, repo)
