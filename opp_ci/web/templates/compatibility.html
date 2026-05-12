@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Compatibility — {{ project_name }} — opp_ci{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Compatibility: {{ project_name }}</h2>
+
+{% if not matrices %}
+<div class="empty">
+    <p>No compatibility data available for <strong>{{ project_name }}</strong>.</p>
+    <p style="font-size: 0.85rem; margin-top: 0.5rem;">
+        Compatibility data is derived from test runs. Run tests with resolved
+        dependency versions to populate this matrix.
+    </p>
+</div>
+{% endif %}
+
+{% for matrix in matrices %}
+<div class="card">
+    <h2>{{ project_name }} vs. {{ matrix.dependency }}</h2>
+    <div style="overflow-x: auto;">
+    <table>
+        <thead>
+            <tr>
+                <th>{{ project_name }}</th>
+                {% for dv in matrix.dep_versions %}
+                <th>{{ matrix.dependency }}-{{ dv }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in matrix.rows %}
+            <tr>
+                <td><strong>{{ row.version }}</strong></td>
+                {% for dv in matrix.dep_versions %}
+                {% set cell = row.cells[dv] %}
+                <td>
+                    {% if cell == "passed" %}
+                    <span class="badge badge-passed">PASS</span>
+                    {% elif cell == "failed" %}
+                    <span class="badge badge-failed">FAIL</span>
+                    {% elif cell == "error" %}
+                    <span class="badge badge-error">ERROR</span>
+                    {% else %}
+                    <span style="color: var(--muted);">—</span>
+                    {% endif %}
+                </td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endfor %}
+
+<div style="margin-top: 1rem;">
+    <a href="/projects">&larr; All Projects</a>
+</div>
+{% endblock %}

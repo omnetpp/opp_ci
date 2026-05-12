@@ -598,6 +598,36 @@ def project_detail(request: Request, name: str):
         session.close()
 
 
+@app.get("/compatibility", response_class=HTMLResponse)
+def compatibility_index(request: Request):
+    session = SessionLocal()
+    try:
+        projects = session.execute(
+            select(Project).where(Project.dependency_names.isnot(None)).order_by(Project.tier, Project.name)
+        ).scalars().all()
+        # Filter to only those with non-empty dependency lists
+        projects = [p for p in projects if p.dependency_names]
+        return templates.TemplateResponse(request, "compatibility_index.html", {
+            "projects": projects,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/compatibility/{project_name}", response_class=HTMLResponse)
+def compatibility_page(request: Request, project_name: str):
+    from opp_ci.compatibility import get_compatibility_matrix
+    session = SessionLocal()
+    try:
+        matrices = get_compatibility_matrix(session, project_name)
+        return templates.TemplateResponse(request, "compatibility.html", {
+            "project_name": project_name,
+            "matrices": matrices,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/matrices", response_class=HTMLResponse)
 def matrices_list(request: Request):
     session = SessionLocal()

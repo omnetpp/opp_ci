@@ -276,9 +276,27 @@ def seed_projects_cmd():
         session.close()
 
 
+@main.command("sync-catalog")
+def sync_catalog_cmd():
+    """Sync projects from the opp_env catalog into the database.
+
+    Imports all opp_env projects as Tier 2 (if not already present),
+    adds new versions, and creates default test matrices for new projects.
+    Existing Tier 1 projects are not demoted.
+    """
+    from opp_ci.opp_env_adapter import sync_catalog
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        new_projects, new_versions = sync_catalog(session)
+        click.echo(f"Catalog sync complete: {new_projects} new projects, {new_versions} new versions.")
+    finally:
+        session.close()
+
+
 @main.command("list-projects")
 def list_projects():
-    """List known projects."""
+    """List known projects with tier, last test status, and GitHub info."""
     Base.metadata.create_all(engine)
     session = SessionLocal()
     try:
@@ -286,15 +304,30 @@ def list_projects():
             select(Project).order_by(Project.tier, Project.name)
         ).scalars().all()
         if not projects:
-            click.echo("No projects. Run 'opp_ci seed-projects' to import Tier 1 projects.")
+            click.echo("No projects. Run 'opp_ci seed-projects' or 'opp_ci sync-catalog'.")
             return
 
-        click.echo(f"{'Name':<16} {'Tier':<6} {'Dependencies':<30} {'GitHub'}")
+        click.echo(f"{'Name':<20} {'Tier':<6} {'Last Test':<14} {'Status':<10} {'GitHub'}")
         click.echo("-" * 80)
         for p in projects:
-            deps = ", ".join(p.dependency_names) if p.dependency_names else "-"
+            # Find most recent finished run for this project
+            last_run = session.execute(
+                select(TestRun)
+                .where(TestRun.project == p.name)
+                .where(TestRun.status.in_([TestRunStatus.passed, TestRunStatus.failed, TestRunStatus.error]))
+                .order_by(TestRun.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+
+            if last_run:
+                version = last_run.version or last_run.git_ref or "-"
+                status = last_run.status.value
+            else:
+                version = "-"
+                status = "-"
+
             github = f"{p.github_owner}/{p.github_repo}" if p.github_owner else "-"
-            click.echo(f"{p.name:<16} {p.tier:<6} {deps:<30} {github}")
+            click.echo(f"{p.name:<20} {p.tier:<6} {version:<14} {status:<10} {github}")
     finally:
         session.close()
 

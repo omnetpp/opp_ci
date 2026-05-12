@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Compatibility — opp_ci{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Compatibility Reports</h2>
+
+<p style="color: var(--muted); margin-bottom: 1rem; font-size: 0.9rem;">
+    Cross-project compatibility matrices show which versions of a project
+    build successfully against which versions of its dependencies.
+</p>
+
+{% if not projects %}
+<div class="empty">
+    <p>No projects with dependencies found.</p>
+</div>
+{% else %}
+<table>
+    <thead>
+        <tr>
+            <th>Project</th>
+            <th>Tier</th>
+            <th>Dependencies</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for p in projects %}
+        <tr>
+            <td><a href="/projects/{{ p.name }}">{{ p.name }}</a></td>
+            <td>{{ p.tier }}</td>
+            <td>{{ p.dependency_names | join(", ") }}</td>
+            <td><a href="/compatibility/{{ p.name }}" class="btn btn-sm btn-primary">View Matrix</a></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{% endblock %}

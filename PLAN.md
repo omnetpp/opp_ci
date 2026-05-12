@@ -297,14 +297,69 @@ Results are displayed in **two switchable formats**:
 
 ### Stage 8 — Tier 2 projects and ecosystem
 
-**Goal**: Extend testing to all opp_env projects.
+**Goal**: Extend testing to all opp_env projects. Any project in the opp_env catalog can be imported into opp_ci as a Tier 2 project and tested automatically with minimal configuration.
 
-- Auto-import all projects from opp_env catalog as Tier 2 (see [Tier 2 projects](#tier-2--supported-smoke-tests--build-verification))
-- Default matrix for Tier 2: build + smoke test on a single reference platform
-- Promote projects to Tier 1 by adding custom matrix configs
-- Nightly scheduled runs for Tier 2 projects
-- Cross-project compatibility reports: which versions of project X work with which versions of project Y
-- **Deliverable**: 60+ projects tested automatically, compatibility dashboard
+#### Design
+
+opp_ci queries the opp_env catalog (via `opp_env` Python API or CLI) to discover all available projects and their versions. Each discovered project is imported into opp_ci's database as Tier 2 with a default test matrix (build + smoke on the reference platform). Projects are promoted to Tier 1 by adding custom matrix configs.
+
+A **compatibility report** tracks which version of project X builds successfully against which versions of its dependencies (e.g. which inet versions work with which omnetpp versions). This is derived from existing test run data — no extra test runs are needed beyond what the matrices already produce.
+
+#### Auto-import from opp_env
+
+```
+opp_ci sync-catalog
+  │
+  ├── opp_env list --json  →  all projects + versions + dependencies
+  │
+  ├── For each project not already in DB:
+  │     INSERT Project(tier=2, opp_env_name=..., dependency_names=...)
+  │     INSERT Version(...) for each known version
+  │
+  ├── For each project already in DB:
+  │     Add any new versions discovered since last sync
+  │
+  └── Generate default TestMatrix for new Tier 2 projects:
+        { test_types: ["build", "smoke"], platforms: [reference_platform] }
+```
+
+The reference platform is the single platform used for Tier 2 (e.g. Ubuntu 24.04 / gcc-13). It is defined in config as `OPP_CI_REFERENCE_PLATFORM`.
+
+#### Tier promotion
+
+A project moves from Tier 2 → Tier 1 by:
+1. Adding a named `TestMatrix` with multiple platforms/test types
+2. Optionally adding `AutoTestRule` entries for branch/PR triggers
+
+No code change is needed — the existing matrix/rule infrastructure from Stages 4+6 handles it.
+
+#### Compatibility reports
+
+For each project pair where one depends on the other, the compatibility matrix is:
+
+```
+           omnetpp 6.1  omnetpp 6.0  omnetpp 5.7
+inet 4.5      ✅            ✅           ❌
+inet 4.4      ✅            ✅           ✅
+inet 4.3      ❌            ✅           ✅
+```
+
+This is computed from `TestRun` records: group by (project, version, dependency versions) and aggregate pass/fail. Displayed as a web page at `/compatibility/{project}`.
+
+#### Implementation tasks
+
+- [x] **`opp_ci sync-catalog` CLI command** — queries opp_env, upserts projects + versions into DB
+- [x] **opp_env adapter** (`opp_ci/opp_env_adapter.py`) — wraps `opp_env` Python API to list projects, versions, and dependencies in a normalized format
+- [x] **Default matrix generation** — when a new Tier 2 project is imported, auto-create a TestMatrix with build+smoke on the reference platform
+- [x] **Config**: `OPP_CI_REFERENCE_PLATFORM` — default platform spec for Tier 2 matrices (e.g. `ubuntu-24.04/gcc-13`)
+- [x] **Compatibility data query** — function that aggregates TestRun pass/fail by (project, version, dep_versions) pairs
+- [x] **Compatibility web page** (`/compatibility/{project}`) — renders the matrix table for a project vs. its dependency versions
+- [x] **Catalog sync on startup** (optional) — re-sync on coordinator start to catch new opp_env releases
+- [x] **`opp_ci list-projects` enhancement** — show tier, last tested version, and pass/fail status
+
+#### Deliverable
+
+`opp_ci sync-catalog` → 60+ projects imported → each gets automatic build+smoke testing → compatibility dashboard shows which version combos work together.
 
 ---
 
@@ -394,7 +449,7 @@ Push to a tested repo → opp_ci runs tests → triggers note sync → developer
 | 5 | Remote execution | worker agent, coordinator deployment, Python client | ✅ done |
 | 6 | GitHub automation | webhooks, status checks, PR comments | ✅ done |
 | 7 | Web management | start runs, manage matrices, admin | ✅ done |
-| 8 | Full ecosystem | Tier 2 projects, nightly runs, compatibility reports |
+| 8 | Full ecosystem | Tier 2 auto-import from opp_env, compatibility reports |
 | 9 | Local result delivery via git notes | notes API, GitHub Action, lazygit integration |
 
 ---
