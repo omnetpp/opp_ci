@@ -11,7 +11,16 @@
         <tr><th>Test Types</th><td>{{ matrix.config.get("test_types", [])|join(", ") }}</td></tr>
         <tr><th>Modes</th><td>{{ matrix.config.get("modes", [])|join(", ") }}</td></tr>
         <tr><th>Versions</th><td>{{ matrix.config.get("versions", [])|join(", ") }}</td></tr>
-        <tr><th>Refs</th><td>{{ matrix.config.get("refs", ["-"])|join(", ") }}</td></tr>
+        {% set refs = matrix.config.get("refs", []) %}
+        <tr><th>Refs</th><td>
+            {% if refs|length > 10 %}
+                {{ refs|length }} commits ({{ refs[0][:10] }}..{{ refs[-1][:10] }})
+            {% elif refs %}
+                {{ refs|join(", ") }}
+            {% else %}
+                -
+            {% endif %}
+        </td></tr>
         <tr><th>OS</th><td>{{ matrix.config.get("os", ["-"])|join(", ") }}</td></tr>
         <tr><th>OS Version</th><td>{{ matrix.config.get("os_version", ["-"])|join(", ") }}</td></tr>
         <tr><th>Compiler</th><td>{{ matrix.config.get("compiler", ["-"])|join(", ") }}</td></tr>

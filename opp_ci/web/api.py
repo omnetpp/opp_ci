@@ -617,6 +617,109 @@ async def delete_rule(
         session.close()
 
 
+# ── Matrix management ──────────────────────────────────────────────────
+
+class CreateMatrixRequest(BaseModel):
+    name: str
+    project: str
+    config: dict = Field(default_factory=dict)
+    opp_file: str | None = None
+    ref_range: dict | None = Field(
+        default=None,
+        description='Optional {"base": "...", "head": "..."} to populate refs from GitHub commit range',
+    )
+
+
+@router.post("/matrices")
+async def create_matrix(
+    req: CreateMatrixRequest,
+    identity: dict = Depends(require_role("submitter")),
+):
+    """Create a test matrix, optionally resolving refs from a GitHub commit range."""
+    session = SessionLocal()
+    try:
+        existing = session.execute(
+            select(TestMatrix).where(TestMatrix.name == req.name)
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(status_code=409, detail=f"Matrix '{req.name}' already exists")
+
+        config = dict(req.config) if req.config else {}
+
+        if req.ref_range:
+            base = req.ref_range.get("base", "")
+            head = req.ref_range.get("head", "")
+            if not base or not head:
+                raise HTTPException(status_code=400, detail="ref_range requires both 'base' and 'head'")
+
+            project = session.execute(
+                select(Project).where(Project.name == req.project)
+            ).scalar_one_or_none()
+            if project is None:
+                raise HTTPException(status_code=404, detail=f"Project '{req.project}' not found")
+            if not project.github_owner or not project.github_repo:
+                raise HTTPException(status_code=400, detail=f"Project '{req.project}' has no GitHub owner/repo")
+
+            from opp_ci.github.client import GitHubClient
+            client = GitHubClient()
+            if not client.is_configured:
+                raise HTTPException(status_code=500, detail="GitHub token not configured")
+
+            try:
+                shas = client.list_commits_in_range(
+                    project.github_owner, project.github_repo, base, head
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
+            config["refs"] = shas
+            _logger.info("Resolved ref range %s..%s to %d commits for matrix '%s'",
+                         base, head, len(shas), req.name)
+
+        matrix = TestMatrix(name=req.name, project=req.project, opp_file=req.opp_file, config=config)
+        session.add(matrix)
+        session.commit()
+
+        from opp_ci.scheduler import expand_matrix
+        jobs = expand_matrix(matrix.project, config)
+
+        _logger.info("Matrix '%s' created by %s (%d jobs)", req.name, identity.get("name"), len(jobs))
+        return {
+            "id": matrix.id,
+            "name": matrix.name,
+            "project": matrix.project,
+            "refs_count": len(config.get("refs", [])),
+            "jobs_count": len(jobs),
+        }
+    finally:
+        session.close()
+
+
+@router.get("/matrices")
+async def list_matrices(
+    _identity: dict = Depends(require_role("readonly")),
+):
+    """List all test matrices."""
+    session = SessionLocal()
+    try:
+        matrices = session.execute(
+            select(TestMatrix).order_by(TestMatrix.name)
+        ).scalars().all()
+        return [
+            {
+                "id": m.id,
+                "name": m.name,
+                "project": m.project,
+                "opp_file": m.opp_file,
+                "config": m.config,
+                "refs_count": len(m.config.get("refs", [])) if m.config else 0,
+            }
+            for m in matrices
+        ]
+    finally:
+        session.close()
+
+
 # ── Git notes ──────────────────────────────────────────────────────────
 
 @router.get("/notes/{owner}/{repo}")

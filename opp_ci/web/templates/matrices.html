@@ -22,6 +22,19 @@
             <label for="config_json">Config (JSON)</label>
             <textarea name="config_json" id="config_json" placeholder='{"test_types": ["smoke", "fingerprint"], "modes": ["release", "debug"]}' rows="4"></textarea>
         </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="ref_range_base">Ref Range — Base (optional)</label>
+                <input type="text" name="ref_range_base" id="ref_range_base" placeholder="e.g. main, v4.5.0, abc123">
+            </div>
+            <div class="form-group">
+                <label for="ref_range_head">Ref Range — Head (optional)</label>
+                <input type="text" name="ref_range_head" id="ref_range_head" placeholder="e.g. feature-branch, def456">
+            </div>
+        </div>
+        <p style="font-size:0.85rem; color:var(--muted); margin-top:-0.5rem;">
+            If both base and head are provided, commits between them are resolved via GitHub and added to the matrix's <code>refs</code> axis.
+        </p>
         <button type="submit" class="btn btn-success">Create</button>
     </form>
 </div>
@@ -47,7 +60,8 @@
             <td><a href="/projects/{{ m.project }}">{{ m.project }}</a></td>
             <td>{{ m.config.get("test_types", [])|join(", ") }}</td>
             <td>{{ m.config.get("modes", [])|join(", ") }}</td>
-            <td>{{ m.config.get("refs", ["-"])|join(", ") }}</td>
+            {% set refs = m.config.get("refs", []) %}
+            <td>{% if refs|length > 5 %}{{ refs|length }} commits{% elif refs %}{{ refs|join(", ") }}{% else %}-{% endif %}</td>
             <td>{{ run_counts.get(m.id, 0) }}</td>
         </tr>
         {% endfor %}

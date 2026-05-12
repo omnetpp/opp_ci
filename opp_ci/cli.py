@@ -391,6 +391,35 @@ def list_projects():
         session.close()
 
 
+def _resolve_ref_range(session, project_name, ref_range_str):
+    """Resolve a 'base..head' ref range to a list of commit SHAs via GitHub API."""
+    if ".." not in ref_range_str:
+        raise click.ClickException(f"Invalid --ref-range format: expected 'base..head', got '{ref_range_str}'")
+
+    base, head = ref_range_str.split("..", 1)
+    base, head = base.strip(), head.strip()
+    if not base or not head:
+        raise click.ClickException(f"Invalid --ref-range format: both base and head must be non-empty")
+
+    proj = session.execute(
+        select(Project).where(Project.name == project_name)
+    ).scalar_one_or_none()
+    if proj is None:
+        raise click.ClickException(f"Project '{project_name}' not found")
+    if not proj.github_owner or not proj.github_repo:
+        raise click.ClickException(f"Project '{project_name}' has no GitHub owner/repo configured")
+
+    from opp_ci.github.client import GitHubClient
+    client = GitHubClient()
+    if not client.is_configured:
+        raise click.ClickException("GitHub token not configured (set OPP_CI_GITHUB_TOKEN)")
+
+    click.echo(f"Resolving commit range {base}..{head} on {proj.github_owner}/{proj.github_repo}...")
+    shas = client.list_commits_in_range(proj.github_owner, proj.github_repo, base, head)
+    click.echo(f"  Found {len(shas)} commits")
+    return shas
+
+
 @main.command("create-matrix")
 @click.option("--name", required=True, help="Matrix name (e.g. inet-default)")
 @click.option("--project", required=True, help="Project name")
@@ -402,9 +431,10 @@ def list_projects():
 @click.option("--compiler-version", "compiler_versions", default=None, help="Comma-separated compiler versions for cross-product (e.g. '14,18')")
 @click.option("--tests", "test_types", required=True, help="Comma-separated test types")
 @click.option("--refs", default=None, help="Comma-separated git refs to test (e.g. 'master,topic/my-feature')")
+@click.option("--ref-range", "ref_range", default=None, help="Git ref range (base..head) — enumerate commits via GitHub API")
 @click.option("--opp-file", "opp_file", default=None, help="Path to the project's .opp file (for opp_repl project discovery)")
 @click.option("--replace", is_flag=True, help="Replace existing matrix with the same name")
-def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs, opp_file, replace):
+def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs, ref_range, opp_file, replace):
     """Create a test matrix configuration.
 
     Platform axes support two styles:
@@ -415,6 +445,10 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
 
     Same for --compiler / --compiler-version.
     """
+    if refs and ref_range:
+        click.echo("ERROR: --refs and --ref-range are mutually exclusive.")
+        return
+
     Base.metadata.create_all(engine)
     session = SessionLocal()
     try:
@@ -423,7 +457,9 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
             "modes": [m.strip() for m in modes.split(",")],
             "versions": [v.strip() for v in versions.split(",")] if versions else [project],
         }
-        if refs:
+        if ref_range:
+            config["refs"] = _resolve_ref_range(session, project, ref_range)
+        elif refs:
             config["refs"] = [r.strip() for r in refs.split(",")]
         if os_names:
             config["os"] = [o.strip() for o in os_names.split(",")]

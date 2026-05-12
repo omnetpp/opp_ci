@@ -187,3 +187,54 @@ class GitHubClient:
         resp = self._session.get(url, timeout=15)
         resp.raise_for_status()
         return resp.json()
+
+    def list_commits_in_range(self, owner, repo, base, head, max_commits=250):
+        """
+        Enumerate commits between two refs using the compare API.
+
+        Args:
+            owner: GitHub repo owner
+            repo: GitHub repo name
+            base: Base ref (branch, tag, or SHA) — the older end
+            head: Head ref — the newer end
+            max_commits: Maximum number of commits to return (safety cap)
+
+        Returns:
+            List of commit SHAs, oldest-first (excludes the base commit itself).
+
+        Raises:
+            requests.HTTPError on API failure.
+            ValueError if the range exceeds max_commits.
+        """
+        url = f"{self.base_url}/repos/{owner}/{repo}/compare/{base}...{head}"
+        resp = self._session.get(url, params={"per_page": 1}, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+
+        total = data.get("total_commits", 0)
+        if total > max_commits:
+            raise ValueError(
+                f"Commit range {base}..{head} has {total} commits, "
+                f"exceeding the limit of {max_commits}"
+            )
+
+        # Fetch all commits (paginated, up to 250 per page)
+        commits = []
+        page = 1
+        while len(commits) < total:
+            resp = self._session.get(
+                url, params={"per_page": 250, "page": page}, timeout=30
+            )
+            resp.raise_for_status()
+            page_commits = resp.json().get("commits", [])
+            if not page_commits:
+                break
+            commits.extend(page_commits)
+            page += 1
+
+        shas = [c["sha"] for c in commits[:max_commits]]
+        _logger.info(
+            "Enumerated %d commits in %s/%s %s..%s",
+            len(shas), owner, repo, base[:8], head[:8],
+        )
+        return shas

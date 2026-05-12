@@ -717,6 +717,8 @@ def matrix_create(
     name: str = Form(...),
     project: str = Form(...),
     config_json: str = Form(default="{}"),
+    ref_range_base: str = Form(default=""),
+    ref_range_head: str = Form(default=""),
 ):
     import json
     session = SessionLocal()
@@ -737,6 +739,37 @@ def matrix_create(
                 url="/matrices?error=Matrix+already+exists",
                 status_code=303,
             )
+
+        # Resolve ref range if provided
+        if ref_range_base.strip() and ref_range_head.strip():
+            proj = session.execute(
+                select(Project).where(Project.name == project)
+            ).scalar_one_or_none()
+            if proj and proj.github_owner and proj.github_repo:
+                from opp_ci.github.client import GitHubClient
+                client = GitHubClient()
+                if client.is_configured:
+                    try:
+                        shas = client.list_commits_in_range(
+                            proj.github_owner, proj.github_repo,
+                            ref_range_base.strip(), ref_range_head.strip(),
+                        )
+                        config["refs"] = shas
+                    except (ValueError, Exception) as e:
+                        return RedirectResponse(
+                            url=f"/matrices?error=Ref+range+error:+{str(e)[:80]}",
+                            status_code=303,
+                        )
+                else:
+                    return RedirectResponse(
+                        url="/matrices?error=GitHub+token+not+configured",
+                        status_code=303,
+                    )
+            else:
+                return RedirectResponse(
+                    url=f"/matrices?error=Project+has+no+GitHub+owner/repo",
+                    status_code=303,
+                )
 
         matrix = TestMatrix(name=name, project=project, config=config)
         session.add(matrix)
