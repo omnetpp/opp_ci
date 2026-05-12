@@ -243,6 +243,79 @@ def show_run(run_id):
         session.close()
 
 
+@main.command("delete-run")
+@click.argument("run_id", type=int)
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+def delete_run(run_id, yes):
+    """Delete a single test run by ID."""
+    session = SessionLocal()
+    try:
+        run = session.execute(
+            select(TestRun).where(TestRun.id == run_id)
+        ).scalar_one_or_none()
+        if run is None:
+            click.echo(f"Run #{run_id} not found.")
+            return
+        if not yes:
+            click.confirm(f"Delete run #{run.id} ({run.project} / {run.test_type} / {run.status.value})?", abort=True)
+        session.delete(run)
+        session.commit()
+        click.echo(f"Run #{run_id} deleted.")
+    finally:
+        session.close()
+
+
+@main.command("delete-runs")
+@click.option("--project", default=None, help="Filter by project")
+@click.option("--ref", "git_ref", default=None, help="Filter by git ref")
+@click.option("--test", "test_type", default=None, help="Filter by test type")
+@click.option("--status", default=None, help="Filter by status (passed/failed/error/running/queued)")
+@click.option("--before", "before_date", default=None, help="Delete runs started before this date (YYYY-MM-DD)")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+def delete_runs(project, git_ref, test_type, status, before_date, yes):
+    """Delete multiple test runs matching the given filters."""
+    if not any([project, git_ref, test_type, status, before_date]):
+        click.echo("ERROR: At least one filter is required (--project, --ref, --test, --status, --before).")
+        return
+
+    session = SessionLocal()
+    try:
+        query = select(TestRun)
+        if project:
+            query = query.where(TestRun.project == project)
+        if git_ref:
+            query = query.where(TestRun.git_ref == git_ref)
+        if test_type:
+            query = query.where(TestRun.test_type == test_type)
+        if status:
+            query = query.where(TestRun.status == TestRunStatus(status))
+        if before_date:
+            cutoff = datetime.datetime.strptime(before_date, "%Y-%m-%d")
+            query = query.where(TestRun.started_at < cutoff)
+
+        runs = session.execute(query).scalars().all()
+        if not runs:
+            click.echo("No matching runs found.")
+            return
+
+        click.echo(f"Found {len(runs)} run(s) to delete:")
+        for run in runs[:10]:
+            started = run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-"
+            click.echo(f"  #{run.id} {run.project} / {run.test_type} / {run.status.value} ({started})")
+        if len(runs) > 10:
+            click.echo(f"  ... and {len(runs) - 10} more")
+
+        if not yes:
+            click.confirm(f"Delete {len(runs)} run(s)?", abort=True)
+
+        for run in runs:
+            session.delete(run)
+        session.commit()
+        click.echo(f"Deleted {len(runs)} run(s).")
+    finally:
+        session.close()
+
+
 @main.command("show-results")
 @click.option("--project", default=None, help="Filter by project")
 @click.option("--test", "test_type", default=None, help="Filter by test type")
@@ -604,6 +677,14 @@ def run_matrix(matrix_name, skip_install):
                 click.echo(f" → FAIL ({outcome['duration_seconds']:.1f}s)")
 
         click.echo(f"\nMatrix complete: {passed} passed, {failed} failed, {errors} errors")
+
+        # Trigger GitHub Action notes sync once for the whole matrix
+        proj = session.execute(
+            select(Project).where(Project.name == matrix.project)
+        ).scalar_one_or_none()
+        if proj and proj.github_owner and proj.github_repo:
+            from opp_ci.notes import trigger_notes_sync
+            trigger_notes_sync(proj.github_owner, proj.github_repo)
     finally:
         session.close()
 
