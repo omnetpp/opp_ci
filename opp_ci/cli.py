@@ -541,17 +541,20 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
         session.commit()
 
         from opp_ci.scheduler import expand_matrix
-        jobs = expand_matrix(project, config)
-        click.echo(f"Matrix '{name}' created ({len(jobs)} jobs when expanded):")
-        for job in jobs[:10]:
-            parts = [job["project"], job["test_type"], job["mode"]]
-            if job.get("git_ref"):
-                parts.append(f"@{job['git_ref']}")
-            if job.get("platform_desc"):
-                parts.append(job["platform_desc"])
-            click.echo(f"  {' × '.join(parts)}")
-        if len(jobs) > 10:
-            click.echo(f"  ... and {len(jobs) - 10} more")
+        try:
+            jobs = expand_matrix(project, config)
+            click.echo(f"Matrix '{name}' created ({len(jobs)} jobs when expanded):")
+            for job in jobs[:10]:
+                parts = [job["project"], job["test_type"], job["mode"]]
+                if job.get("git_ref"):
+                    parts.append(f"@{job['git_ref']}")
+                if job.get("platform_desc"):
+                    parts.append(job["platform_desc"])
+                click.echo(f"  {' × '.join(parts)}")
+            if len(jobs) > 10:
+                click.echo(f"  ... and {len(jobs) - 10} more")
+        except (ValueError, Exception) as e:
+            click.echo(f"Matrix '{name}' created (expansion deferred: {e})")
     finally:
         session.close()
 
