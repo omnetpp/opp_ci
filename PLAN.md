@@ -354,20 +354,20 @@ One line per commit. Compact enough for lazygit's commit detail pane, with a URL
 
 #### Implementation tasks
 
-- [ ] **API endpoint** `GET /api/notes/{owner}/{repo}` — returns `[{sha, note}]` for all commits with results in that repo
-- [ ] **Note formatter**: generate compact one-line summary from `TestRun` + `TestResult` rows grouped by commit SHA
-- [ ] **Sync trigger**: after a batch of runs completes for a repo, call `workflow_dispatch` on the target repo
-- [ ] **Config**: `OPP_CI_GITHUB_ACTIONS_TOKEN` — fine-grained PAT with Actions:Write scope
-- [ ] **GitHub Action template** (`.github/workflows/ci-notes.yml`) — provided to each repo:
+- [x] **API endpoint** `GET /api/notes/{owner}/{repo}` — returns `[{sha, note}]` for all commits with results in that repo
+- [x] **Note formatter**: generate compact one-line summary from `TestRun` + `TestResult` rows grouped by commit SHA
+- [x] **Sync trigger**: after a batch of runs completes for a repo, call `workflow_dispatch` on the target repo
+- [x] **Config**: `OPP_CI_GITHUB_ACTIONS_TOKEN` — fine-grained PAT with Actions:Write scope
+- [x] **GitHub Action template** (`.github/workflows/ci-notes.yml`) — provided to each repo:
   - `workflow_dispatch` trigger (no inputs needed)
   - Delete previous completed runs of itself (minimize trail)
   - Fetch all notes from opp_ci API
   - Write notes (`git notes --ref=ci add -f`) and push `refs/notes/ci`
-- [ ] **Developer setup docs**: one-time fetch refspec config:
+- [x] **Developer setup docs**: one-time fetch refspec config:
   ```
   git config --add remote.origin.fetch "+refs/notes/ci:refs/notes/ci"
   ```
-- [ ] **lazygit integration docs**: custom command to display note for selected commit:
+- [x] **lazygit integration docs**: custom command to display note for selected commit:
   ```yaml
   customCommands:
     - key: "N"

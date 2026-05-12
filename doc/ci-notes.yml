@@ -1,0 +1,86 @@
+# ci-notes.yml — GitHub Action template for opp_ci git notes sync.
+#
+# Install this file as .github/workflows/ci-notes.yml in each repository
+# that should receive CI result notes from opp_ci.
+#
+# The opp_ci coordinator triggers this workflow via workflow_dispatch after
+# test runs complete. The action fetches note data from the opp_ci API,
+# writes git notes (refs/notes/ci), and pushes them.
+#
+# Prerequisites:
+#   - The repository must grant opp_ci's fine-grained PAT the Actions:Write
+#     permission (so it can trigger this workflow).
+#   - Set the OPP_CI_API_URL and OPP_CI_API_TOKEN secrets in the repo or org.
+
+name: CI Notes Sync
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch existing notes
+        run: |
+          git fetch origin refs/notes/ci:refs/notes/ci || true
+
+      - name: Fetch notes from opp_ci and write
+        env:
+          OPP_CI_API_URL: ${{ secrets.OPP_CI_API_URL }}
+          OPP_CI_API_TOKEN: ${{ secrets.OPP_CI_API_TOKEN }}
+        run: |
+          REPO_OWNER="${{ github.repository_owner }}"
+          REPO_NAME="${{ github.event.repository.name }}"
+
+          # Fetch note data from opp_ci API
+          NOTES=$(curl -sf \
+            -H "Authorization: Bearer ${OPP_CI_API_TOKEN}" \
+            "${OPP_CI_API_URL}/api/notes/${REPO_OWNER}/${REPO_NAME}")
+
+          if [ -z "$NOTES" ] || [ "$NOTES" = "[]" ]; then
+            echo "No notes to sync."
+            exit 0
+          fi
+
+          # Write each note
+          echo "$NOTES" | jq -c '.[]' | while read -r entry; do
+            SHA=$(echo "$entry" | jq -r '.sha')
+            NOTE=$(echo "$entry" | jq -r '.note')
+
+            # Verify commit exists in this repo
+            if git cat-file -t "$SHA" >/dev/null 2>&1; then
+              echo "$NOTE" | git notes --ref=ci add -f --file=- "$SHA"
+              echo "Wrote note for $SHA"
+            else
+              echo "Skipping $SHA (not in repo)"
+            fi
+          done
+
+      - name: Push notes
+        run: |
+          git push origin refs/notes/ci --force
+
+      - name: Delete previous workflow runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Delete all completed runs of this workflow except the current one
+          WORKFLOW_ID=$(gh api "/repos/${{ github.repository }}/actions/workflows" \
+            --jq '.workflows[] | select(.name == "CI Notes Sync") | .id')
+
+          if [ -n "$WORKFLOW_ID" ]; then
+            gh api "/repos/${{ github.repository }}/actions/workflows/${WORKFLOW_ID}/runs" \
+              --jq ".workflow_runs[] | select(.id != ${{ github.run_id }} and .status == \"completed\") | .id" \
+              | while read -r RUN_ID; do
+                gh api -X DELETE "/repos/${{ github.repository }}/actions/runs/${RUN_ID}" || true
+              done
+          fi

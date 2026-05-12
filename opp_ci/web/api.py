@@ -19,6 +19,8 @@ Endpoints:
     POST /api/github/webhook    — GitHub webhook receiver (push, pull_request)
     GET  /api/github/rules      — list auto-test rules (readonly+)
     POST /api/github/rules      — create auto-test rule (admin)
+
+    GET  /api/notes/{owner}/{repo} — git notes per commit (readonly+)
 """
 
 import datetime
@@ -382,6 +384,14 @@ async def worker_report_result(
         except Exception as e:
             _logger.warning("GitHub status update failed for run #%d: %s", run.id, e)
 
+        # Trigger git notes sync if this run has GitHub metadata
+        if run.github_owner and run.github_repo:
+            try:
+                from opp_ci.notes import trigger_notes_sync
+                trigger_notes_sync(run.github_owner, run.github_repo)
+            except Exception as e:
+                _logger.warning("Notes sync trigger failed for run #%d: %s", run.id, e)
+
         return {"status": "ok", "run_id": run.id, "result_code": req.result_code}
     finally:
         session.close()
@@ -588,6 +598,29 @@ async def delete_rule(
         session.delete(rule)
         session.commit()
         return {"status": "deleted", "id": rule_id}
+    finally:
+        session.close()
+
+
+# ── Git notes ──────────────────────────────────────────────────────────
+
+@router.get("/notes/{owner}/{repo}")
+async def get_notes(
+    owner: str,
+    repo: str,
+    _identity: dict = Depends(require_role("readonly")),
+):
+    """
+    Return formatted CI note lines for all tested commits in a repo.
+
+    Used by the ci-notes.yml GitHub Action to write git notes.
+    Response: [{"sha": "<commit>", "note": "<one-line summary>"}]
+    """
+    from opp_ci.notes import get_notes_for_repo
+
+    session = SessionLocal()
+    try:
+        return get_notes_for_repo(session, owner, repo)
     finally:
         session.close()
 

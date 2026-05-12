@@ -17,6 +17,12 @@ GITHUB_STATUS_CONTEXT = os.environ.get("OPP_CI_GITHUB_STATUS_CONTEXT", "opp_ci")
 GITHUB_BASE_URL = os.environ.get("OPP_CI_GITHUB_BASE_URL", "https://api.github.com")
 
 
+GITHUB_ACTIONS_TOKEN_FILE = os.environ.get(
+    "OPP_CI_GITHUB_ACTIONS_TOKEN_FILE",
+    os.path.expanduser("~/.ssh/github_actions_token"),
+)
+
+
 def get_github_token():
     """Read the GitHub API token from file or env var."""
     token = os.environ.get("OPP_CI_GITHUB_TOKEN", "")
@@ -24,6 +30,18 @@ def get_github_token():
         return token
     try:
         with open(GITHUB_TOKEN_FILE) as f:
+            return f.read().strip()
+    except (OSError, FileNotFoundError):
+        return ""
+
+
+def get_github_actions_token():
+    """Read the fine-grained PAT with Actions:Write scope (for workflow_dispatch)."""
+    token = os.environ.get("OPP_CI_GITHUB_ACTIONS_TOKEN", "")
+    if token:
+        return token
+    try:
+        with open(GITHUB_ACTIONS_TOKEN_FILE) as f:
             return f.read().strip()
     except (OSError, FileNotFoundError):
         return ""

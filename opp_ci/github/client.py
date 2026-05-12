@@ -142,6 +142,36 @@ class GitHubClient:
             _logger.error("Failed to update comment: %s %s", resp.status_code, resp.text[:200])
             resp.raise_for_status()
 
+    # ── Workflow dispatch ─────────────────────────────────────────────
+
+    def trigger_workflow_dispatch(self, owner, repo, workflow_id, ref="main", inputs=None):
+        """
+        Trigger a workflow_dispatch event on a repository.
+
+        Args:
+            owner: GitHub repo owner
+            repo: GitHub repo name
+            workflow_id: Workflow file name (e.g. "ci-notes.yml") or numeric ID
+            ref: Branch/tag ref to run the workflow on
+            inputs: Optional dict of workflow inputs
+
+        Returns:
+            True if the dispatch was accepted (HTTP 204).
+        """
+        url = f"{self.base_url}/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches"
+        payload = {"ref": ref}
+        if inputs:
+            payload["inputs"] = inputs
+
+        resp = self._session.post(url, json=payload, timeout=15)
+        if resp.status_code == 204:
+            _logger.info("Dispatched workflow %s on %s/%s (ref=%s)", workflow_id, owner, repo, ref)
+            return True
+        else:
+            _logger.error("workflow_dispatch failed: %s %s", resp.status_code, resp.text[:200])
+            resp.raise_for_status()
+            return False
+
     # ── Queries ────────────────────────────────────────────────────────
 
     def get_pr(self, owner, repo, pr_number):
