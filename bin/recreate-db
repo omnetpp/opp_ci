@@ -14,4 +14,5 @@ opp_ci seed-matrices
 opp_ci add-project --name mm1k --github levy/mm1k --git-url https://github.com/levy/mm1k.git --deps omnetpp
 opp_ci create-matrix --name mm1k-default --project mm1k --tests build,smoke --os "Ubuntu 24.04" --compiler gcc-13
 opp_ci sync-catalog
+opp_ci token create --name notes-readonly --role readonly
 opp_ci list-projects
