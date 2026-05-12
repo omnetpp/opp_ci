@@ -28,7 +28,7 @@
             <th>Project</th>
             <th>Test</th>
             <th>Mode</th>
-            <th>Git ref</th>
+            <th>Ref / Commit</th>
             <th>Status</th>
             <th>Duration</th>
             <th>Trigger</th>
@@ -44,7 +44,7 @@
             <td>{{ run.test_type }}</td>
             <td>{{ run.mode or "-" }}</td>
             {% set sha = run.commit_sha or run.github_commit_sha %}
-            <td>{% if sha %}<code title="{{ sha }}">{{ sha[:8] }}</code>{% elif run.git_ref %}{{ run.git_ref }}{% else %}-{% endif %}</td>
+            <td>{% if run.git_ref and sha %}{{ run.git_ref }} (<code title="{{ sha }}">{{ sha[:8] }}</code>){% elif sha %}<code title="{{ sha }}">{{ sha[:8] }}</code>{% elif run.git_ref %}{{ run.git_ref }}{% else %}-{% endif %}</td>
             <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
             <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
             <td>{{ run.trigger or "-" }}</td>
