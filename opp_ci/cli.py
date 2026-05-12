@@ -391,33 +391,15 @@ def list_projects():
         session.close()
 
 
-def _resolve_ref_range(session, project_name, ref_range_str):
-    """Resolve a 'base..head' ref range to a list of commit SHAs via GitHub API."""
+def _parse_ref_range(ref_range_str):
+    """Parse a 'base..head' string into a {"base": ..., "head": ...} dict."""
     if ".." not in ref_range_str:
         raise click.ClickException(f"Invalid --ref-range format: expected 'base..head', got '{ref_range_str}'")
-
     base, head = ref_range_str.split("..", 1)
     base, head = base.strip(), head.strip()
     if not base or not head:
         raise click.ClickException(f"Invalid --ref-range format: both base and head must be non-empty")
-
-    proj = session.execute(
-        select(Project).where(Project.name == project_name)
-    ).scalar_one_or_none()
-    if proj is None:
-        raise click.ClickException(f"Project '{project_name}' not found")
-    if not proj.github_owner or not proj.github_repo:
-        raise click.ClickException(f"Project '{project_name}' has no GitHub owner/repo configured")
-
-    from opp_ci.github.client import GitHubClient
-    client = GitHubClient()
-    if not client.is_configured:
-        raise click.ClickException("GitHub token not configured (set OPP_CI_GITHUB_TOKEN)")
-
-    click.echo(f"Resolving commit range {base}..{head} on {proj.github_owner}/{proj.github_repo}...")
-    shas = client.list_commits_in_range(proj.github_owner, proj.github_repo, base, head)
-    click.echo(f"  Found {len(shas)} commits")
-    return shas
+    return {"base": base, "head": head}
 
 
 @main.command("create-matrix")
@@ -458,7 +440,7 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
             "versions": [v.strip() for v in versions.split(",")] if versions else [project],
         }
         if ref_range:
-            config["refs"] = _resolve_ref_range(session, project, ref_range)
+            config["ref_range"] = _parse_ref_range(ref_range)
         elif refs:
             config["refs"] = [r.strip() for r in refs.split(",")]
         if os_names:

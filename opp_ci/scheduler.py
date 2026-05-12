@@ -11,6 +11,8 @@ A TestMatrix config is a JSON dict with axes to cross-product:
 }
 
 The 'refs' axis (optional) specifies git branches/tags/commits to test.
+Alternatively, 'ref_range' ({"base": "...", "head": "..."}) resolves a
+GitHub commit range at expansion time — so the list is always fresh.
 If both 'versions' and 'refs' are present, they are cross-producted.
 
 Platform axes support two styles:
@@ -99,9 +101,43 @@ def _build_platform_desc(os_name, os_version, compiler_name, compiler_version):
     return " / ".join(parts) if parts else None
 
 
+def _resolve_ref_range(project_name, ref_range):
+    """Resolve a ref_range dict to a list of commit SHAs via the GitHub API."""
+    from opp_ci.db.connection import SessionLocal
+    from opp_ci.db.models import Project
+    from opp_ci.github.client import GitHubClient
+    from sqlalchemy import select
+
+    session = SessionLocal()
+    try:
+        proj = session.execute(
+            select(Project).where(Project.name == project_name)
+        ).scalar_one_or_none()
+        if proj is None:
+            raise ValueError(f"Project '{project_name}' not found")
+        if not proj.github_owner or not proj.github_repo:
+            raise ValueError(f"Project '{project_name}' has no GitHub owner/repo configured")
+
+        client = GitHubClient()
+        if not client.is_configured:
+            raise ValueError("GitHub token not configured (set OPP_CI_GITHUB_TOKEN)")
+
+        base = ref_range["base"]
+        head = ref_range["head"]
+        shas = client.list_commits_in_range(proj.github_owner, proj.github_repo, base, head)
+        _logger.info("Resolved ref range %s..%s to %d commits for %s", base, head, len(shas), project_name)
+        return shas
+    finally:
+        session.close()
+
+
 def expand_matrix(project, config):
     """
     Expand a matrix config into a list of individual job specs.
+
+    If config contains a ``ref_range`` key (``{"base": "...", "head": "..."}``),
+    the commit range is resolved via the GitHub API at expansion time.  A static
+    ``refs`` list takes precedence if both are present.
 
     Each job spec is a dict:
         {
@@ -119,7 +155,12 @@ def expand_matrix(project, config):
     test_types = config.get("test_types", ["smoke"])
     modes = config.get("modes", ["release"])
     versions = config.get("versions", [project])
-    refs = config.get("refs", [None])
+    if "refs" in config:
+        refs = config["refs"]
+    elif "ref_range" in config:
+        refs = _resolve_ref_range(project, config["ref_range"])
+    else:
+        refs = [None]
     os_tuples = _resolve_os_axis(config)
     compiler_tuples = _resolve_compiler_axis(config)
 

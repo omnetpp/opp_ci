@@ -635,7 +635,7 @@ async def create_matrix(
     req: CreateMatrixRequest,
     identity: dict = Depends(require_role("submitter")),
 ):
-    """Create a test matrix, optionally resolving refs from a GitHub commit range."""
+    """Create a test matrix, optionally with a ref range for lazy commit resolution."""
     session = SessionLocal()
     try:
         existing = session.execute(
@@ -651,30 +651,7 @@ async def create_matrix(
             head = req.ref_range.get("head", "")
             if not base or not head:
                 raise HTTPException(status_code=400, detail="ref_range requires both 'base' and 'head'")
-
-            project = session.execute(
-                select(Project).where(Project.name == req.project)
-            ).scalar_one_or_none()
-            if project is None:
-                raise HTTPException(status_code=404, detail=f"Project '{req.project}' not found")
-            if not project.github_owner or not project.github_repo:
-                raise HTTPException(status_code=400, detail=f"Project '{req.project}' has no GitHub owner/repo")
-
-            from opp_ci.github.client import GitHubClient
-            client = GitHubClient()
-            if not client.is_configured:
-                raise HTTPException(status_code=500, detail="GitHub token not configured")
-
-            try:
-                shas = client.list_commits_in_range(
-                    project.github_owner, project.github_repo, base, head
-                )
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
-
-            config["refs"] = shas
-            _logger.info("Resolved ref range %s..%s to %d commits for matrix '%s'",
-                         base, head, len(shas), req.name)
+            config["ref_range"] = {"base": base, "head": head}
 
         matrix = TestMatrix(name=req.name, project=req.project, opp_file=req.opp_file, config=config)
         session.add(matrix)
@@ -688,7 +665,6 @@ async def create_matrix(
             "id": matrix.id,
             "name": matrix.name,
             "project": matrix.project,
-            "refs_count": len(config.get("refs", [])),
             "jobs_count": len(jobs),
         }
     finally:
