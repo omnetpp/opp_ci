@@ -213,6 +213,7 @@ def show_run(run_id):
         click.echo(f"Run #{run.id}")
         click.echo(f"  Project:  {run.project}")
         click.echo(f"  Ref:      {run.git_ref or '-'}")
+        click.echo(f"  Commit:   {run.commit_sha or '-'}")
         click.echo(f"  Version:  {run.version or '-'}")
         click.echo(f"  Test:     {run.test_type}")
         click.echo(f"  Status:   {run.status.value}")
