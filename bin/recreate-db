@@ -8,8 +8,7 @@
 
 set -e
 
-rm -f opp_ci.db
-opp_ci init-db
+opp_ci reset-db --yes
 opp_ci seed-projects
 opp_ci seed-matrices
 opp_ci add-project --name mm1k --github levy/mm1k --git-url https://github.com/levy/mm1k.git --deps omnetpp

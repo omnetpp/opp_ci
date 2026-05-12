@@ -29,6 +29,17 @@ def init_db():
     click.echo("Database tables created.")
 
 
+@main.command("reset-db")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+def reset_db(yes):
+    """Drop all tables and recreate them (destructive!)."""
+    if not yes:
+        click.confirm("This will DELETE all data. Continue?", abort=True)
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    click.echo("Database reset.")
+
+
 @main.command("run")
 @click.option("--project", required=True, help="opp_env project name (e.g. inet-4.5)")
 @click.option("--test", "test_types", required=True, help="Test type(s), comma-separated (e.g. smoke,fingerprint)")
