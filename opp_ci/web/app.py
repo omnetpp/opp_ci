@@ -612,6 +612,25 @@ def project_detail(request: Request, name: str):
         session.close()
 
 
+@app.get("/commits/{project}/{sha}", response_class=HTMLResponse)
+def commit_detail(request: Request, project: str, sha: str):
+    session = SessionLocal()
+    try:
+        runs = session.execute(
+            select(TestRun).where(
+                TestRun.project == project,
+                TestRun.commit_sha == sha,
+            ).order_by(TestRun.id.desc())
+        ).scalars().all()
+        return templates.TemplateResponse(request, "commit_detail.html", {
+            "project": project,
+            "sha": sha,
+            "runs": runs,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/compatibility", response_class=HTMLResponse)
 def compatibility_index(request: Request):
     session = SessionLocal()

@@ -30,13 +30,16 @@ _STATUS_ICONS = {
 }
 
 
-def format_note_line(runs, run_url_base=None):
+def format_note(runs, run_url_base=None):
     """
-    Format a list of TestRun objects (all for the same commit) into a compact
-    one-line note string.
+    Format a list of TestRun objects (all for the same commit) into a
+    multiline note string.
 
     Example output:
-        ✅ smoke PASS | fingerprint 46/48 PASS, 2 FAIL | https://ci.omnetpp.org/runs/42
+        ✅ build PASS | ✅ smoke PASS
+          ✅ build/release  PASS  1.2s  #5
+          ✅ smoke/release  PASS  4.3s  #6
+        http://85.17.192.192:8080/commits/mm1k/44fad47c
     """
     if not runs:
         return ""
@@ -44,12 +47,12 @@ def format_note_line(runs, run_url_base=None):
     if run_url_base is None:
         run_url_base = COORDINATOR_URL
 
-    # Group runs by test_type
+    # ── Summary line (grouped by test_type) ───────────────────────────
     by_type = defaultdict(list)
     for run in runs:
         by_type[run.test_type].append(run)
 
-    parts = []
+    summary_parts = []
     for test_type, type_runs in sorted(by_type.items()):
         passed = sum(1 for r in type_runs if r.status == TestRunStatus.passed)
         failed = sum(1 for r in type_runs if r.status == TestRunStatus.failed)
@@ -61,16 +64,12 @@ def format_note_line(runs, run_url_base=None):
             run = type_runs[0]
             icon = _STATUS_ICONS.get(run.status, "?")
             label = run.status.value.upper()
-            if run.mode:
-                parts.append(f"{icon} {test_type}/{run.mode} {label}")
-            else:
-                parts.append(f"{icon} {test_type} {label}")
+            summary_parts.append(f"{icon} {test_type} {label}")
         else:
-            # Summarize counts
             if passed == total:
-                parts.append(f"\u2705 {test_type} {total}/{total} PASS")
+                summary_parts.append(f"\u2705 {test_type} {total}/{total} PASS")
             elif failed + errored == total:
-                parts.append(f"\u274c {test_type} 0/{total} PASS")
+                summary_parts.append(f"\u274c {test_type} 0/{total} PASS")
             else:
                 segments = []
                 if passed:
@@ -82,14 +81,27 @@ def format_note_line(runs, run_url_base=None):
                 if pending:
                     segments.append(f"{pending} pending")
                 icon = "\u2705" if (failed + errored == 0 and pending == 0) else "\u274c"
-                parts.append(f"{icon} {test_type} {', '.join(segments)}")
+                summary_parts.append(f"{icon} {test_type} {', '.join(segments)}")
 
-    # Append URL to the first run (as entry point)
+    summary = " | ".join(summary_parts)
+
+    # ── Per-run detail lines ──────────────────────────────────────────
+    detail_lines = []
+    for run in sorted(runs, key=lambda r: r.id):
+        icon = _STATUS_ICONS.get(run.status, "?")
+        label = run.test_type
+        if run.mode:
+            label += f"/{run.mode}"
+        status = run.status.value.upper()
+        duration = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
+        detail_lines.append(f"  {icon} {label}  {status}  {duration}  #{run.id}")
+
+    # ── URL to commit page ────────────────────────────────────────────
     first_run = runs[0]
-    url = f"{run_url_base}/runs/{first_run.id}"
-    parts.append(url)
+    sha = first_run.commit_sha or first_run.github_commit_sha or ""
+    url = f"{run_url_base}/commits/{first_run.project}/{sha}"
 
-    return " | ".join(parts)
+    return "\n".join([summary] + detail_lines + [url])
 
 
 def get_notes_for_repo(session, owner, repo):
@@ -120,7 +132,7 @@ def get_notes_for_repo(session, owner, repo):
 
     results = []
     for sha, sha_runs in by_sha.items():
-        note = format_note_line(sha_runs)
+        note = format_note(sha_runs)
         if note:
             results.append({"sha": sha, "note": note})
 
@@ -194,7 +206,7 @@ def update_ci_note(project, commit_sha, session, opp_file=None):
     if not runs:
         return
 
-    note_content = format_note_line(runs)
+    note_content = format_note(runs)
     project_dir = _project_dir(project, opp_file)
     tmp_path = None
 

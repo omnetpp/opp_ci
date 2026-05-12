@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — {{ project }} @ {{ sha[:10] }}{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">
+    {{ project }} @ <code>{{ sha[:10] }}</code>
+</h2>
+
+<div class="card">
+    <table>
+        <tr><th style="width:150px;">Project</th><td><a href="/projects/{{ project }}">{{ project }}</a></td></tr>
+        <tr><th>Commit</th><td><code>{{ sha }}</code></td></tr>
+        <tr><th>Runs</th><td>{{ runs|length }}</td></tr>
+    </table>
+</div>
+
+<div class="card">
+    <h3 style="margin-bottom:0.75rem;">Test Runs</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Test</th>
+                <th>Mode</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Platform</th>
+                <th>Trigger</th>
+                <th>Finished</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in runs %}
+            <tr>
+                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td>{{ run.test_type }}</td>
+                <td>{{ run.mode or "-" }}</td>
+                <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
+                <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
+                <td>{{ run.platform_desc or "-" }}</td>
+                <td>{{ run.trigger }}</td>
+                <td>{{ run.finished_at.strftime("%Y-%m-%d %H:%M") if run.finished_at else "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="actions">
+    <a href="/runs" class="btn btn-secondary btn-sm">&larr; Back to runs</a>
+</div>
+{% endblock %}
