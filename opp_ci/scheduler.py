@@ -7,6 +7,7 @@ A TestMatrix config is a JSON dict with axes to cross-product:
     "modes": ["release", "debug"],
     "versions": ["inet-4.5", "inet-4.4"],
     "refs": ["master", "topic/my-feature"],
+    "deps": {"omnetpp": ["6.3.0", "6.2.0"]},
     "features": []
 }
 
@@ -35,6 +36,10 @@ Platform axes support two styles:
 
 Detection rule: if the _version key is present → structured mode (cross-product).
 If absent → combined mode (parse the strings).
+
+The optional 'deps' axis maps dependency names to lists of versions.
+The cross-product produces one job per combination of dep versions,
+each with a ``resolved_deps`` dict pinning each dep to one version.
 
 The scheduler expands this into individual jobs (one per combination).
 """
@@ -101,6 +106,30 @@ def _build_platform_desc(os_name, os_version, compiler_name, compiler_version):
     return " / ".join(parts) if parts else None
 
 
+def _resolve_deps_axis(config):
+    """
+    Resolve the deps axis from config.
+
+    Config format: {"deps": {"omnetpp": ["6.3.0", "6.2.0"], "inet": ["4.5"]}}
+
+    Returns a list of dicts, one per combination of dep versions.
+    Each dict maps dep name to a single version string.
+    If no deps axis is present, returns [None] (no pinning).
+    """
+    deps = config.get("deps")
+    if not deps:
+        return [None]
+
+    dep_names = sorted(deps.keys())
+    dep_version_lists = [deps[name] for name in dep_names]
+
+    combos = []
+    for combo in itertools.product(*dep_version_lists):
+        combos.append(dict(zip(dep_names, combo)))
+
+    return combos
+
+
 def _resolve_ref_range(project_name, ref_range):
     """Resolve a ref_range dict to a list of commit SHAs via the GitHub API."""
     from opp_ci.db.connection import SessionLocal
@@ -160,10 +189,11 @@ def expand_matrix(project, config):
         refs = [None]
     os_tuples = _resolve_os_axis(config)
     compiler_tuples = _resolve_compiler_axis(config)
+    dep_combos = _resolve_deps_axis(config)
 
     jobs = []
-    for version, ref, test_type, mode, (os_name, os_ver), (comp_name, comp_ver) in itertools.product(
-            versions, refs, test_types, modes, os_tuples, compiler_tuples):
+    for version, ref, test_type, mode, (os_name, os_ver), (comp_name, comp_ver), dep_pins in itertools.product(
+            versions, refs, test_types, modes, os_tuples, compiler_tuples, dep_combos):
         jobs.append({
             "project": version,
             "test_type": test_type,
@@ -174,6 +204,7 @@ def expand_matrix(project, config):
             "compiler": comp_name,
             "compiler_version": comp_ver,
             "platform_desc": _build_platform_desc(os_name, os_ver, comp_name, comp_ver),
+            "resolved_deps": dep_pins or None,
         })
 
     _logger.info("Expanded matrix for %s: %d jobs", project, len(jobs))

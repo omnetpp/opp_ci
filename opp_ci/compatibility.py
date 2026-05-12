@@ -190,16 +190,21 @@ def _collect_test_overlays(session, project_name, versions):
         if not matched:
             continue
 
-        vlabel, resolved_deps = matched
-        if not resolved_deps:
-            continue
+        vlabel, declared_deps = matched
 
-        # Overlay only when the exact dep version is deterministic
-        for dep_name, dep_val in resolved_deps.items():
-            if isinstance(dep_val, str):
-                overlays[(vlabel, dep_name, dep_val)].append(run.status)
-            elif isinstance(dep_val, list) and len(dep_val) == 1:
-                overlays[(vlabel, dep_name, dep_val[0])].append(run.status)
+        # Prefer the run's own resolved_deps (exact pins from the matrix
+        # deps axis).  Fall back to the version record's declared deps
+        # only when they pin a dep to exactly one version.
+        if run.resolved_deps:
+            for dep_name, dep_ver in run.resolved_deps.items():
+                if isinstance(dep_ver, str):
+                    overlays[(vlabel, dep_name, dep_ver)].append(run.status)
+        elif declared_deps:
+            for dep_name, dep_val in declared_deps.items():
+                if isinstance(dep_val, str):
+                    overlays[(vlabel, dep_name, dep_val)].append(run.status)
+                elif isinstance(dep_val, list) and len(dep_val) == 1:
+                    overlays[(vlabel, dep_name, dep_val[0])].append(run.status)
 
     return overlays
 

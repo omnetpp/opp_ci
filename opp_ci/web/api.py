@@ -202,6 +202,7 @@ async def submit_matrix_run(
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
                 platform_desc=job.get("platform_desc"),
+                resolved_deps=job.get("resolved_deps"),
                 matrix_id=matrix.id,
                 status=TestRunStatus.queued,
                 trigger="remote",
@@ -388,6 +389,7 @@ async def worker_poll(
                 "compiler": run.compiler,
                 "compiler_version": run.compiler_version,
                 "opp_file": run.opp_file,
+                "resolved_deps": run.resolved_deps,
             }
         }
     finally:

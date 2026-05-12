@@ -473,6 +473,20 @@ def list_projects():
         session.close()
 
 
+def _parse_deps_axis(deps_str):
+    """Parse 'omnetpp=6.3.0,6.2.0;inet=4.5' into {"omnetpp": ["6.3.0","6.2.0"], "inet": ["4.5"]}."""
+    result = {}
+    for part in deps_str.split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise click.ClickException(f"Invalid --deps format: expected 'name=ver1,ver2', got '{part}'")
+        name, versions = part.split("=", 1)
+        result[name.strip()] = [v.strip() for v in versions.split(",") if v.strip()]
+    return result
+
+
 def _parse_ref_range(ref_range_str):
     """Parse a 'base..head' string into a {"base": ..., "head": ...} dict."""
     if ".." not in ref_range_str:
@@ -496,9 +510,10 @@ def _parse_ref_range(ref_range_str):
 @click.option("--tests", "test_types", required=True, help="Comma-separated test types")
 @click.option("--refs", default=None, help="Comma-separated git refs to test (e.g. 'master,topic/my-feature')")
 @click.option("--ref-range", "ref_range", default=None, help="Git ref range (base..head) — enumerate commits via GitHub API")
+@click.option("--deps", default=None, help="Dependency versions axis (e.g. 'omnetpp=6.3.0,6.2.0;inet=4.5')")
 @click.option("--opp-file", "opp_file", default=None, help="Path to the project's .opp file (for opp_repl project discovery)")
 @click.option("--replace", is_flag=True, help="Replace existing matrix with the same name")
-def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs, ref_range, opp_file, replace):
+def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs, ref_range, deps, opp_file, replace):
     """Create a test matrix configuration.
 
     Platform axes support two styles:
@@ -533,6 +548,8 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
             config["compiler"] = [c.strip() for c in compilers.split(",")]
         if compiler_versions:
             config["compiler_version"] = [c.strip() for c in compiler_versions.split(",")]
+        if deps:
+            config["deps"] = _parse_deps_axis(deps)
         existing = session.execute(
             select(TestMatrix).where(TestMatrix.name == name)
         ).scalar_one_or_none()
@@ -558,6 +575,9 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
                 parts.append(f"@{job['git_ref']}")
             if job.get("platform_desc"):
                 parts.append(job["platform_desc"])
+            if job.get("resolved_deps"):
+                deps_str = " ".join(f"{k}={v}" for k, v in job["resolved_deps"].items())
+                parts.append(deps_str)
             click.echo(f"  {' × '.join(parts)}")
         if len(jobs) > 10:
             click.echo(f"  ... and {len(jobs) - 10} more")

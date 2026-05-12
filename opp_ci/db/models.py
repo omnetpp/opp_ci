@@ -159,6 +159,7 @@ class TestRun(Base):
     git_ref = Column(String, nullable=True)
     commit_sha = Column(String, nullable=True)
     version = Column(String, nullable=True)
+    resolved_deps = Column(JSON, nullable=True)
     opp_file = Column(String, nullable=True)
     matrix_id = Column(Integer, ForeignKey("test_matrices.id"), nullable=True)
     worker_id = Column(Integer, ForeignKey("workers.id"), nullable=True)
