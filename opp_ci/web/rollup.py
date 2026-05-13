@@ -94,9 +94,11 @@ def _split_to_cartesian(runs):
     if not varying_dims:
         return [_make_summary(runs)]
 
-    # Try splitting on each varying dimension; pick the best
+    # Try splitting on each varying dimension; pick the best.
+    # Prefer: most runs covered by Cartesian groups, then fewest groups.
     best_results = None
     best_cartesian_count = -1
+    best_group_count = float('inf')
 
     for split_dim in varying_dims:
         # Group runs by the value of split_dim
@@ -112,8 +114,10 @@ def _split_to_cartesian(runs):
                 cartesian_count += len(val_runs)
             results.append(s)
 
-        if cartesian_count > best_cartesian_count:
+        if (cartesian_count > best_cartesian_count or
+                (cartesian_count == best_cartesian_count and len(results) < best_group_count)):
             best_cartesian_count = cartesian_count
+            best_group_count = len(results)
             best_results = results
 
     # For any remaining non-Cartesian sub-groups, split to individual runs
