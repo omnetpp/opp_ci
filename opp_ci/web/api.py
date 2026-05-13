@@ -412,7 +412,7 @@ async def worker_report_result(
         if run.worker_id != worker_info["worker_id"]:
             raise HTTPException(status_code=403, detail="Run not assigned to this worker")
 
-        run.status = TestRunStatus.passed if req.result_code == "PASS" else TestRunStatus.failed
+        run.status = TestRunStatus.PASS if req.result_code == "PASS" else TestRunStatus.FAIL
         run.finished_at = datetime.datetime.utcnow()
         run.duration_seconds = req.duration_seconds
         if req.commit_sha:

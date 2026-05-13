@@ -22,9 +22,9 @@ from opp_ci.db.models import TestRun, TestRunStatus
 _logger = logging.getLogger(__name__)
 
 _STATUS_ICONS = {
-    TestRunStatus.passed: "\u2705",
-    TestRunStatus.failed: "\u274c",
-    TestRunStatus.error: "\u26a0\ufe0f",
+    TestRunStatus.PASS: "\u2705",
+    TestRunStatus.FAIL: "\u274c",
+    TestRunStatus.ERROR: "\u26a0\ufe0f",
     TestRunStatus.running: "\u23f3",
     TestRunStatus.queued: "\u23f3",
 }
@@ -49,9 +49,9 @@ def format_note(runs, run_url_base=None):
 
     # ── Summary line ────────────────────────────────────────────────
     total_runs = len(runs)
-    total_passed = sum(1 for r in runs if r.status == TestRunStatus.passed)
-    total_failed = sum(1 for r in runs if r.status == TestRunStatus.failed)
-    total_errored = sum(1 for r in runs if r.status == TestRunStatus.error)
+    total_passed = sum(1 for r in runs if r.status == TestRunStatus.PASS)
+    total_failed = sum(1 for r in runs if r.status == TestRunStatus.FAIL)
+    total_errored = sum(1 for r in runs if r.status == TestRunStatus.ERROR)
 
     if total_passed == total_runs:
         summary = f"\u2705 PASS {total_passed}/{total_runs}"
@@ -94,7 +94,7 @@ def get_notes_for_repo(session, owner, repo):
     Returns a list of dicts: [{"sha": <commit_sha>, "note": <formatted_line>}]
     Only includes commits that have at least one finished run (PASS/FAIL/ERROR).
     """
-    finished = (TestRunStatus.passed, TestRunStatus.failed, TestRunStatus.error)
+    finished = (TestRunStatus.PASS, TestRunStatus.FAIL, TestRunStatus.ERROR)
 
     runs = session.execute(
         select(TestRun).where(

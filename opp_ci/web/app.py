@@ -87,9 +87,9 @@ def dashboard(request: Request):
         ).scalars().all()
 
         total_runs = session.execute(select(func.count(TestRun.id))).scalar()
-        passed = session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.passed)).scalar()
-        failed = session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.failed)).scalar()
-        errored = session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.error)).scalar()
+        passed = session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.PASS)).scalar()
+        failed = session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.FAIL)).scalar()
+        errored = session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.ERROR)).scalar()
 
         return templates.TemplateResponse(request, "dashboard.html", {
             "recent_runs": recent_runs,
@@ -549,7 +549,7 @@ def run_cancel(run_id: int):
             select(TestRun).where(TestRun.id == run_id)
         ).scalar_one_or_none()
         if run and run.status in (TestRunStatus.queued, TestRunStatus.running):
-            run.status = TestRunStatus.error
+            run.status = TestRunStatus.ERROR
             run.finished_at = datetime.datetime.utcnow()
             session.add(TestResult(
                 test_run_id=run.id,
@@ -603,7 +603,7 @@ def projects_list(request: Request):
             last_run = session.execute(
                 select(TestRun).where(
                     TestRun.project == p.name,
-                    TestRun.status.in_([TestRunStatus.passed, TestRunStatus.failed, TestRunStatus.error]),
+                    TestRun.status.in_([TestRunStatus.PASS, TestRunStatus.FAIL, TestRunStatus.ERROR]),
                 ).order_by(TestRun.id.desc()).limit(1)
             ).scalar_one_or_none()
             last_status[p.name] = last_run.status.value if last_run else None
@@ -637,8 +637,8 @@ def project_detail(request: Request, name: str):
 
         # Stats
         total = session.execute(select(func.count(TestRun.id)).where(TestRun.project == name)).scalar()
-        passed = session.execute(select(func.count(TestRun.id)).where(TestRun.project == name, TestRun.status == TestRunStatus.passed)).scalar()
-        failed = session.execute(select(func.count(TestRun.id)).where(TestRun.project == name, TestRun.status == TestRunStatus.failed)).scalar()
+        passed = session.execute(select(func.count(TestRun.id)).where(TestRun.project == name, TestRun.status == TestRunStatus.PASS)).scalar()
+        failed = session.execute(select(func.count(TestRun.id)).where(TestRun.project == name, TestRun.status == TestRunStatus.FAIL)).scalar()
 
         return templates.TemplateResponse(request, "project_detail.html", {
             "project": project,
@@ -1056,9 +1056,9 @@ def admin_page(request: Request):
             "compilers": session.execute(select(func.count(Compiler.id))).scalar(),
             "matrices": session.execute(select(func.count(TestMatrix.id))).scalar(),
             "runs_total": session.execute(select(func.count(TestRun.id))).scalar(),
-            "runs_passed": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.passed)).scalar(),
-            "runs_failed": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.failed)).scalar(),
-            "runs_error": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.error)).scalar(),
+            "runs_passed": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.PASS)).scalar(),
+            "runs_failed": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.FAIL)).scalar(),
+            "runs_error": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.ERROR)).scalar(),
             "runs_running": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.running)).scalar(),
             "runs_queued": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.queued)).scalar(),
             "results": session.execute(select(func.count(TestResult.id))).scalar(),
@@ -1072,7 +1072,7 @@ def admin_page(request: Request):
         ).scalars().all()
 
         recent_errors = session.execute(
-            select(TestRun).where(TestRun.status == TestRunStatus.error).order_by(TestRun.id.desc()).limit(10)
+            select(TestRun).where(TestRun.status == TestRunStatus.ERROR).order_by(TestRun.id.desc()).limit(10)
         ).scalars().all()
 
         tokens = session.execute(

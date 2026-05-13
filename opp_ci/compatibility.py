@@ -160,7 +160,7 @@ def _collect_test_overlays(session, project_name, versions):
         if v.label:
             project_keys.add(v.label)
 
-    finished = (TestRunStatus.passed, TestRunStatus.failed, TestRunStatus.error)
+    finished = (TestRunStatus.PASS, TestRunStatus.FAIL, TestRunStatus.ERROR)
     runs = session.execute(
         select(TestRun).where(
             TestRun.project.in_(project_keys),
@@ -218,9 +218,9 @@ def _aggregate_status(statuses):
     - If any failed -> "FAIL"
     - If any error (and no fail) -> "ERROR"
     """
-    has_fail = any(s == TestRunStatus.failed for s in statuses)
-    has_error = any(s == TestRunStatus.error for s in statuses)
-    all_pass = all(s == TestRunStatus.passed for s in statuses)
+    has_fail = any(s == TestRunStatus.FAIL for s in statuses)
+    has_error = any(s == TestRunStatus.ERROR for s in statuses)
+    all_pass = all(s == TestRunStatus.PASS for s in statuses)
 
     if all_pass:
         return "PASS"

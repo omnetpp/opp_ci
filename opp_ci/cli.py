@@ -108,7 +108,7 @@ def run_cmd(ctx, project, test_types, git_ref, mode, pins, force, skip_install):
             try:
                 outcome = run_test(project, test_type, git_ref=git_ref, mode=mode)
             except Exception as e:
-                test_run.status = TestRunStatus.error
+                test_run.status = TestRunStatus.ERROR
                 test_run.finished_at = datetime.datetime.utcnow()
                 session.add(TestResult(
                     test_run_id=test_run.id,
@@ -119,7 +119,7 @@ def run_cmd(ctx, project, test_types, git_ref, mode, pins, force, skip_install):
                 click.echo(f"  ERROR: {e}")
                 continue
 
-            test_run.status = TestRunStatus.passed if outcome["result_code"] == "PASS" else TestRunStatus.failed
+            test_run.status = TestRunStatus.PASS if outcome["result_code"] == "PASS" else TestRunStatus.FAIL
             test_run.finished_at = datetime.datetime.utcnow()
             test_run.duration_seconds = outcome["duration_seconds"]
             test_run.commit_sha = outcome.get("commit_sha")
@@ -455,7 +455,7 @@ def list_projects():
             last_run = session.execute(
                 select(TestRun)
                 .where(TestRun.project == p.name)
-                .where(TestRun.status.in_([TestRunStatus.passed, TestRunStatus.failed, TestRunStatus.error]))
+                .where(TestRun.status.in_([TestRunStatus.PASS, TestRunStatus.FAIL, TestRunStatus.ERROR]))
                 .order_by(TestRun.id.desc())
                 .limit(1)
             ).scalar_one_or_none()
@@ -691,7 +691,7 @@ def run_matrix(matrix_name, force, skip_install):
             try:
                 outcome = run_test(job["project"], job["test_type"], git_ref=job.get("git_ref"), opp_file=matrix.opp_file, mode=job.get("mode"))
             except Exception as e:
-                test_run.status = TestRunStatus.error
+                test_run.status = TestRunStatus.ERROR
                 test_run.finished_at = datetime.datetime.utcnow()
                 session.add(TestResult(
                     test_run_id=test_run.id,
@@ -703,7 +703,7 @@ def run_matrix(matrix_name, force, skip_install):
                 errors += 1
                 continue
 
-            test_run.status = TestRunStatus.passed if outcome["result_code"] == "PASS" else TestRunStatus.failed
+            test_run.status = TestRunStatus.PASS if outcome["result_code"] == "PASS" else TestRunStatus.FAIL
             test_run.finished_at = datetime.datetime.utcnow()
             test_run.duration_seconds = outcome["duration_seconds"]
             test_run.commit_sha = outcome.get("commit_sha")

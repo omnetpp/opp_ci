@@ -33,7 +33,7 @@ def find_existing_run(session, *, project, test_type, mode=None, git_ref=None,
             TestRun.os_version == os_version,
             TestRun.compiler == compiler,
             TestRun.compiler_version == compiler_version,
-            TestRun.status.in_([TestRunStatus.passed, TestRunStatus.failed, TestRunStatus.error]),
+            TestRun.status.in_([TestRunStatus.PASS, TestRunStatus.FAIL, TestRunStatus.ERROR]),
         )
         .order_by(TestRun.id.desc())
         .limit(1)
