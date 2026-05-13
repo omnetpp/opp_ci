@@ -31,7 +31,15 @@
 <table>
     <thead>
         <tr>
-            <th>Group</th>
+            <th>Project</th>
+            <th>Test</th>
+            <th>Mode</th>
+            <th>OS</th>
+            <th>OS ver.</th>
+            <th>Compiler</th>
+            <th>Comp. ver.</th>
+            <th>Ref</th>
+            <th>×</th>
             <th>Total</th>
             <th>Status</th>
         </tr>
@@ -39,22 +47,31 @@
     <tbody>
         {% for s in summaries %}
         <tr>
+            {% for dim in ["project", "test_type", "mode", "os", "os_version", "compiler", "compiler_version", "git_ref"] %}
             <td>
-                <a href="/results?{% for k, v in s.dimensions.items() if v %}{{ k }}={{ v }}&{% endfor %}view=summary" style="text-decoration:none; color:inherit;">
-                    <strong>{{ s.key }}</strong>
-                </a>
+                {% set val = s.columns[dim] %}
+                {% if val is none %}
+                {% elif val is string %}
+                    {% if dim == "git_ref" and val|length > 12 %}<code title="{{ val }}">{{ val[:8] }}</code>{% else %}{{ val }}{% endif %}
+                {% else %}
+                    {% if dim == "git_ref" %}
+                    <span class="dim-set">{{"{"}}{{ val|length }} refs{{"}"}}</span>
+                    {% else %}
+                    <span class="dim-set">{{"{"}}{{ val | join(", ") }}{{"}"}}</span>
+                    {% endif %}
+                {% endif %}
             </td>
+            {% endfor %}
+            <td>{% if s.cartesian %}●{% else %}○{% endif %}</td>
             <td>{{ s.total }}</td>
             <td>
                 {% if s.uniform %}
                     <span class="badge badge-{{ s.uniform_status }}">{{ s.uniform_status }}</span>
-                    (all {{ s.total }})
                 {% else %}
                     {% for status, count in s.breakdown.items() %}
                         <span class="badge badge-{{ status }}">{{ count }} {{ status }}</span>
                     {% endfor %}
                 {% endif %}
-                <a href="/results?{% for k, v in s.dimensions.items() if v %}{{ k }}={{ v }}&{% endfor %}view=detailed" style="font-size:0.75rem; margin-left:0.3rem;">[details]</a>
             </td>
         </tr>
         {% endfor %}
@@ -109,7 +126,7 @@
 <p style="margin-top:1rem; font-size:0.8rem; color:var(--muted);">
     Showing {{ runs|length }} result(s).
     {% if view == "summary" %}
-    Hierarchical roll-up: project &rarr; test_type &rarr; mode &rarr; os &rarr; os_version &rarr; compiler &rarr; compiler_version. Groups expand only when statuses differ.
+    ● = full cross-product, ○ = incomplete.
     {% endif %}
 </p>
 {% endblock %}
