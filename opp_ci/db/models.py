@@ -139,9 +139,9 @@ class AutoTestRule(Base):
 class TestRunStatus(enum.Enum):
     queued = "queued"
     running = "running"
-    passed = "passed"
-    failed = "failed"
-    error = "error"
+    passed = "PASS"
+    failed = "FAIL"
+    error = "ERROR"
 
 
 class TestRun(Base):

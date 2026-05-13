@@ -76,9 +76,9 @@ class GitHubClient:
     def set_status_from_run(self, owner, repo, sha, run_id, run_status, target_url=None):
         """Set commit status based on a TestRun's final status."""
         state_map = {
-            "passed": "success",
-            "failed": "failure",
-            "error": "error",
+            "PASS": "success",
+            "FAIL": "failure",
+            "ERROR": "error",
             "running": "pending",
             "queued": "pending",
         }

@@ -12,9 +12,9 @@
     <input type="text" name="git_ref" placeholder="Git ref" value="{{ filter_git_ref }}">
     <select name="status">
         <option value="">All statuses</option>
-        <option value="passed" {{ "selected" if filter_status == "passed" }}>Passed</option>
-        <option value="failed" {{ "selected" if filter_status == "failed" }}>Failed</option>
-        <option value="error" {{ "selected" if filter_status == "error" }}>Error</option>
+        <option value="PASS" {{ "selected" if filter_status == "PASS" }}>PASS</option>
+        <option value="FAIL" {{ "selected" if filter_status == "FAIL" }}>FAIL</option>
+        <option value="ERROR" {{ "selected" if filter_status == "ERROR" }}>ERROR</option>
         <option value="running" {{ "selected" if filter_status == "running" }}>Running</option>
     </select>
     <button type="submit">Filter</button>

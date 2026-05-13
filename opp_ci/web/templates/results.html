@@ -9,9 +9,9 @@
     <input type="text" name="mode" placeholder="Mode" value="{{ filter_mode }}">
     <select name="status">
         <option value="">All statuses</option>
-        <option value="passed" {{ "selected" if filter_status == "passed" }}>Passed</option>
-        <option value="failed" {{ "selected" if filter_status == "failed" }}>Failed</option>
-        <option value="error" {{ "selected" if filter_status == "error" }}>Error</option>
+        <option value="PASS" {{ "selected" if filter_status == "PASS" }}>PASS</option>
+        <option value="FAIL" {{ "selected" if filter_status == "FAIL" }}>FAIL</option>
+        <option value="ERROR" {{ "selected" if filter_status == "ERROR" }}>ERROR</option>
     </select>
     <select name="view">
         <option value="summary" {{ "selected" if view == "summary" }}>Summary</option>

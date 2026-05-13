@@ -32,7 +32,7 @@ def get_compatibility_matrix(session, project_name):
             "rows": [
                 {
                     "version": "inet-4.5",
-                    "cells": {"6.1": "passed", "6.0.3": "compatible"},
+                    "cells": {"6.1": "PASS", "6.0.3": "compatible"},
                 },
             ],
             "dep_versions": ["6.1", "6.0.3"],
@@ -40,9 +40,9 @@ def get_compatibility_matrix(session, project_name):
 
     Cell values:
         "compatible" - declared compatible by opp_env, not yet tested
-        "passed"     - tested and all runs passed
-        "failed"     - tested and at least one run failed
-        "error"      - tested, at least one errored (none failed)
+        "PASS"       - tested and all runs passed
+        "FAIL"       - tested and at least one run failed
+        "ERROR"      - tested, at least one errored (none failed)
         "mixed"      - tested with mixed results
         None         - not declared compatible
     """
@@ -214,18 +214,18 @@ def _aggregate_status(statuses):
     Aggregate a list of TestRunStatus values into a single summary string.
 
     Rules:
-    - If all passed -> "passed"
-    - If any failed -> "failed"
-    - If any error (and no fail) -> "error"
+    - If all passed -> "PASS"
+    - If any failed -> "FAIL"
+    - If any error (and no fail) -> "ERROR"
     """
     has_fail = any(s == TestRunStatus.failed for s in statuses)
     has_error = any(s == TestRunStatus.error for s in statuses)
     all_pass = all(s == TestRunStatus.passed for s in statuses)
 
     if all_pass:
-        return "passed"
+        return "PASS"
     elif has_fail:
-        return "failed"
+        return "FAIL"
     elif has_error:
-        return "error"
+        return "ERROR"
     return "mixed"

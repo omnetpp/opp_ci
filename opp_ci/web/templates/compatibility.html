@@ -32,12 +32,12 @@
                 {% for dv in matrix.dep_versions %}
                 {% set cell = row.cells[dv] %}
                 <td>
-                    {% if cell == "passed" %}
-                    <span class="cm-dot cm-passed" title="passed">&#x25cf;</span>
-                    {% elif cell == "failed" %}
-                    <span class="cm-dot cm-failed" title="failed">&#x25cf;</span>
-                    {% elif cell == "error" %}
-                    <span class="cm-dot cm-error" title="error">&#x25cf;</span>
+                    {% if cell == "PASS" %}
+                    <span class="cm-dot cm-passed" title="PASS">&#x25cf;</span>
+                    {% elif cell == "FAIL" %}
+                    <span class="cm-dot cm-failed" title="FAIL">&#x25cf;</span>
+                    {% elif cell == "ERROR" %}
+                    <span class="cm-dot cm-error" title="ERROR">&#x25cf;</span>
                     {% elif cell == "mixed" %}
                     <span class="cm-dot cm-error" title="mixed">&#x25d2;</span>
                     {% elif cell == "compatible" %}
@@ -58,9 +58,9 @@
 {% if matrices %}
 <p style="font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem;">
     <span class="cm-dot cm-compatible">&#x25cf;</span> compatible &nbsp;
-    <span class="cm-dot cm-passed">&#x25cf;</span> passed &nbsp;
-    <span class="cm-dot cm-failed">&#x25cf;</span> failed &nbsp;
-    <span class="cm-dot cm-error">&#x25cf;</span> error &nbsp;
+    <span class="cm-dot cm-passed">&#x25cf;</span> PASS &nbsp;
+    <span class="cm-dot cm-failed">&#x25cf;</span> FAIL &nbsp;
+    <span class="cm-dot cm-error">&#x25cf;</span> ERROR &nbsp;
     <span class="cm-dot cm-none">·</span> n/a
 </p>
 {% endif %}

@@ -174,7 +174,7 @@ def serve(host, port):
 @click.option("--project", default=None, help="Filter by project")
 @click.option("--ref", "git_ref", default=None, help="Filter by git ref")
 @click.option("--test", "test_type", default=None, help="Filter by test type")
-@click.option("--status", default=None, help="Filter by status (passed/failed/error)")
+@click.option("--status", default=None, help="Filter by status (PASS/FAIL/ERROR)")
 @click.option("--limit", default=20, help="Max rows to show")
 def list_runs(project, git_ref, test_type, status, limit):
     """List test runs."""
@@ -278,7 +278,7 @@ def delete_run(run_id, yes):
 @click.option("--project", default=None, help="Filter by project")
 @click.option("--ref", "git_ref", default=None, help="Filter by git ref")
 @click.option("--test", "test_type", default=None, help="Filter by test type")
-@click.option("--status", default=None, help="Filter by status (passed/failed/error/running/queued)")
+@click.option("--status", default=None, help="Filter by status (PASS/FAIL/ERROR/running/queued)")
 @click.option("--before", "before_date", default=None, help="Delete runs started before this date (YYYY-MM-DD)")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
 def delete_runs(project, git_ref, test_type, status, before_date, yes):
@@ -328,7 +328,7 @@ def delete_runs(project, git_ref, test_type, status, before_date, yes):
 @main.command("show-results")
 @click.option("--project", default=None, help="Filter by project")
 @click.option("--test", "test_type", default=None, help="Filter by test type")
-@click.option("--status", default=None, help="Filter by status (passed/failed/error)")
+@click.option("--status", default=None, help="Filter by status (PASS/FAIL/ERROR)")
 @click.option("--limit", default=20, help="Max rows to show")
 def show_results(project, test_type, status, limit):
     """Show test run results (alias for list-runs)."""

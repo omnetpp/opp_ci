@@ -115,7 +115,7 @@ opp_ci list-runs [--project PROJECT] [--test TEST_TYPE] [--status STATUS] [--lim
 |---|---|---|
 | `--project` | all | Filter by project name |
 | `--test` | all | Filter by test type |
-| `--status` | all | Filter by status: `passed`, `failed`, `error` |
+| `--status` | all | Filter by status: `PASS`, `FAIL`, `ERROR` |
 | `--limit` | 20 | Maximum number of rows to display |
 
 ### `opp_ci show-run`

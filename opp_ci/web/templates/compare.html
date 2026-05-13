@@ -45,22 +45,22 @@
             <tr style="{{ 'background:#fff3cd;' if row.changed else '' }}">
                 <td>{{ row.test_key }}</td>
                 <td>
-                    {% if row.left_status == "PASS" or row.left_status == "passed" %}
+                    {% if row.left_status == "PASS" %}
                     <span class="badge badge-passed">{{ row.left_status }}</span>
-                    {% elif row.left_status == "FAIL" or row.left_status == "failed" %}
+                    {% elif row.left_status == "FAIL" %}
                     <span class="badge badge-failed">{{ row.left_status }}</span>
-                    {% elif row.left_status == "ERROR" or row.left_status == "error" %}
+                    {% elif row.left_status == "ERROR" %}
                     <span class="badge badge-error">{{ row.left_status }}</span>
                     {% else %}
                     {{ row.left_status }}
                     {% endif %}
                 </td>
                 <td>
-                    {% if row.right_status == "PASS" or row.right_status == "passed" %}
+                    {% if row.right_status == "PASS" %}
                     <span class="badge badge-passed">{{ row.right_status }}</span>
-                    {% elif row.right_status == "FAIL" or row.right_status == "failed" %}
+                    {% elif row.right_status == "FAIL" %}
                     <span class="badge badge-failed">{{ row.right_status }}</span>
-                    {% elif row.right_status == "ERROR" or row.right_status == "error" %}
+                    {% elif row.right_status == "ERROR" %}
                     <span class="badge badge-error">{{ row.right_status }}</span>
                     {% else %}
                     {{ row.right_status }}

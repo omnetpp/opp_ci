@@ -33,7 +33,7 @@ def rollup_runs(runs):
             "key": "inet / smoke",
             "dimensions": {"project": "inet", "test_type": "smoke"},
             "total": 6,
-            "breakdown": {"passed": 3, "failed": 3},
+            "breakdown": {"PASS": 3, "FAIL": 3},
             "uniform": False,
             "uniform_status": None,
             "run_ids": [1, 2, 3, 4, 5, 6],

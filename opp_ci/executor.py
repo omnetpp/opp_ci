@@ -19,7 +19,7 @@ def find_existing_run(session, *, project, test_type, mode=None, git_ref=None,
     """Return an existing TestRun with matching params and terminal status, or None.
 
     Matches on (project, test_type, mode, git_ref, os, os_version, compiler,
-    compiler_version).  Only runs that have completed (passed, failed, or error)
+    compiler_version).  Only runs that have completed (PASS, FAIL, or ERROR)
     are considered — queued/running runs do not block a new submission.
     """
     query = (

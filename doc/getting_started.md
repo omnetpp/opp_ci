@@ -42,7 +42,7 @@ This will:
 
 ```bash
 opp_ci list-runs
-opp_ci list-runs --project fifo --status failed
+opp_ci list-runs --project fifo --status FAIL
 opp_ci show-run 1
 ```
 

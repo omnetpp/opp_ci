@@ -9,7 +9,7 @@ Usage:
     ci = OppCiClient(url="https://ci.omnetpp.org/api", token="...")
     run = ci.submit_run(project="inet", test_type="smoke")
     ci.get_run(run["id"])
-    results = ci.list_runs(project="inet", status="failed")
+    results = ci.list_runs(project="inet", status="FAIL")
 """
 
 import logging

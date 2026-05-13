@@ -77,7 +77,7 @@ Named matrix configuration. Stores expansion config (versions, modes, platforms,
 A single invocation of a test. Tracks:
 - Project, test type, build mode
 - Platform: os, os_version, compiler, compiler_version
-- Status (queued/running/passed/failed/error), timing, trigger source
+- Status (queued/running/PASS/FAIL/ERROR), timing, trigger source
 - Optional link to parent matrix
 
 ### TestResult
@@ -101,7 +101,7 @@ opp_ci run --project fifo --test smoke --skip-install
     │     ├── parse last line as JSON → details
     │     └── strip JSON line from stdout
     ├── create TestResult record (result_code, stdout, stderr, details)
-    └── update TestRun (status=passed/failed, duration)
+    └── update TestRun (status=PASS/FAIL, duration)
 ```
 
 ### Matrix run

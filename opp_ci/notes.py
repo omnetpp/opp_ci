@@ -75,7 +75,7 @@ def format_note(runs, run_url_base=None):
         label = run.test_type
         if run.mode:
             label += f"/{run.mode}"
-        status = run.status.value.upper()
+        status = run.status.value
         duration = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
         detail_lines.append(f"  {icon} {label}  {status}  {duration}  #{run.id}")
 
@@ -92,7 +92,7 @@ def get_notes_for_repo(session, owner, repo):
     Return all pending notes for a given GitHub repo.
 
     Returns a list of dicts: [{"sha": <commit_sha>, "note": <formatted_line>}]
-    Only includes commits that have at least one finished run (passed/failed/error).
+    Only includes commits that have at least one finished run (PASS/FAIL/ERROR).
     """
     finished = (TestRunStatus.passed, TestRunStatus.failed, TestRunStatus.error)
 

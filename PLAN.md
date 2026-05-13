@@ -217,7 +217,7 @@ Results are displayed in **two switchable formats**:
 - [x] Build mode axis: debug, release
 - [x] Version matrix: test a project against multiple dependency versions
 - [ ] Feature axis: INET feature flags
-- [x] Sequential local execution; jobs stored in DB (status: queued → running → passed/failed/error)
+- [x] Sequential local execution; jobs stored in DB (status: queued → running → PASS/FAIL/ERROR)
 - [x] CLI: `opp_ci run-matrix --matrix <name>`, `opp_ci create-matrix`, `opp_ci list-matrices`, `opp_ci seed-matrices`
 - [x] CLI `create-matrix` args: `--name`, `--project`, `--project-versions`, `--builds`, `--os`, `--os-version`, `--compiler`, `--compiler-version`, `--tests`
 - [x] Structured JSON test results from `opp_repl` (`--result-file`) parsed and stored in `TestResult.details`; human-readable text kept in stdout
@@ -468,7 +468,7 @@ Push to a tested repo → opp_ci runs tests → triggers note sync → developer
 - **Worker** — name (unique), token (auto-generated), tags (JSON list of capabilities), concurrency, status (online/offline/busy), last_heartbeat, current_job_count
 - **ApiToken** — token (auto-generated), name, role (readonly/submitter/worker/admin), enabled, created_at
 - **AutoTestRule** — project FK, rule_type (branch/pr/tag), pattern (glob), matrix FK, enabled
-- **TestRun** — matrix entry, worker FK, git_ref, version, timestamp, status (queued/running/passed/failed/error), trigger (manual/webhook/schedule/remote)
+- **TestRun** — matrix entry, worker FK, git_ref, version, timestamp, status (queued/running/PASS/FAIL/ERROR), trigger (manual/webhook/schedule/remote)
 - **TestResult** — run FK, test_type (smoke/fingerprint/statistical/…), test_name, result_code, duration, stdout/stderr (raw with ANSI codes), details (JSON: structured per-test results from opp_repl)
 
 Migrations via Alembic (`opp_ci/db/migrations/`). Connection pool in `opp_ci/db/connection.py`, config from env vars.
@@ -661,7 +661,7 @@ ci.submit_matrix(matrix_name="inet-full")
 ci.get_run(run["id"])
 
 # Query results
-results = ci.list_runs(project="inet", status="failed")
+results = ci.list_runs(project="inet", status="FAIL")
 
 # Admin operations
 ci.register_worker(name="builder-1", tags=["linux", "amd64"], concurrency=4)

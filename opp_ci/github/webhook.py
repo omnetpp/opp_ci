@@ -287,9 +287,9 @@ def format_results_comment(runs):
         return "**opp_ci**: No test results yet."
 
     total = len(runs)
-    passed = sum(1 for r in runs if r.status.value == "passed")
-    failed = sum(1 for r in runs if r.status.value == "failed")
-    errors = sum(1 for r in runs if r.status.value == "error")
+    passed = sum(1 for r in runs if r.status.value == "PASS")
+    failed = sum(1 for r in runs if r.status.value == "FAIL")
+    errors = sum(1 for r in runs if r.status.value == "ERROR")
     running = sum(1 for r in runs if r.status.value in ("running", "queued"))
 
     if failed == 0 and errors == 0 and running == 0:
@@ -302,7 +302,7 @@ def format_results_comment(runs):
     lines = [header, "", "| Test | Project | Status | Duration |", "|---|---|---|---|"]
     for run in runs:
         status_emoji = {
-            "passed": "✅", "failed": "❌", "error": "⚠️",
+            "PASS": "✅", "FAIL": "❌", "ERROR": "⚠️",
             "running": "🔄", "queued": "⏳",
         }.get(run.status.value, "❓")
         dur = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
