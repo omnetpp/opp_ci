@@ -33,7 +33,7 @@ def rollup_runs(runs, cartesian_only=False):
     3. For each merged row, classify dimensions and check Cartesian.
 
     If cartesian_only is True, non-Cartesian groups are split into
-    individual single-run rows instead of being merged.
+    maximal Cartesian sub-groups instead of being kept as one row.
 
     Returns a list of dicts (one per summary row):
         {
@@ -192,19 +192,9 @@ def _find_merge_groups(run_dims):
     """
     Partition runs into merge groups.
 
-    Two runs can be in the same group if:
-    - They have the same status (already guaranteed by caller)
-    - The group remains describable: each dimension is either constant
-      (same value for all runs) or varying (different values exist)
-
-    We use a greedy approach: start with all runs as one group, then split
-    on dimensions where splitting reduces ambiguity.  Actually simpler:
-    try to merge everything, check if it makes sense, if not split by the
-    dimension with most distinct values first.
-
-    For now: group by all-constant-dims signature (dims where a run's value
-    matches the most common value pattern).  Pragmatic: group by the tuple
-    of values on dimensions that have only ONE distinct value across all runs.
+    Finds which dimensions are constant across ALL runs, then groups by
+    the tuple of values on those constant dimensions.  Runs that share
+    the same constant-dimension values end up in one merged group.
     """
     if not run_dims:
         return []
