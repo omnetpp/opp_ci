@@ -58,7 +58,12 @@
                     {% if dim == "git_ref" and val|length > 12 %}<code title="{{ val }}">{{ val[:8] }}</code>{% else %}{{ val }}{% endif %}
                 {% else %}
                     {% if dim == "git_ref" %}
-                    <span class="dim-set">{{"{"}}{{ val|length }} refs{{"}"}}</span>
+                    {% set short_refs = val | map('truncate', 8, end='') | join(", ") %}
+                    {% if short_refs|length > 30 %}
+                    <span class="dim-set" title="{{ val | join(', ') }}">{{"{"}}{{ val|length }} refs{{"}"}}</span>
+                    {% else %}
+                    <span class="dim-set"><code>{{"{"}}{{ short_refs }}{{"}"}}</code></span>
+                    {% endif %}
                     {% else %}
                     <span class="dim-set">{{"{"}}{{ val | join(", ") }}{{"}"}}</span>
                     {% endif %}
