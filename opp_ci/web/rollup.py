@@ -67,10 +67,10 @@ def rollup_runs(runs, cartesian_only=False):
                 if s["cartesian"] or s["total"] == 1:
                     summaries.append(s)
                 else:
-                    # Split non-Cartesian groups into individual runs
-                    for run_id in s["run_ids"]:
-                        run = next(r for r in status_runs if r.id == run_id)
-                        summaries.append(_make_summary([run]))
+                    # Try to find Cartesian sub-groups by splitting on
+                    # a varying dimension
+                    group_runs = [r for r in status_runs if r.id in s["run_ids"]]
+                    summaries.extend(_split_to_cartesian(group_runs))
         else:
             summaries.extend(merged)
 
@@ -78,6 +78,63 @@ def rollup_runs(runs, cartesian_only=False):
     # first run id for stable ordering
     summaries.sort(key=lambda s: (s["uniform_status"] or "", s["run_ids"][0]))
     return summaries
+
+
+def _split_to_cartesian(runs):
+    """
+    Split a non-Cartesian group into maximal Cartesian sub-groups.
+
+    Tries splitting on each varying dimension.  Picks the split that
+    produces the most Cartesian sub-groups (by total runs covered).
+    Recurses on any remaining non-Cartesian pieces.
+    """
+    run_dims = [(r, {d: getattr(r, d, None) for d in ALL_DIMENSIONS}) for r in runs]
+    _, varying_dims = _classify_dims(run_dims)
+
+    if not varying_dims:
+        return [_make_summary(runs)]
+
+    # Try splitting on each varying dimension; pick the best
+    best_results = None
+    best_cartesian_count = -1
+
+    for split_dim in varying_dims:
+        # Group runs by the value of split_dim
+        by_val = defaultdict(list)
+        for run in runs:
+            by_val[getattr(run, split_dim, None)].append(run)
+
+        results = []
+        cartesian_count = 0
+        for val_runs in by_val.values():
+            s = _make_summary(val_runs)
+            if s["cartesian"]:
+                cartesian_count += len(val_runs)
+            results.append(s)
+
+        if cartesian_count > best_cartesian_count:
+            best_cartesian_count = cartesian_count
+            best_results = results
+
+    # For any remaining non-Cartesian sub-groups, split to individual runs
+    final = []
+    for s in best_results:
+        if s["cartesian"] or s["total"] == 1:
+            final.append(s)
+        else:
+            # Recurse one more level or fall back to individual runs
+            group_runs = [r for r in runs if r.id in s["run_ids"]]
+            sub_run_dims = [(r, {d: getattr(r, d, None) for d in ALL_DIMENSIONS}) for r in group_runs]
+            _, sub_varying = _classify_dims(sub_run_dims)
+            if len(sub_varying) > 1:
+                final.extend(_split_to_cartesian(group_runs))
+            else:
+                # Single varying dim but not Cartesian (shouldn't happen),
+                # fall back to individual rows
+                for r in group_runs:
+                    final.append(_make_summary([r]))
+
+    return final
 
 
 def _merge_uniform_group(runs):
