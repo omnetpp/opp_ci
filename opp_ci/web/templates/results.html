@@ -48,8 +48,7 @@
     </thead>
     <tbody>
         {% for s in summaries %}
-        {% set filter_params %}{% for k, v in s.columns.items() if v is string %}{{ k }}={{ v }}&{% endfor %}{% endset %}
-        <tr style="cursor:pointer;" onclick="window.location='/results?{{ filter_params }}view=detailed'">
+        <tr style="cursor:pointer;" onclick="window.location='/results?run_ids={{ s.run_ids | join(&quot;,&quot;) }}&amp;view=detailed'">
             {% for dim in ["project", "test_type", "mode", "os", "os_version", "compiler", "compiler_version", "git_ref"] %}
             <td>
                 {% set val = s.columns[dim] %}

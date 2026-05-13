@@ -169,6 +169,7 @@ def results_page(
     compiler: str = Query(default=None),
     compiler_version: str = Query(default=None),
     status: str = Query(default=None),
+    run_ids: str = Query(default=None),
     view: str = Query(default="summary"),
     cartesian_only: bool = Query(default=False),
     limit: int = Query(default=200),
@@ -178,6 +179,9 @@ def results_page(
     session = SessionLocal()
     try:
         query = select(TestRun).order_by(TestRun.id.desc()).limit(limit)
+        if run_ids:
+            ids = [int(x) for x in run_ids.split(",") if x.strip().isdigit()]
+            query = query.where(TestRun.id.in_(ids))
         if project:
             query = query.where(TestRun.project == project)
         if test_type:
