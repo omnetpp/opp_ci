@@ -74,9 +74,22 @@ def rollup_runs(runs, cartesian_only=False):
         else:
             summaries.extend(merged)
 
-    # Sort: non-uniform first (shouldn't exist, but defensive), then by
-    # first run id for stable ordering
-    summaries.sort(key=lambda s: (s["uniform_status"] or "", s["run_ids"][0]))
+    # Sort by dimension columns left-to-right (constant values before
+    # sets before nulls), then by status, then by first run id.
+    def _sort_key(s):
+        cols = s["columns"]
+        dim_keys = []
+        for dim in ALL_DIMENSIONS:
+            val = cols.get(dim)
+            if val is None:
+                dim_keys.append((2, ""))
+            elif isinstance(val, str):
+                dim_keys.append((0, val))
+            else:
+                dim_keys.append((1, val[0] if val else ""))
+        return (*dim_keys, s["uniform_status"] or "", s["run_ids"][0])
+
+    summaries.sort(key=_sort_key)
     return summaries
 
 
