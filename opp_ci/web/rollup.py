@@ -21,7 +21,7 @@ ALL_DIMENSIONS = [
 ]
 
 
-def rollup_runs(runs, cartesian_only=False):
+def rollup_runs(runs, grouping="any"):
     """
     Produce a rolled-up summary of test runs.
 
@@ -32,8 +32,10 @@ def rollup_runs(runs, cartesian_only=False):
        vs varying) AND can be merged into one row.
     3. For each merged row, classify dimensions and check Cartesian.
 
-    If cartesian_only is True, non-Cartesian groups are split into
-    maximal Cartesian sub-groups instead of being kept as one row.
+    grouping controls merge behavior:
+        "any"       - merge freely (default)
+        "cartesian" - split non-Cartesian groups into maximal Cartesian sub-groups
+        "none"      - no grouping, each run is its own row
 
     Returns a list of dicts (one per summary row):
         {
@@ -59,20 +61,26 @@ def rollup_runs(runs, cartesian_only=False):
     for run in runs:
         by_status[run.status.value].append(run)
 
+    cartesian_only = (grouping == "cartesian")
+
     summaries = []
     for status, status_runs in by_status.items():
-        merged = _merge_uniform_group(status_runs)
-        if cartesian_only:
-            for s in merged:
-                if s["cartesian"] or s["total"] == 1:
-                    summaries.append(s)
-                else:
-                    # Try to find Cartesian sub-groups by splitting on
-                    # a varying dimension
-                    group_runs = [r for r in status_runs if r.id in s["run_ids"]]
-                    summaries.extend(_split_to_cartesian(group_runs))
+        if grouping == "none":
+            for run in status_runs:
+                summaries.append(_make_summary([run]))
         else:
-            summaries.extend(merged)
+            merged = _merge_uniform_group(status_runs)
+            if cartesian_only:
+                for s in merged:
+                    if s["cartesian"] or s["total"] == 1:
+                        summaries.append(s)
+                    else:
+                        # Try to find Cartesian sub-groups by splitting on
+                        # a varying dimension
+                        group_runs = [r for r in status_runs if r.id in s["run_ids"]]
+                        summaries.extend(_split_to_cartesian(group_runs))
+            else:
+                summaries.extend(merged)
 
     # Sort by dimension columns left-to-right (constant values before
     # sets before nulls), then by status, then by first run id.

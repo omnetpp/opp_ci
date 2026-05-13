@@ -171,7 +171,7 @@ def results_page(
     status: str = Query(default=None),
     run_ids: str = Query(default=None),
     view: str = Query(default="summary"),
-    cartesian_only: bool = Query(default=False),
+    grouping: str = Query(default="any"),
     limit: int = Query(default=200),
 ):
     from opp_ci.web.rollup import rollup_runs
@@ -201,13 +201,13 @@ def results_page(
 
         runs = session.execute(query).scalars().all()
 
-        summaries = rollup_runs(runs, cartesian_only=cartesian_only) if view == "summary" else None
+        summaries = rollup_runs(runs, grouping=grouping) if view == "summary" else None
 
         return templates.TemplateResponse(request, "results.html", {
             "runs": runs,
             "summaries": summaries,
             "view": view,
-            "cartesian_only": cartesian_only,
+            "grouping": grouping,
             "filter_project": project or "",
             "filter_test_type": test_type or "",
             "filter_mode": mode or "",

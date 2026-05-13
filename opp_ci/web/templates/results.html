@@ -22,9 +22,14 @@
     <input type="text" name="os_version" placeholder="OS version" value="{{ filter_os_version }}">
     <input type="text" name="compiler" placeholder="Compiler" value="{{ filter_compiler }}">
     <input type="text" name="compiler_version" placeholder="Compiler ver." value="{{ filter_compiler_version }}">
-    <button type="submit">Filter</button>
     <br style="flex-basis:100%; height:0;">
-    <label style="font-size:0.85rem; cursor:pointer;"><input type="checkbox" name="cartesian_only" value="true" {{ "checked" if cartesian_only }} onchange="this.form.submit()"> ● only</label>
+    <button type="submit">Filter</button>
+    <label style="font-size:0.85rem;">Grouping:</label>
+    <select name="grouping" style="font-size:0.85rem;" onchange="this.form.submit()">
+        <option value="any" {{ "selected" if grouping == "any" }}>○</option>
+        <option value="cartesian" {{ "selected" if grouping == "cartesian" }}>●</option>
+        <option value="none" {{ "selected" if grouping == "none" }}>-</option>
+    </select>
 </form>
 
 {% if view == "summary" %}
@@ -48,7 +53,7 @@
     </thead>
     <tbody>
         {% for s in summaries %}
-        <tr style="cursor:pointer;" onclick="window.location='/results?run_ids={{ s.run_ids | join(&quot;,&quot;) }}&amp;view=detailed'">
+        <tr style="cursor:pointer;" onclick="window.location='/results?run_ids={{ s.run_ids | join(',') }}&amp;view=detailed'">
             {% for dim in ["project", "test_type", "mode", "os", "os_version", "compiler", "compiler_version", "git_ref"] %}
             <td>
                 {% set val = s.columns[dim] %}
