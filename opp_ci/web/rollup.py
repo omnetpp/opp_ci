@@ -21,7 +21,7 @@ ALL_DIMENSIONS = [
 ]
 
 
-def rollup_runs(runs):
+def rollup_runs(runs, cartesian_only=False):
     """
     Produce a rolled-up summary of test runs.
 
@@ -31,6 +31,9 @@ def rollup_runs(runs):
        share the same "signature" (the set of dimensions that are constant
        vs varying) AND can be merged into one row.
     3. For each merged row, classify dimensions and check Cartesian.
+
+    If cartesian_only is True, non-Cartesian groups are split into
+    individual single-run rows instead of being merged.
 
     Returns a list of dicts (one per summary row):
         {
@@ -58,7 +61,18 @@ def rollup_runs(runs):
 
     summaries = []
     for status, status_runs in by_status.items():
-        summaries.extend(_merge_uniform_group(status_runs))
+        merged = _merge_uniform_group(status_runs)
+        if cartesian_only:
+            for s in merged:
+                if s["cartesian"] or s["total"] == 1:
+                    summaries.append(s)
+                else:
+                    # Split non-Cartesian groups into individual runs
+                    for run_id in s["run_ids"]:
+                        run = next(r for r in status_runs if r.id == run_id)
+                        summaries.append(_make_summary([run]))
+        else:
+            summaries.extend(merged)
 
     # Sort: non-uniform first (shouldn't exist, but defensive), then by
     # first run id for stable ordering

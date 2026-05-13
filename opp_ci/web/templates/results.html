@@ -22,6 +22,7 @@
     <input type="text" name="os_version" placeholder="OS version" value="{{ filter_os_version }}">
     <input type="text" name="compiler" placeholder="Compiler" value="{{ filter_compiler }}">
     <input type="text" name="compiler_version" placeholder="Compiler ver." value="{{ filter_compiler_version }}">
+    <label style="font-size:0.85rem; cursor:pointer;"><input type="checkbox" name="cartesian_only" value="true" {{ "checked" if cartesian_only }}> ● only</label>
     <button type="submit">Filter</button>
 </form>
 
