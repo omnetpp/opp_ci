@@ -439,15 +439,15 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
 
 
 def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version):
-    """Build the image if it's missing locally; no-op if already present.
+    """Invoke 'docker build' for the image so docker's layer cache picks up
+    any changes — new pinned SHAs from an upstream push, edits to the
+    Dockerfile template, a different compiler package, etc.
 
-    Called from _run_test_in_docker right before 'docker run', so the worker
-    can pick up a job for a freshly-defined matrix without a preflight build.
-    First job per image pays the build cost; subsequent jobs hit the cache.
+    When nothing relevant has changed, every layer hits the cache and the
+    call finishes in a couple of seconds. When something has changed, only
+    the affected layers (and downstream ones) actually rebuild.
     """
-    if _image_exists_locally(tag):
-        return
-    _logger.info("Image %s not found locally — building before running test", tag)
+    _logger.info("Ensuring image %s is up to date", tag)
     build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version)
 
 
