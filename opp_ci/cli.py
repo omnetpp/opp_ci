@@ -963,7 +963,7 @@ def _detect_capability_tags():
 
     if shutil.which("docker"):
         try:
-            out = sp.run(["docker", "version"], capture_output=True, timeout=5)
+            out = sp.run(["docker", "--version"], capture_output=True, timeout=5)
             if out.returncode == 0:
                 tags.append("docker")
         except (OSError, sp.SubprocessError):
