@@ -9,7 +9,7 @@
         <tr><th style="width:150px;">Name</th><td>{{ matrix.name }}</td></tr>
         <tr><th>Project</th><td><a href="/projects/{{ matrix.project }}">{{ matrix.project }}</a></td></tr>
         <tr><th>opp file</th><td>{{ matrix.opp_file or "-" }}</td></tr>
-        <tr><th>Test Types</th><td>{{ matrix.config.get("test_types", [])|join(", ") }}</td></tr>
+        <tr><th>Tests</th><td>{{ matrix.config.get("test_types", [])|join(", ") }}</td></tr>
         <tr><th>Modes</th><td>{{ matrix.config.get("modes", [])|join(", ") }}</td></tr>
         <tr><th>Versions</th><td>{{ matrix.config.get("versions", [])|join(", ") }}</td></tr>
         {% set ref_range = matrix.config.get("ref_range") %}

@@ -75,7 +75,7 @@ A matrix is a named cross-product over independent axes:
 | Isolation | none, docker |
 | Toolchain | none, nix |
 | Features | INET feature flags |
-| Test types | build, fingerprint, statistical, chart, feature, module, unit, packet, queueing, protocol, validation, smoke, sanitizer, speed |
+| Tests | build, fingerprint, statistical, chart, feature, module, unit, packet, queueing, protocol, validation, smoke, sanitizer, speed |
 
 Not every combination is tested — the matrix config defines which axes
 to cross. Matrix expansion happens in `opp_ci/scheduler.py:expand_matrix`.
@@ -103,7 +103,7 @@ opp_ci addresses all of these:
 - **Decoupled versions** — any omnetpp × inet (× …) combination via
   matrix configs.
 - **One environment, reused** — `opp_env` builds an environment once
-  per (project-version, dependency-versions) tuple; multiple test types
+  per (project-version, dependency-versions) tuple; multiple tests
   share it.
 - **Cross-version matrices** — test INET against multiple OMNeT++
   versions in a single matrix.

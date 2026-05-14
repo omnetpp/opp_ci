@@ -40,7 +40,7 @@ can be independently constrained:
 | OS / OS version | Ubuntu 24.04, Fedora 41, macOS 15 |
 | Compiler / compiler version | gcc-14, clang-18 |
 | Build mode | release, debug |
-| Test type | smoke, fingerprint, statistical, … |
+| Test | smoke, fingerprint, statistical, … |
 | Result status | PASS, FAIL, ERROR, SKIP |
 
 Dimensions left unset act as wildcards.
@@ -53,7 +53,7 @@ Two display modes:
    - Uniform-status groups collapse to one line.
    - Mixed-status groups show a breakdown ("18 PASS, 2 FAIL") with a
      drill-down link.
-   - Grouping is hierarchical: project+version → test type → remaining
+   - Grouping is hierarchical: project+version → test → remaining
      dimensions.
 
 Example summary view for "INET 4.6" with no other filters fixed:

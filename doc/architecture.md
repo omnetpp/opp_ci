@@ -68,7 +68,7 @@ opp_ci/
 | **Version** | project FK, opp_env_version, git_ref (branch/tag/SHA), label, `resolved_dependencies` JSON (e.g. `{"omnetpp": "6.1"}`) |
 | **OS** | name, version, arch |
 | **Compiler** | name, version |
-| **TestMatrix** | project FK, JSON config of versions × platforms × test types |
+| **TestMatrix** | project FK, JSON config of versions × platforms × tests |
 | **Worker** | name (unique), token, tags JSON, concurrency, status, last_heartbeat, current_job_count |
 | **ApiToken** | token, name, role (readonly/submitter/worker/admin), enabled, created_at |
 | **AutoTestRule** | project FK, rule_type (branch/pr/tag), pattern (glob), matrix FK, enabled |
@@ -109,7 +109,7 @@ named matrix. The axes are cross-producted:
 - OS × OS version
 - Compiler × compiler version
 - Isolation × toolchain
-- Test types
+- Tests
 
 Platform axes accept two styles: combined strings (`Ubuntu 24.04`,
 auto-parsed) or structured (`--os Ubuntu,Fedora --os-version 24.04,41`,

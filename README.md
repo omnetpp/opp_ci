@@ -11,7 +11,7 @@ and feature matrices.
 - **Version matrices** — test across multiple OMNeT++/INET/model versions with automatic dependency resolution
 - **Platform matrices** — OS, compiler type/version, build mode (debug/release)
 - **Reproducible builds** — `opp_env` provides isolated Nix environments
-- **Test execution** — delegates to `opp_repl` for smoke, fingerprint, statistical, feature, and other test types
+- **Test execution** — delegates to `opp_repl` for smoke, fingerprint, statistical, feature, and other tests
 - **Result storage** — PostgreSQL database for structured querying and historical tracking
 - **GitHub integration** — webhook-driven testing on push/PR, status checks
 - **Web dashboard** — browse results, start tests, compare runs

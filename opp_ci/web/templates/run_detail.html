@@ -9,7 +9,7 @@
 <div class="card">
     <table>
         <tr><th style="width:150px;">Project</th><td>{{ run.project }}</td></tr>
-        <tr><th>Test type</th><td>{{ run.test_type }}</td></tr>
+        <tr><th>Test</th><td>{{ run.test_type }}</td></tr>
         <tr><th>Mode</th><td>{{ run.mode or "-" }}</td></tr>
         <tr><th>Version</th><td>{{ run.version or "-" }}</td></tr>
         <tr><th>Resolved deps</th><td>{% if run.resolved_deps %}{% for k, v in run.resolved_deps.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}-{% endif %}</td></tr>

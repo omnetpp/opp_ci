@@ -27,7 +27,7 @@ For full per-command flags, run `opp_ci <command> --help`.
 | `opp_ci run` | Run a single test for a project. Required: `--project`, `--test`. Common: `--ref`, `--mode`, `--isolation {none\|docker}`, `--toolchain {none\|nix}`, `--os`, `--os-version`, `--compiler`, `--compiler-version`, `--pin <dep>=<ver>` (repeatable), `--force`, `--skip-install`. |
 | `opp_ci run-matrix --matrix NAME` | Expand a named matrix and run all jobs. Options: `--force`, `--skip-install`. |
 
-Supported test types (comma-separated for `--test`): `smoke`,
+Supported tests (comma-separated for `--test`): `smoke`,
 `fingerprint`, `statistical`, `feature`, `speed`, `sanitizer`, `chart`,
 `release`, `build`, `all`.
 
