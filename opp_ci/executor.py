@@ -390,6 +390,7 @@ def _resolve_remote_head(url, ref="HEAD"):
 
 _OPP_CI_REPO = "https://github.com/omnetpp/opp_ci.git"
 _OPP_REPL_REPO = "https://github.com/omnetpp/opp_repl.git"
+_OPP_ENV_REPO = "https://github.com/omnetpp/opp_env.git"
 
 
 def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version,
@@ -433,6 +434,7 @@ def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version
         ctx["compiler_package"] = pkg_map.get(key, f"{ctx['compiler']}-{ctx['compiler_version']}")
         ctx["opp_ci_ref"] = _resolve_remote_head(_OPP_CI_REPO) or "HEAD"
         ctx["opp_repl_ref"] = _resolve_remote_head(_OPP_REPL_REPO) or "HEAD"
+        ctx["opp_env_ref"] = _resolve_remote_head(_OPP_ENV_REPO) or "HEAD"
     return template.render(**ctx)
 
 

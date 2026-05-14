@@ -26,13 +26,13 @@ RUN dnf -y install \
 RUN false
 {%- endif %}
 
-# opp_ci + opp_repl aren't on PyPI — install straight from GitHub. The SHA
-# is resolved at image-build time on the host via 'git ls-remote' so a new
-# push invalidates this layer's docker cache. opp_env IS on PyPI.
+# All three packages come from GitHub HEAD (PyPI's opp_env catalogue can lag
+# behind — e.g. PyPI didn't know omnetpp-6.4.0 yet when this was written).
+# SHAs are resolved at image-build time so a push invalidates the layer cache.
 RUN python3 -m venv /opt/opp_ci_venv \
  && /opt/opp_ci_venv/bin/pip install --upgrade pip \
  && /opt/opp_ci_venv/bin/pip install \
-        opp_env \
+        git+https://github.com/omnetpp/opp_env.git@{{ opp_env_ref }} \
         git+https://github.com/omnetpp/opp_repl.git@{{ opp_repl_ref }} \
         git+https://github.com/omnetpp/opp_ci.git@{{ opp_ci_ref }}
 ENV PATH=/opt/opp_ci_venv/bin:$PATH
