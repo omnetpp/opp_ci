@@ -1362,39 +1362,6 @@ def image_group():
     """Build and manage the opp-ci-runner Docker images."""
 
 
-def _render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version):
-    """Render the appropriate Dockerfile.{host,nix}.j2 template into a string."""
-    import importlib.resources
-    try:
-        from jinja2 import Environment, FileSystemLoader
-    except ImportError as e:
-        raise click.ClickException(
-            "Jinja2 is required for 'opp_ci image build' — pip install jinja2"
-        ) from e
-    import yaml
-
-    docker_dir = importlib.resources.files("opp_ci").joinpath("docker")
-    env = Environment(loader=FileSystemLoader(str(docker_dir)),
-                      keep_trailing_newline=True)
-
-    template_name = f"Dockerfile.{toolchain}.j2"
-    template = env.get_template(template_name)
-
-    ctx = {
-        "os": os_name.lower(),
-        "os_version": os_version,
-        "compiler": compiler.lower() if compiler else None,
-        "compiler_version": compiler_version,
-    }
-    if toolchain == "host":
-        pkgs_path = docker_dir.joinpath("packages.yml")
-        with open(pkgs_path) as f:
-            pkg_map = yaml.safe_load(f) or {}
-        key = f"{ctx['os']}+{ctx['compiler']}-{ctx['compiler_version']}"
-        ctx["compiler_package"] = pkg_map.get(key, f"{ctx['compiler']}-{ctx['compiler_version']}")
-    return template.render(**ctx)
-
-
 @image_group.command("build")
 @click.option("--os", "os_name", required=True, help="Base OS name, e.g. 'ubuntu' or 'fedora'")
 @click.option("--os-version", required=True, help="OS version tag, e.g. '26.04'")
@@ -1405,8 +1372,7 @@ def _render_dockerfile(toolchain, os_name, os_version, compiler, compiler_versio
 @click.option("--push", is_flag=True, help="Push the built image to the configured registry")
 def image_build(os_name, os_version, compiler, compiler_version, toolchain, push):
     """Build one opp-ci-runner image for a (toolchain, os, compiler) combination."""
-    import subprocess
-    import tempfile
+    from opp_ci.executor import build_runner_image
 
     if toolchain == "host" and (not compiler or not compiler_version):
         raise click.ClickException("--compiler and --compiler-version are required when --toolchain=host")
@@ -1417,25 +1383,11 @@ def image_build(os_name, os_version, compiler, compiler_version, toolchain, push
     else:
         tag = f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}"
 
-    dockerfile_content = _render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version)
-
-    with tempfile.TemporaryDirectory() as tmp:
-        dockerfile_path = f"{tmp}/Dockerfile"
-        with open(dockerfile_path, "w") as f:
-            f.write(dockerfile_content)
-        click.echo(f"Building {tag} (Dockerfile written to {dockerfile_path})")
-        result = subprocess.run(
-            ["docker", "build", "-t", tag, "-f", dockerfile_path, tmp],
-        )
-        if result.returncode != 0:
-            raise click.ClickException(f"docker build failed (exit {result.returncode})")
-
-    click.echo(f"Built {tag}")
-    if push:
-        result = subprocess.run(["docker", "push", tag])
-        if result.returncode != 0:
-            raise click.ClickException(f"docker push failed (exit {result.returncode})")
-        click.echo(f"Pushed {tag}")
+    try:
+        build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version, push=push)
+    except RuntimeError as e:
+        raise click.ClickException(str(e))
+    click.echo(f"Built {tag}{' and pushed' if push else ''}")
 
 
 @image_group.command("build-matrix")

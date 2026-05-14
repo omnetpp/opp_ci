@@ -336,6 +336,82 @@ def _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version
     return f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}"
 
 
+def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version):
+    """Render opp_ci/docker/Dockerfile.{toolchain}.j2 into a string."""
+    import importlib.resources
+    from jinja2 import Environment, FileSystemLoader
+    import yaml
+
+    docker_dir = importlib.resources.files("opp_ci").joinpath("docker")
+    jenv = Environment(loader=FileSystemLoader(str(docker_dir)),
+                       keep_trailing_newline=True)
+    template = jenv.get_template(f"Dockerfile.{toolchain}.j2")
+    ctx = {
+        "os": os_name.lower(),
+        "os_version": os_version,
+        "compiler": compiler.lower() if compiler else None,
+        "compiler_version": compiler_version,
+    }
+    if toolchain == "host":
+        pkgs_path = docker_dir.joinpath("packages.yml")
+        with open(pkgs_path) as f:
+            pkg_map = yaml.safe_load(f) or {}
+        key = f"{ctx['os']}+{ctx['compiler']}-{ctx['compiler_version']}"
+        ctx["compiler_package"] = pkg_map.get(key, f"{ctx['compiler']}-{ctx['compiler_version']}")
+    return template.render(**ctx)
+
+
+def _image_exists_locally(tag):
+    """True iff 'docker image inspect <tag>' succeeds (image is in the local store)."""
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", tag],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "docker binary not found on PATH — install Docker on this worker, "
+            "or untag the worker as docker-capable."
+        )
+    return result.returncode == 0
+
+
+def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version, *, push=False):
+    """Build (and optionally push) one opp-ci-runner image.
+
+    Used by both 'opp_ci image build' and the worker's on-demand image build.
+    Raises RuntimeError on docker build / push failure.
+    """
+    dockerfile_content = render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version)
+    with tempfile.TemporaryDirectory() as tmp:
+        dockerfile_path = os.path.join(tmp, "Dockerfile")
+        with open(dockerfile_path, "w") as f:
+            f.write(dockerfile_content)
+        result = run_external(
+            ["docker", "build", "-t", tag, "-f", dockerfile_path, tmp],
+            label=f"docker build {tag}",
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"docker build {tag} failed (exit {result.returncode})")
+    if push:
+        result = run_external(["docker", "push", tag], label=f"docker push {tag}")
+        if result.returncode != 0:
+            raise RuntimeError(f"docker push {tag} failed (exit {result.returncode})")
+
+
+def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version):
+    """Build the image if it's missing locally; no-op if already present.
+
+    Called from _run_test_in_docker right before 'docker run', so the worker
+    can pick up a job for a freshly-defined matrix without a preflight build.
+    First job per image pays the build cost; subsequent jobs hit the cache.
+    """
+    if _image_exists_locally(tag):
+        return
+    _logger.info("Image %s not found locally — building before running test", tag)
+    build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version)
+
+
 def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
     """Run a test inside a Docker container.
 
@@ -356,6 +432,7 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
     compiler_version = kwargs.get("compiler_version")
 
     image = _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version)
+    _ensure_runner_image(image, toolchain, os_name, os_version, compiler, compiler_version)
 
     project_dir = _resolve_project_dir(project, opp_file)
     worktree_path = None
