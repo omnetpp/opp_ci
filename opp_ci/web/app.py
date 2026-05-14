@@ -413,6 +413,8 @@ def run_new_submit(
     git_ref: str = Form(default=""),
     os: str = Form(default="", alias="os"),
     compiler: str = Form(default=""),
+    isolation: str = Form(default="none"),
+    toolchain: str = Form(default="none"),
 ):
     import datetime
     session = SessionLocal()
@@ -424,6 +426,8 @@ def run_new_submit(
             git_ref=git_ref or None,
             os=os or None,
             compiler=compiler or None,
+            isolation=isolation or None,
+            toolchain=toolchain or None,
             status=TestRunStatus.queued,
             trigger="web",
             started_at=datetime.datetime.utcnow(),

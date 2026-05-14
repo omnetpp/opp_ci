@@ -39,6 +39,10 @@ web = [
 client = [
     "requests",
 ]
+docker = [
+    "jinja2",
+    "pyyaml",
+]
 
 [project.urls]
 Repository = "https://github.com/omnetpp/opp_ci"
@@ -49,6 +53,9 @@ opp_ci = "opp_ci.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["opp_ci*"]
+
+[tool.setuptools.package-data]
+opp_ci = ["docker/*.j2", "docker/*.yml"]
 
 [tool.setuptools_scm]
 write_to = "opp_ci/_version.py"

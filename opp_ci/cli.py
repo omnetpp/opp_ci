@@ -45,11 +45,18 @@ def reset_db(yes):
 @click.option("--test", "test_types", required=True, help="Test type(s), comma-separated (e.g. smoke,fingerprint)")
 @click.option("--ref", "git_ref", default=None, help="Git branch, tag, or commit to test (e.g. master, topic/my-feature)")
 @click.option("--mode", default=None, type=click.Choice(["debug", "release"]), help="Build mode (debug or release)")
+@click.option("--isolation", default="none", type=click.Choice(["none", "docker"]), help="Run on the host (none) or inside a Docker container")
+@click.option("--toolchain", default="none", type=click.Choice(["none", "nix"]), help="Use the host's installed toolchain (none) or opp_env/Nix")
+@click.option("--os", "os_name", default=None, help="OS name for the run (required for isolation=docker, e.g. 'Ubuntu')")
+@click.option("--os-version", default=None, help="OS version (e.g. '26.04'); required for isolation=docker")
+@click.option("--compiler", default=None, help="Compiler name (e.g. 'clang'); required for isolation=docker + toolchain=none")
+@click.option("--compiler-version", default=None, help="Compiler version (e.g. '22')")
 @click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
 @click.option("--force", is_flag=True, help="Re-run even if an identical run already exists")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
 @click.pass_context
-def run_cmd(ctx, project, test_types, git_ref, mode, pins, force, skip_install):
+def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
+            os_name, os_version, compiler, compiler_version, pins, force, skip_install):
     """Run test(s) for a project and store the results."""
     if ctx.obj.get("remote"):
         _run_remote(project, test_types, git_ref)
@@ -75,7 +82,8 @@ def run_cmd(ctx, project, test_types, git_ref, mode, pins, force, skip_install):
         # Install once for all test types
         if not skip_install:
             try:
-                install_project(project, git_ref=git_ref)
+                install_project(project, git_ref=git_ref,
+                                isolation=isolation, toolchain=toolchain)
             except RuntimeError as e:
                 click.echo(f"ERROR during install: {e}")
                 return
@@ -86,7 +94,12 @@ def run_cmd(ctx, project, test_types, git_ref, mode, pins, force, skip_install):
                 continue
 
             if not force:
-                existing = find_existing_run(session, project=project, test_type=test_type, mode=mode, git_ref=git_ref)
+                existing = find_existing_run(
+                    session, project=project, test_type=test_type, mode=mode, git_ref=git_ref,
+                    os=os_name, os_version=os_version,
+                    compiler=compiler, compiler_version=compiler_version,
+                    isolation=isolation, toolchain=toolchain,
+                )
                 if existing:
                     click.echo(f"Skipping {project} / {test_type}: already has run #{existing.id} ({existing.status.value})")
                     continue
@@ -96,6 +109,12 @@ def run_cmd(ctx, project, test_types, git_ref, mode, pins, force, skip_install):
                 test_type=test_type,
                 mode=mode,
                 git_ref=git_ref,
+                os=os_name,
+                os_version=os_version,
+                compiler=compiler,
+                compiler_version=compiler_version,
+                isolation=isolation,
+                toolchain=toolchain,
                 status=TestRunStatus.running,
                 started_at=datetime.datetime.utcnow(),
             )
@@ -106,7 +125,12 @@ def run_cmd(ctx, project, test_types, git_ref, mode, pins, force, skip_install):
             click.echo(f"Test run #{test_run.id}: {desc} / {test_type}")
 
             try:
-                outcome = run_test(project, test_type, git_ref=git_ref, mode=mode)
+                outcome = run_test(
+                    project, test_type, git_ref=git_ref, mode=mode,
+                    isolation=isolation, toolchain=toolchain,
+                    os=os_name, os_version=os_version,
+                    compiler=compiler, compiler_version=compiler_version,
+                )
             except Exception as e:
                 test_run.status = TestRunStatus.ERROR
                 test_run.finished_at = datetime.datetime.utcnow()
@@ -511,9 +535,11 @@ def _parse_ref_range(ref_range_str):
 @click.option("--refs", default=None, help="Comma-separated git refs to test (e.g. 'master,topic/my-feature')")
 @click.option("--ref-range", "ref_range", default=None, help="Git ref range (base..head) — enumerate commits via GitHub API")
 @click.option("--deps", default=None, help="Dependency versions axis (e.g. 'omnetpp=6.3.0,6.2.0;inet=4.5')")
+@click.option("--isolation", default=None, help="Comma-separated isolation values: 'none' and/or 'docker' (cross-product axis)")
+@click.option("--toolchain", default=None, help="Comma-separated toolchain values: 'none' and/or 'nix' (cross-product axis)")
 @click.option("--opp-file", "opp_file", default=None, help="Path to the project's .opp file (for opp_repl project discovery)")
 @click.option("--replace", is_flag=True, help="Replace existing matrix with the same name")
-def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs, ref_range, deps, opp_file, replace):
+def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs, ref_range, deps, isolation, toolchain, opp_file, replace):
     """Create a test matrix configuration.
 
     Platform axes support two styles:
@@ -550,6 +576,10 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
             config["compiler_version"] = [c.strip() for c in compiler_versions.split(",")]
         if deps:
             config["deps"] = _parse_deps_axis(deps)
+        if isolation:
+            config["isolation"] = [v.strip() for v in isolation.split(",")]
+        if toolchain:
+            config["toolchain"] = [v.strip() for v in toolchain.split(",")]
         existing = session.execute(
             select(TestMatrix).where(TestMatrix.name == name)
         ).scalar_one_or_none()
@@ -629,14 +659,21 @@ def run_matrix(matrix_name, force, skip_install):
         jobs = expand_matrix(matrix.project, matrix.config)
         click.echo(f"Running matrix '{matrix_name}': {len(jobs)} jobs")
 
-        # Install once per unique project+ref combination
+        # Install once per unique project+ref+toolchain+isolation combination.
+        # install_project is a no-op unless isolation=none and toolchain=nix,
+        # so non-nix jobs cheaply pass through.
         if not skip_install:
             installed = set()
             for job in jobs:
-                install_key = (job["project"], job.get("git_ref"))
+                install_key = (job["project"], job.get("git_ref"),
+                               job.get("isolation"), job.get("toolchain"))
                 if install_key not in installed:
                     try:
-                        install_project(job["project"], git_ref=job.get("git_ref"))
+                        install_project(
+                            job["project"], git_ref=job.get("git_ref"),
+                            isolation=job.get("isolation") or "none",
+                            toolchain=job.get("toolchain") or "none",
+                        )
                         installed.add(install_key)
                     except RuntimeError as e:
                         click.echo(f"ERROR installing {job['project']}: {e}")
@@ -658,6 +695,8 @@ def run_matrix(matrix_name, force, skip_install):
                     os_version=job.get("os_version"),
                     compiler=job.get("compiler"),
                     compiler_version=job.get("compiler_version"),
+                    isolation=job.get("isolation"),
+                    toolchain=job.get("toolchain"),
                 )
                 if existing:
                     click.echo(f"  [{i}/{len(jobs)}] SKIP (run #{existing.id} {existing.status.value})")
@@ -673,6 +712,8 @@ def run_matrix(matrix_name, force, skip_install):
                 os_version=job.get("os_version"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
+                isolation=job.get("isolation"),
+                toolchain=job.get("toolchain"),
                 platform_desc=job.get("platform_desc"),
                 matrix_id=matrix.id,
                 status=TestRunStatus.running,
@@ -689,7 +730,14 @@ def run_matrix(matrix_name, force, skip_install):
             click.echo(f"  [{i}/{len(jobs)}] {' × '.join(parts)}", nl=False)
 
             try:
-                outcome = run_test(job["project"], job["test_type"], git_ref=job.get("git_ref"), opp_file=matrix.opp_file, mode=job.get("mode"))
+                outcome = run_test(
+                    job["project"], job["test_type"],
+                    git_ref=job.get("git_ref"), opp_file=matrix.opp_file,
+                    mode=job.get("mode"),
+                    isolation=job.get("isolation"), toolchain=job.get("toolchain"),
+                    os=job.get("os"), os_version=job.get("os_version"),
+                    compiler=job.get("compiler"), compiler_version=job.get("compiler_version"),
+                )
             except Exception as e:
                 test_run.status = TestRunStatus.ERROR
                 test_run.finished_at = datetime.datetime.utcnow()
@@ -1172,5 +1220,170 @@ def rule_test_webhook(project, ref, event_type, sha, pr_number):
             result = handle_webhook_event("pull_request", payload)
 
         click.echo(f"Result: {result}")
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------------------
+# Internal commands — invoked by container entrypoints, not end users.
+# ---------------------------------------------------------------------------
+
+@main.group("internal", hidden=True)
+def internal_group():
+    """Internal commands used by container entrypoints."""
+
+
+@internal_group.command("run-direct")
+@click.option("--project", required=True)
+@click.option("--test-type", required=True)
+@click.option("--mode", default=None)
+@click.option("--opp-file", default=None)
+@click.option("--git-ref", default=None)
+def internal_run_direct(project, test_type, mode, opp_file, git_ref):
+    """Run a single test by calling opp_repl directly (host-toolchain path).
+
+    Designed to be invoked inside an opp-ci-runner image whose base OS already
+    has the requested compiler installed. Writes the test's stdout/stderr to
+    this process's stdout/stderr and exits 0 on PASS, 1 otherwise.
+    """
+    from opp_ci.executor import _run_test_direct
+    outcome = _run_test_direct(
+        project, test_type, opp_file=opp_file, git_ref=git_ref, mode=mode,
+    )
+    if outcome.get("stdout"):
+        click.echo(outcome["stdout"], nl=False)
+    if outcome.get("stderr"):
+        click.echo(outcome["stderr"], nl=False, err=True)
+    raise SystemExit(0 if outcome["result_code"] == "PASS" else 1)
+
+
+# ---------------------------------------------------------------------------
+# Image management — build the opp-ci-runner Docker images for a matrix.
+# ---------------------------------------------------------------------------
+
+@main.group("image")
+def image_group():
+    """Build and manage the opp-ci-runner Docker images."""
+
+
+def _render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version):
+    """Render the appropriate Dockerfile.{host,nix}.j2 template into a string."""
+    import importlib.resources
+    try:
+        from jinja2 import Environment, FileSystemLoader
+    except ImportError as e:
+        raise click.ClickException(
+            "Jinja2 is required for 'opp_ci image build' — pip install jinja2"
+        ) from e
+    import yaml
+
+    docker_dir = importlib.resources.files("opp_ci").joinpath("docker")
+    env = Environment(loader=FileSystemLoader(str(docker_dir)),
+                      keep_trailing_newline=True)
+
+    template_name = f"Dockerfile.{toolchain}.j2"
+    template = env.get_template(template_name)
+
+    ctx = {
+        "os": os_name.lower(),
+        "os_version": os_version,
+        "compiler": compiler.lower() if compiler else None,
+        "compiler_version": compiler_version,
+    }
+    if toolchain == "host":
+        pkgs_path = docker_dir.joinpath("packages.yml")
+        with open(pkgs_path) as f:
+            pkg_map = yaml.safe_load(f) or {}
+        key = f"{ctx['os']}+{ctx['compiler']}-{ctx['compiler_version']}"
+        ctx["compiler_package"] = pkg_map.get(key, f"{ctx['compiler']}-{ctx['compiler_version']}")
+    return template.render(**ctx)
+
+
+@image_group.command("build")
+@click.option("--os", "os_name", required=True, help="Base OS name, e.g. 'ubuntu' or 'fedora'")
+@click.option("--os-version", required=True, help="OS version tag, e.g. '26.04'")
+@click.option("--compiler", default=None, help="Compiler name (required for --toolchain=host)")
+@click.option("--compiler-version", default=None, help="Compiler version (required for --toolchain=host)")
+@click.option("--toolchain", type=click.Choice(["host", "nix"]), required=True,
+              help="Whether the compiler comes from the OS package manager (host) or opp_env/Nix")
+@click.option("--push", is_flag=True, help="Push the built image to the configured registry")
+def image_build(os_name, os_version, compiler, compiler_version, toolchain, push):
+    """Build one opp-ci-runner image for a (toolchain, os, compiler) combination."""
+    import subprocess
+    import tempfile
+
+    if toolchain == "host" and (not compiler or not compiler_version):
+        raise click.ClickException("--compiler and --compiler-version are required when --toolchain=host")
+
+    os_slug = f"{os_name.lower()}-{os_version}"
+    if toolchain == "nix":
+        tag = f"opp-ci-runner:nix-{os_slug}"
+    else:
+        tag = f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}"
+
+    dockerfile_content = _render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        dockerfile_path = f"{tmp}/Dockerfile"
+        with open(dockerfile_path, "w") as f:
+            f.write(dockerfile_content)
+        click.echo(f"Building {tag} (Dockerfile written to {dockerfile_path})")
+        result = subprocess.run(
+            ["docker", "build", "-t", tag, "-f", dockerfile_path, tmp],
+        )
+        if result.returncode != 0:
+            raise click.ClickException(f"docker build failed (exit {result.returncode})")
+
+    click.echo(f"Built {tag}")
+    if push:
+        result = subprocess.run(["docker", "push", tag])
+        if result.returncode != 0:
+            raise click.ClickException(f"docker push failed (exit {result.returncode})")
+        click.echo(f"Pushed {tag}")
+
+
+@image_group.command("build-matrix")
+@click.option("--matrix", "matrix_name", required=True, help="Name of a matrix whose images to build")
+@click.option("--push", is_flag=True, help="Push each built image to the configured registry")
+@click.pass_context
+def image_build_matrix(ctx, matrix_name, push):
+    """Build every opp-ci-runner image referenced by a matrix's expansion.
+
+    Walks the expanded job list, derives the unique image tags for jobs
+    with isolation=docker, and invokes 'opp_ci image build' for each one.
+    """
+    from opp_ci.scheduler import expand_matrix
+
+    session = SessionLocal()
+    try:
+        matrix = session.execute(
+            select(TestMatrix).where(TestMatrix.name == matrix_name)
+        ).scalar_one_or_none()
+        if matrix is None:
+            click.echo(f"Matrix '{matrix_name}' not found.")
+            return
+        jobs = expand_matrix(matrix.project, matrix.config)
+
+        seen = set()
+        for job in jobs:
+            if (job.get("isolation") or "none") != "docker":
+                continue
+            key = (job.get("toolchain") or "none", job.get("os"), job.get("os_version"),
+                   job.get("compiler"), job.get("compiler_version"))
+            if key in seen:
+                continue
+            seen.add(key)
+            toolchain_arg = "nix" if key[0] == "nix" else "host"
+            click.echo(f"  → building image for {key}")
+            ctx.invoke(
+                image_build,
+                os_name=key[1],
+                os_version=key[2],
+                compiler=key[3],
+                compiler_version=key[4],
+                toolchain=toolchain_arg,
+                push=push,
+            )
+        click.echo(f"Built {len(seen)} image(s) for matrix '{matrix_name}'")
     finally:
         session.close()

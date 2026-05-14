@@ -1,0 +1,25 @@
+# Maps (os + "+" + compiler + "-" + version) → the package name to install via
+# the base OS's package manager. Used by Dockerfile.host.j2.
+#
+# When a key is missing, the build falls back to the literal "<compiler>-<version>"
+# string. Add an entry here only when that fallback doesn't match the distro's
+# package naming.
+
+# Ubuntu — clang/gcc package names usually match the version directly.
+ubuntu+gcc-13: gcc-13
+ubuntu+gcc-14: gcc-14
+ubuntu+gcc-15: gcc-15
+ubuntu+clang-18: clang-18
+ubuntu+clang-19: clang-19
+ubuntu+clang-22: clang-22
+
+# Debian
+debian+gcc-13: gcc-13
+debian+clang-19: clang-19
+
+# Fedora — different naming convention: just "gcc" or "clang" pins via the
+# distro release; version-specific packages are gccN-c++ or compat-gccN.
+fedora+gcc-14: gcc
+fedora+gcc-15: gcc
+fedora+clang-18: clang
+fedora+clang-22: clang

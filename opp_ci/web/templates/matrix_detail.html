@@ -30,6 +30,8 @@
         <tr><th>OS Version</th><td>{{ matrix.config.get("os_version", ["-"])|join(", ") }}</td></tr>
         <tr><th>Compiler</th><td>{{ matrix.config.get("compiler", ["-"])|join(", ") }}</td></tr>
         <tr><th>Compiler Version</th><td>{{ matrix.config.get("compiler_version", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Isolation</th><td>{{ matrix.config.get("isolation", ["none"])|join(", ") }}</td></tr>
+        <tr><th>Toolchain</th><td>{{ matrix.config.get("toolchain", ["none"])|join(", ") }}</td></tr>
         <tr><th>Expanded Jobs</th><td>{{ jobs|length }}</td></tr>
     </table>
 </div>
@@ -44,6 +46,7 @@
                 <th>Mode</th>
                 <th>Ref</th>
                 <th>Platform</th>
+                <th>Env</th>
             </tr>
         </thead>
         <tbody>
@@ -54,10 +57,11 @@
                 <td>{{ job.mode }}</td>
                 <td>{{ job.git_ref or "-" }}</td>
                 <td>{{ job.platform_desc or "-" }}</td>
+                <td>{{ (job.isolation or "none") ~ " / " ~ (job.toolchain or "none") }}</td>
             </tr>
             {% endfor %}
             {% if jobs|length > 50 %}
-            <tr><td colspan="5" style="text-align:center; color:var(--muted);">... and {{ jobs|length - 50 }} more</td></tr>
+            <tr><td colspan="6" style="text-align:center; color:var(--muted);">... and {{ jobs|length - 50 }} more</td></tr>
             {% endif %}
         </tbody>
     </table>

@@ -15,6 +15,8 @@
         <tr><th>Platform</th><td>{{ run.platform_desc or "-" }}</td></tr>
         <tr><th>OS</th><td>{{ (run.os ~ " " ~ run.os_version) if run.os else "-" }}</td></tr>
         <tr><th>Compiler</th><td>{{ (run.compiler ~ "-" ~ run.compiler_version) if run.compiler else "-" }}</td></tr>
+        <tr><th>Isolation</th><td>{{ run.isolation or "none" }}</td></tr>
+        <tr><th>Toolchain</th><td>{{ run.toolchain or "none" }}</td></tr>
         <tr><th>Git ref</th><td>{{ run.git_ref or "-" }}</td></tr>
         <tr><th>Commit</th><td><code>{{ run.commit_sha or "-" }}</code></td></tr>
         <tr><th>opp file</th><td>{{ run.opp_file or "-" }}</td></tr>
