@@ -26,14 +26,14 @@ RUN dnf -y install \
 RUN false
 {%- endif %}
 
-# opp_ci + opp_repl aren't on PyPI — pip-install them straight from GitHub.
-# Pins to the default branch; switch to git+https://...@<ref> for reproducible
-# builds, or override at image-build time once the templating supports it.
+# opp_ci + opp_repl aren't on PyPI — install straight from GitHub. The SHA
+# is resolved at image-build time on the host via 'git ls-remote' so a new
+# push invalidates this layer's docker cache. To pin: edit render_dockerfile.
 RUN python3 -m venv /opt/opp_ci_venv \
  && /opt/opp_ci_venv/bin/pip install --upgrade pip \
  && /opt/opp_ci_venv/bin/pip install \
-        git+https://github.com/omnetpp/opp_repl.git \
-        git+https://github.com/omnetpp/opp_ci.git
+        git+https://github.com/omnetpp/opp_repl.git@{{ opp_repl_ref }} \
+        git+https://github.com/omnetpp/opp_ci.git@{{ opp_ci_ref }}
 ENV PATH=/opt/opp_ci_venv/bin:$PATH
 
 WORKDIR /work

@@ -336,12 +336,38 @@ def _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version
     return f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}"
 
 
+def _resolve_remote_head(url, ref="HEAD"):
+    """Return the SHA that *ref* points to at the remote, or None on failure."""
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", url, ref],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    line = result.stdout.strip().splitlines()
+    if not line:
+        return None
+    return line[0].split()[0]
+
+
+_OPP_CI_REPO = "https://github.com/omnetpp/opp_ci.git"
+_OPP_REPL_REPO = "https://github.com/omnetpp/opp_repl.git"
+
+
 def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version):
     """Render opp_ci/docker/Dockerfile.{toolchain}.j2 into a string.
 
     Accepts both the matrix-axis spelling ("none") and the CLI spelling
     ("host") — they refer to the same template (use the host OS's package
     manager for the compiler) but the two layers came in independently.
+
+    For the host template, the current HEAD SHA of opp_ci and opp_repl is
+    resolved via 'git ls-remote' and baked into the pip-install lines, so
+    a fresh push to either repo invalidates the docker layer cache and
+    triggers a real rebuild on the next image-build call.
     """
     import importlib.resources
     from jinja2 import Environment, FileSystemLoader
@@ -365,6 +391,10 @@ def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version
             pkg_map = yaml.safe_load(f) or {}
         key = f"{ctx['os']}+{ctx['compiler']}-{ctx['compiler_version']}"
         ctx["compiler_package"] = pkg_map.get(key, f"{ctx['compiler']}-{ctx['compiler_version']}")
+        # Pin pip install lines to current upstream HEADs so 'docker build'
+        # rebuilds the install layer whenever either repo gets new commits.
+        ctx["opp_ci_ref"] = _resolve_remote_head(_OPP_CI_REPO) or "HEAD"
+        ctx["opp_repl_ref"] = _resolve_remote_head(_OPP_REPL_REPO) or "HEAD"
     return template.render(**ctx)
 
 
