@@ -3,11 +3,12 @@ import io
 import logging
 import os
 import subprocess
+import tempfile
 import time
+import uuid
 
 from sqlalchemy import select
 
-from opp_ci.config import USE_OPP_ENV
 from opp_ci.db.connection import SessionLocal
 from opp_ci.db.models import TestRun, TestRunStatus
 
@@ -15,12 +16,17 @@ _logger = logging.getLogger(__name__)
 
 
 def find_existing_run(session, *, project, test_type, mode=None, git_ref=None,
-                      os=None, os_version=None, compiler=None, compiler_version=None):
+                      os=None, os_version=None, compiler=None, compiler_version=None,
+                      isolation=None, toolchain=None):
     """Return an existing TestRun with matching params and terminal status, or None.
 
-    Matches on (project, test_type, mode, git_ref, os, os_version, compiler,
-    compiler_version).  Only runs that have completed (PASS, FAIL, or ERROR)
-    are considered — queued/running runs do not block a new submission.
+    Matches on the full (project, test_type, mode, git_ref, os, os_version,
+    compiler, compiler_version, isolation, toolchain) tuple. Two runs with
+    different isolation or toolchain are considered different runs even if
+    every other field matches — they test different execution paths.
+
+    Only runs that have completed (PASS, FAIL, or ERROR) are considered —
+    queued/running runs do not block a new submission.
     """
     query = (
         select(TestRun)
@@ -33,6 +39,8 @@ def find_existing_run(session, *, project, test_type, mode=None, git_ref=None,
             TestRun.os_version == os_version,
             TestRun.compiler == compiler,
             TestRun.compiler_version == compiler_version,
+            TestRun.isolation == isolation,
+            TestRun.toolchain == toolchain,
             TestRun.status.in_([TestRunStatus.PASS, TestRunStatus.FAIL, TestRunStatus.ERROR]),
         )
         .order_by(TestRun.id.desc())
@@ -100,18 +108,20 @@ def _load_workspace(project_name, opp_file=None):
     return ws, simulation_project
 
 
-def resolve_git_project(project, git_ref):
+def resolve_git_project(project, git_ref, *, toolchain="none"):
     """
     Resolve the opp_env project name and git ref for testing.
 
-    If git_ref is specified and opp_env mode is active, uses '<project>-git'
-    package and sets the ref via env var.
+    Under toolchain=nix, a specific git_ref is realized by switching to the
+    project's '-git' variant (e.g. inet-git) and pinning the commit via the
+    OPP_ENV_GIT_REF env var. Under other toolchains the project name is left
+    untouched.
 
     Returns (effective_project, effective_ref) tuple.
     """
     if not git_ref:
         return project, None
-    if USE_OPP_ENV:
+    if toolchain == "nix":
         effective_project = f"{project}-git" if not project.endswith("-git") else project
         return effective_project, git_ref
     return project, git_ref
@@ -179,13 +189,18 @@ def resolve_commit_sha(project, opp_file=None):
     return None
 
 
-def install_project(project, git_ref=None):
-    """Install a project via opp_env. No-op in direct mode."""
-    if not USE_OPP_ENV:
-        _logger.info("Skipping install (direct mode, OPP_CI_USE_OPP_ENV=0)")
+def install_project(project, git_ref=None, *, isolation="none", toolchain="none"):
+    """Install a project via opp_env on the worker's host.
+
+    Only meaningful when ``isolation=none`` and ``toolchain=nix``:
+      - isolation=docker → install happens inside the container's entrypoint
+      - toolchain=none   → project is expected to be pre-built on the host
+    """
+    if isolation != "none" or toolchain != "nix":
+        _logger.info("Skipping install (isolation=%s, toolchain=%s)", isolation, toolchain)
         return
 
-    effective_project, _ = resolve_git_project(project, git_ref)
+    effective_project, _ = resolve_git_project(project, git_ref, toolchain="nix")
     _logger.info("Installing %s via opp_env", effective_project)
     result = subprocess.run(
         ["opp_env", "install", effective_project],
@@ -197,27 +212,162 @@ def install_project(project, git_ref=None):
     _logger.info("Installation of %s complete", effective_project)
 
 
-def run_test(project, test_type, git_ref=None, opp_file=None, mode=None):
+def run_test(project, test_type, *, isolation=None, toolchain=None, **kwargs):
     """
-    Run a test for the given project.
+    Run a test for the given project, dispatching on isolation × toolchain.
 
-    In direct mode (USE_OPP_ENV=0): calls opp_repl functions directly in-process.
-    In opp_env mode (USE_OPP_ENV=1): runs via opp_env run <project> -c <cmd>.
+      isolation=docker          → _run_test_in_docker (wraps the inner path)
+      isolation=none, tc=nix    → _run_test_via_opp_env  (opp_env on host)
+      isolation=none, tc=none   → _run_test_direct       (opp_repl in-process)
 
-    If git_ref is provided:
-      - opp_env mode: uses <project>-git and sets OPP_ENV_GIT_REF env var
-      - direct mode: creates an isolated git worktree for that ref
+    Extra kwargs (git_ref, opp_file, mode, os, os_version, compiler,
+    compiler_version) are passed through; helpers extract what they need.
 
-    Returns a dict with keys: result_code, duration_seconds, stdout, stderr, details.
+    Returns a dict with keys: result_code, duration_seconds, stdout, stderr,
+    details, commit_sha.
     """
-    if USE_OPP_ENV:
-        return _run_test_via_opp_env(project, test_type, git_ref, mode=mode)
+    isolation = isolation or "none"
+    toolchain = toolchain or "none"
+    if isolation == "docker":
+        return _run_test_in_docker(project, test_type, toolchain=toolchain, **kwargs)
+    if toolchain == "nix":
+        return _run_test_via_opp_env(project, test_type, **kwargs)
+    return _run_test_direct(project, test_type, **kwargs)
+
+
+def _resolve_project_dir(project, opp_file=None):
+    """Find the on-disk source dir for a project.
+
+    Resolution order matches resolve_commit_sha():
+      1. opp_file's parent directory
+      2. $OPP_CI_PROJECT_DIR_<PROJECT>
+      3. $OPP_CI_PROJECT_DIR/<project>
+    """
+    if opp_file:
+        return os.path.dirname(os.path.abspath(opp_file))
+    env_key = f"OPP_CI_PROJECT_DIR_{project.upper().replace('-', '_')}"
+    project_dir = os.environ.get(env_key)
+    if project_dir:
+        return project_dir
+    base_dir = os.environ.get("OPP_CI_PROJECT_DIR", ".")
+    return os.path.join(base_dir, project)
+
+
+def _create_git_worktree(project_dir, git_ref):
+    """Create a detached git worktree for *git_ref* in a temp dir and return its path."""
+    target = os.path.join(tempfile.gettempdir(), f"opp-ci-worktree-{uuid.uuid4().hex[:8]}")
+    subprocess.run(["git", "fetch", "origin"], cwd=project_dir, capture_output=True, timeout=120)
+    result = subprocess.run(
+        ["git", "worktree", "add", "--detach", target, git_ref],
+        cwd=project_dir, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git worktree add {git_ref} failed: {result.stderr.strip()}")
+    _logger.info("Created worktree at %s for ref %s", target, git_ref)
+    return target
+
+
+def _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version):
+    """Compute the runner image tag for a given (toolchain, os, compiler) combination.
+
+    Naming convention:
+      toolchain=nix:  opp-ci-runner:nix-<os>-<osver>
+      toolchain=none: opp-ci-runner:host-<os>-<osver>-<compiler>-<compver>
+    """
+    if not os_name or not os_version:
+        raise ValueError("isolation=docker requires both 'os' and 'os_version' to be set on the run")
+    os_slug = f"{os_name.lower()}-{os_version}"
+    if toolchain == "nix":
+        return f"opp-ci-runner:nix-{os_slug}"
+    if not compiler or not compiler_version:
+        raise ValueError(
+            "isolation=docker with toolchain=none requires both 'compiler' and 'compiler_version'"
+        )
+    return f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}"
+
+
+def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
+    """Run a test inside a Docker container.
+
+    The container's source tree is bind-mounted at /work. When *git_ref* is
+    set, a detached worktree is created on the host first and that worktree
+    is mounted instead, so the container always sees a clean checkout at
+    the requested commit. The worktree is removed after the container exits.
+
+    For toolchain=nix, the host's Nix store is shared via a named volume to
+    avoid re-downloading deps per run.
+    """
+    git_ref = kwargs.get("git_ref")
+    opp_file = kwargs.get("opp_file")
+    mode = kwargs.get("mode")
+    os_name = kwargs.get("os")
+    os_version = kwargs.get("os_version")
+    compiler = kwargs.get("compiler")
+    compiler_version = kwargs.get("compiler_version")
+
+    image = _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version)
+
+    project_dir = _resolve_project_dir(project, opp_file)
+    worktree_path = None
+    if git_ref:
+        worktree_path = _create_git_worktree(project_dir, git_ref)
+        mount_path = worktree_path
     else:
-        return _run_test_direct(project, test_type, opp_file, git_ref, mode=mode)
+        mount_path = project_dir
+
+    docker_cmd = [
+        "docker", "run", "--rm",
+        "-v", f"{os.path.abspath(mount_path)}:/work",
+        "-w", "/work",
+    ]
+    if toolchain == "nix":
+        docker_cmd += ["-v", "opp-ci-nix-store:/nix"]
+        if git_ref:
+            docker_cmd += ["-e", f"OPP_ENV_GIT_REF={git_ref}"]
+        effective_project, _ = resolve_git_project(project, git_ref, toolchain="nix")
+        inner_cmd = COMMAND_MAP.get(test_type)
+        if inner_cmd is None:
+            raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(COMMAND_MAP.keys())}")
+        if mode:
+            inner_cmd += f" --mode {mode}"
+        container_args = ["opp_env", "run", effective_project, "-c", inner_cmd]
+    else:
+        container_args = ["opp_ci", "internal", "run-direct",
+                          "--project", project, "--test-type", test_type]
+        if mode:
+            container_args += ["--mode", mode]
+        if opp_file:
+            container_args += ["--opp-file", "/work/" + os.path.basename(opp_file)]
+
+    docker_cmd.append(image)
+    docker_cmd += container_args
+
+    _logger.info("Running test in docker: %s", " ".join(docker_cmd))
+    start = time.time()
+    try:
+        result = subprocess.run(docker_cmd, capture_output=True, text=True)
+        duration = time.time() - start
+    finally:
+        if worktree_path:
+            _remove_git_worktree(worktree_path)
+
+    result_code = "PASS" if result.returncode == 0 else "FAIL"
+    _logger.info("Test finished: %s (%.1fs)", result_code, duration)
+    return {
+        "result_code": result_code,
+        "duration_seconds": duration,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "details": None,
+        "commit_sha": git_ref,
+    }
 
 
-def _run_test_via_opp_env(project, test_type, git_ref, mode=None):
-    """Run a test via opp_env subprocess (isolated Nix environment)."""
+def _run_test_via_opp_env(project, test_type, **kwargs):
+    """Run a test via opp_env subprocess (Nix environment on the host)."""
+    git_ref = kwargs.get("git_ref")
+    mode = kwargs.get("mode")
+
     cmd = COMMAND_MAP.get(test_type)
     if cmd is None:
         raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(COMMAND_MAP.keys())}")
@@ -226,7 +376,7 @@ def _run_test_via_opp_env(project, test_type, git_ref, mode=None):
         cmd += f" --mode {mode}"
 
     env = os.environ.copy()
-    effective_project, effective_ref = resolve_git_project(project, git_ref)
+    effective_project, effective_ref = resolve_git_project(project, git_ref, toolchain="nix")
     if effective_ref:
         env["OPP_ENV_GIT_REF"] = effective_ref
     args = ["opp_env", "run", effective_project, "-c", cmd]
@@ -248,11 +398,14 @@ def _run_test_via_opp_env(project, test_type, git_ref, mode=None):
     }
 
 
-def _run_test_direct(project, test_type, opp_file, git_ref=None, mode=None):
+def _run_test_direct(project, test_type, *, opp_file=None, git_ref=None, mode=None, **_unused):
     """Run a test by calling opp_repl functions directly (no subprocess).
 
     When *git_ref* is set, an isolated git worktree is created for that
     commit and removed after the test completes.
+
+    Extra kwargs (e.g. os, compiler) are accepted-and-ignored so this can
+    sit downstream of the run_test dispatcher.
     """
     test_functions = _get_test_functions()
     func = test_functions.get(test_type)
@@ -280,13 +433,13 @@ def _run_test_direct(project, test_type, opp_file, git_ref=None, mode=None):
     stderr_buf = io.StringIO()
     start = time.time()
     try:
-        kwargs = {"simulation_project": simulation_project, "build": "task", "build_mode": "task"}
+        call_kwargs = {"simulation_project": simulation_project, "build": "task", "build_mode": "task"}
         if mode:
-            kwargs["mode"] = mode
+            call_kwargs["mode"] = mode
         if test_type == "opp":
-            kwargs["test_folder"] = simulation_project.get_full_path(".")
+            call_kwargs["test_folder"] = simulation_project.get_full_path(".")
         with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-            result = func(**kwargs)
+            result = func(**call_kwargs)
             if result is not None:
                 print(repr(result))
         duration = time.time() - start

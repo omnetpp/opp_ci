@@ -99,18 +99,35 @@ class WorkerAgent:
         git_ref = job.get("git_ref")
         opp_file = job.get("opp_file")
         mode = job.get("mode")
+        isolation = job.get("isolation") or "none"
+        toolchain = job.get("toolchain") or "none"
+        run_kwargs = {
+            "git_ref": git_ref,
+            "opp_file": opp_file,
+            "mode": mode,
+            "isolation": isolation,
+            "toolchain": toolchain,
+            "os": job.get("os"),
+            "os_version": job.get("os_version"),
+            "compiler": job.get("compiler"),
+            "compiler_version": job.get("compiler_version"),
+        }
 
-        _logger.info("Executing run #%d: %s / %s (ref=%s)", run_id, project, test_type, git_ref)
+        _logger.info(
+            "Executing run #%d: %s / %s (ref=%s, isolation=%s, toolchain=%s)",
+            run_id, project, test_type, git_ref, isolation, toolchain,
+        )
 
         try:
-            install_project(project, git_ref=git_ref)
+            install_project(project, git_ref=git_ref,
+                            isolation=isolation, toolchain=toolchain)
         except RuntimeError as e:
             _logger.error("Install failed for run #%d: %s", run_id, e)
             self._report_result(run_id, "ERROR", stderr=str(e))
             return
 
         try:
-            outcome = run_test(project, test_type, git_ref=git_ref, opp_file=opp_file, mode=mode)
+            outcome = run_test(project, test_type, **run_kwargs)
         except Exception as e:
             _logger.error("Test execution failed for run #%d: %s", run_id, e)
             self._report_result(run_id, "ERROR", stderr=str(e))

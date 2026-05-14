@@ -53,6 +53,8 @@ class SubmitRunRequest(BaseModel):
     os_version: str | None = None
     compiler: str | None = None
     compiler_version: str | None = None
+    isolation: str | None = None    # "none" | "docker"
+    toolchain: str | None = None    # "none" | "nix"
     force: bool = False
 
 class SubmitMatrixRequest(BaseModel):
@@ -128,6 +130,8 @@ async def submit_run(
                 os_version=req.os_version,
                 compiler=req.compiler,
                 compiler_version=req.compiler_version,
+                isolation=req.isolation,
+                toolchain=req.toolchain,
             )
             if existing:
                 return {"id": existing.id, "status": existing.status.value, "skipped": True}
@@ -144,6 +148,8 @@ async def submit_run(
             os_version=req.os_version,
             compiler=req.compiler,
             compiler_version=req.compiler_version,
+            isolation=req.isolation,
+            toolchain=req.toolchain,
             platform_desc=platform_desc,
             status=TestRunStatus.queued,
             trigger="remote",
@@ -187,6 +193,8 @@ async def submit_matrix_run(
                 os_version=job.get("os_version"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
+                isolation=job.get("isolation"),
+                toolchain=job.get("toolchain"),
             )
             if existing:
                 skipped += 1
@@ -201,6 +209,8 @@ async def submit_matrix_run(
                 os_version=job.get("os_version"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
+                isolation=job.get("isolation"),
+                toolchain=job.get("toolchain"),
                 platform_desc=job.get("platform_desc"),
                 resolved_deps=job.get("resolved_deps"),
                 matrix_id=matrix.id,
@@ -355,14 +365,20 @@ async def worker_poll(
         if not worker.is_available:
             return {"job": None, "reason": "worker at capacity"}
 
-        # Find the oldest queued run
-        # TODO: match worker tags to job requirements
-        run = session.execute(
+        # Find the oldest queued run this worker is eligible to claim.
+        # Eligibility is based on the worker's capability tags vs. the
+        # run's required execution environment (isolation, toolchain, os,
+        # compiler). See _worker_can_run() for the rule.
+        worker_tags = set(worker.tags or [])
+        run = None
+        for candidate in session.execute(
             select(TestRun)
             .where(TestRun.status == TestRunStatus.queued)
             .order_by(TestRun.id)
-            .limit(1)
-        ).scalar_one_or_none()
+        ).scalars():
+            if _worker_can_run(worker_tags, candidate):
+                run = candidate
+                break
 
         if run is None:
             return {"job": None, "reason": "no queued jobs"}
@@ -388,12 +404,39 @@ async def worker_poll(
                 "os_version": run.os_version,
                 "compiler": run.compiler,
                 "compiler_version": run.compiler_version,
+                "isolation": run.isolation,
+                "toolchain": run.toolchain,
                 "opp_file": run.opp_file,
                 "resolved_deps": run.resolved_deps,
             }
         }
     finally:
         session.close()
+
+
+def _worker_can_run(worker_tags, run):
+    """Return True if a worker with *worker_tags* may claim *run*.
+
+    Required tags by execution environment:
+      - isolation=docker             →  {"docker"}
+      - isolation=none, toolchain=nix → {"nix", "os:<os>-<ver>", "compiler:<c>-<cv>"}
+      - isolation=none, toolchain=none → {"os:<os>-<ver>", "compiler:<c>-<cv>"}
+
+    Tags derived from run fields that aren't set (e.g. os=None) are skipped.
+    """
+    isolation = run.isolation or "none"
+    toolchain = run.toolchain or "none"
+    required = set()
+    if isolation == "docker":
+        required.add("docker")
+    else:
+        if toolchain == "nix":
+            required.add("nix")
+        if run.os and run.os_version:
+            required.add(f"os:{run.os.lower()}-{run.os_version}")
+        if run.compiler and run.compiler_version:
+            required.add(f"compiler:{run.compiler.lower()}-{run.compiler_version}")
+    return required.issubset(worker_tags)
 
 
 @router.post("/workers/result")
