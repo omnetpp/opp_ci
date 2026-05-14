@@ -337,22 +337,29 @@ def _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version
 
 
 def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version):
-    """Render opp_ci/docker/Dockerfile.{toolchain}.j2 into a string."""
+    """Render opp_ci/docker/Dockerfile.{toolchain}.j2 into a string.
+
+    Accepts both the matrix-axis spelling ("none") and the CLI spelling
+    ("host") — they refer to the same template (use the host OS's package
+    manager for the compiler) but the two layers came in independently.
+    """
     import importlib.resources
     from jinja2 import Environment, FileSystemLoader
     import yaml
 
+    template_name = "host" if toolchain == "none" else toolchain
+
     docker_dir = importlib.resources.files("opp_ci").joinpath("docker")
     jenv = Environment(loader=FileSystemLoader(str(docker_dir)),
                        keep_trailing_newline=True)
-    template = jenv.get_template(f"Dockerfile.{toolchain}.j2")
+    template = jenv.get_template(f"Dockerfile.{template_name}.j2")
     ctx = {
         "os": os_name.lower(),
         "os_version": os_version,
         "compiler": compiler.lower() if compiler else None,
         "compiler_version": compiler_version,
     }
-    if toolchain == "host":
+    if template_name == "host":
         pkgs_path = docker_dir.joinpath("packages.yml")
         with open(pkgs_path) as f:
             pkg_map = yaml.safe_load(f) or {}
