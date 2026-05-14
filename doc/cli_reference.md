@@ -70,9 +70,9 @@ Platform axes accept two styles:
 
 | Command | Purpose |
 |---|---|
-| `worker register --name N` | Register a worker, prints its token. Options: `--tags`, `--concurrency`. |
+| `worker register --name N` | Register a worker, prints its token. Options: `--tags`, `--auto-tags`, `--concurrency`. |
 | `worker list` | List registered workers, status, tags. |
-| `worker start --coordinator URL --token T` | Run the worker agent. Options: `--tags`, `--concurrency`, `--poll-interval`, `--heartbeat-interval`. |
+| `worker start --coordinator URL --token T` | Run the worker agent. Tags and concurrency are fetched from the coordinator (set at register time). Options: `--poll-interval`, `--heartbeat-interval`. |
 
 See [workers.md](workers.md).
 

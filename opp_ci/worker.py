@@ -5,7 +5,11 @@ Polls the coordinator for queued jobs, executes them locally via
 opp_env + opp_repl, and reports results back.
 
 Usage:
-    opp_ci worker start --coordinator <url> --token <token> --tags linux,amd64
+    opp_ci worker start --coordinator <url> --token <token>
+
+Tags and concurrency are configured at registration time (see
+`opp_ci worker register`) and fetched from the coordinator on startup —
+the coordinator is the single source of truth.
 """
 
 import logging
@@ -24,13 +28,31 @@ class WorkerAgent:
     Long-running worker that polls the coordinator for jobs and executes them.
     """
 
-    def __init__(self, coordinator_url, token, tags=None, concurrency=1):
+    def __init__(self, coordinator_url, token):
         self.coordinator_url = coordinator_url.rstrip("/")
         self.token = token
-        self.tags = tags or []
-        self.concurrency = concurrency
+        self.name = None
+        self.tags = []
+        self.concurrency = 1
         self._running = True
         self._headers = {"Authorization": f"Bearer {token}"}
+
+    def fetch_config(self):
+        """Fetch this worker's registered name/tags/concurrency from the coordinator."""
+        resp = requests.get(
+            f"{self.coordinator_url}/api/workers/me",
+            headers=self._headers,
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Failed to fetch worker config from coordinator: "
+                f"{resp.status_code} {resp.text}"
+            )
+        data = resp.json()
+        self.name = data["name"]
+        self.tags = data.get("tags") or []
+        self.concurrency = data.get("concurrency", 1)
 
     def start(self, poll_interval=10, heartbeat_interval=30):
         """
@@ -40,8 +62,8 @@ class WorkerAgent:
         signal.signal(signal.SIGTERM, self._handle_signal)
 
         _logger.info(
-            "Worker starting — coordinator=%s tags=%s concurrency=%d",
-            self.coordinator_url, self.tags, self.concurrency,
+            "Worker '%s' starting — coordinator=%s tags=%s concurrency=%d",
+            self.name, self.coordinator_url, self.tags, self.concurrency,
         )
 
         last_heartbeat = 0

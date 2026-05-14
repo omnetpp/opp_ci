@@ -1040,22 +1040,25 @@ def worker_detect_tags():
 @worker_group.command("start")
 @click.option("--coordinator", required=True, help="Coordinator URL (e.g. https://ci.omnetpp.org)")
 @click.option("--token", required=True, help="Worker token")
-@click.option("--tags", default="", help="Comma-separated capability tags (e.g. linux,amd64,perf-counters)")
-@click.option("--concurrency", default=1, help="Max concurrent jobs (default: 1)")
 @click.option("--poll-interval", default=10, help="Seconds between polls (default: 10)")
 @click.option("--heartbeat-interval", default=30, help="Seconds between heartbeats (default: 30)")
-def worker_start(coordinator, token, tags, concurrency, poll_interval, heartbeat_interval):
-    """Start a worker agent that polls the coordinator for jobs."""
+def worker_start(coordinator, token, poll_interval, heartbeat_interval):
+    """Start a worker agent that polls the coordinator for jobs.
+
+    Tags and concurrency are configured at registration time (see
+    `opp_ci worker register`) and fetched from the coordinator on startup.
+    """
     from opp_ci.worker import WorkerAgent
 
-    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-    agent = WorkerAgent(
-        coordinator_url=coordinator,
-        token=token,
-        tags=tag_list,
-        concurrency=concurrency,
+    agent = WorkerAgent(coordinator_url=coordinator, token=token)
+    try:
+        agent.fetch_config()
+    except Exception as e:
+        raise click.ClickException(f"Could not fetch worker config from coordinator: {e}")
+    click.echo(
+        f"Starting worker '{agent.name}' — coordinator={coordinator} "
+        f"tags={agent.tags} concurrency={agent.concurrency}"
     )
-    click.echo(f"Starting worker — coordinator={coordinator} tags={tag_list} concurrency={concurrency}")
     agent.start(poll_interval=poll_interval, heartbeat_interval=heartbeat_interval)
 
 

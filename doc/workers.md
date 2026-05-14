@@ -28,8 +28,9 @@ The worker handles `SIGINT` / `SIGTERM` for clean shutdown.
 
 ## Capability tags
 
-Workers self-describe their capabilities with a free-form list of tags
-(set via `--tags` on `worker start`):
+Workers advertise their capabilities with a free-form list of tags
+(set via `--tags` / `--auto-tags` on `worker register`, stored on the
+coordinator):
 
 | Tag | Meaning |
 |---|---|
@@ -74,11 +75,13 @@ On the worker machine:
 opp_ci worker start \
     --coordinator https://ci.omnetpp.org \
     --token <worker-token> \
-    --tags "linux,amd64,perf-counters" \
-    --concurrency 4 \
     --poll-interval 10 \
     --heartbeat-interval 30
 ```
+
+The worker fetches its registered name, tags and concurrency from the
+coordinator on startup — the coordinator is the single source of truth.
+To change a worker's tags or concurrency, re-register it.
 
 Workers only need **outbound** network access — they poll the
 coordinator. No inbound port is required on the worker host.

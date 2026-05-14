@@ -8,6 +8,7 @@ Endpoints:
     GET  /api/runs/{run_id}     — get run detail (readonly+)
 
     POST /api/workers/register  — register a new worker (admin)
+    GET  /api/workers/me        — worker fetches its own registered config (worker)
     POST /api/workers/heartbeat — worker heartbeat (worker)
     POST /api/workers/poll      — worker polls for a job (worker)
     POST /api/workers/result    — worker reports job result (worker)
@@ -312,6 +313,28 @@ async def register_worker(
         session.commit()
         _logger.info("Worker '%s' registered (id=%d)", worker.name, worker.id)
         return {"id": worker.id, "name": worker.name, "token": worker.token}
+    finally:
+        session.close()
+
+
+@router.get("/workers/me")
+async def worker_me(
+    worker_info: dict = Depends(require_worker_token()),
+):
+    """Return the worker's own registered config (name, tags, concurrency)."""
+    session = SessionLocal()
+    try:
+        worker = session.execute(
+            select(Worker).where(Worker.id == worker_info["worker_id"])
+        ).scalar_one_or_none()
+        if worker is None:
+            raise HTTPException(status_code=401, detail="Worker not found")
+        return {
+            "id": worker.id,
+            "name": worker.name,
+            "tags": worker.tags or [],
+            "concurrency": worker.concurrency,
+        }
     finally:
         session.close()
 
