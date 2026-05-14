@@ -13,7 +13,6 @@
     <h2>Details</h2>
     <table>
         <tr><th style="width:150px;">Name</th><td>{{ project.name }}</td></tr>
-        <tr><th>Tier</th><td>{{ project.tier }}</td></tr>
         <tr><th>opp_env name</th><td>{{ project.opp_env_name or "-" }}</td></tr>
         <tr><th>GitHub</th><td>
             {% if project.github_owner and project.github_repo %}

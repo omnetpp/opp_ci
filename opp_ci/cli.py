@@ -383,13 +383,13 @@ def show_results(project, test_type, status, limit):
 
 @main.command("seed-projects")
 def seed_projects_cmd():
-    """Seed the database with Tier 1 projects from the catalog."""
+    """Seed the database with core projects from the catalog."""
     from opp_ci.catalog import seed_projects
     Base.metadata.create_all(engine)
     session = SessionLocal()
     try:
         seed_projects(session)
-        click.echo("Tier 1 projects seeded.")
+        click.echo("Core projects seeded.")
     finally:
         session.close()
 
@@ -418,9 +418,8 @@ def seed_platforms_cmd():
 @click.option("--github", default=None, help="GitHub owner/repo (e.g. levy/mm1k)")
 @click.option("--git-url", default=None, help="Git clone URL")
 @click.option("--opp-env-name", default=None, help="opp_env project name (defaults to --name)")
-@click.option("--tier", default=1, type=int, help="Tier level (1 or 2, default: 1)")
 @click.option("--deps", default=None, help="Comma-separated dependency project names (e.g. omnetpp,inet)")
-def add_project_cmd(name, github, git_url, opp_env_name, tier, deps):
+def add_project_cmd(name, github, git_url, opp_env_name, deps):
     """Register a new project in the database."""
     Base.metadata.create_all(engine)
     session = SessionLocal()
@@ -429,7 +428,7 @@ def add_project_cmd(name, github, git_url, opp_env_name, tier, deps):
             select(Project).where(Project.name == name)
         ).scalar_one_or_none()
         if existing is not None:
-            click.echo(f"Project '{name}' already exists (tier={existing.tier}).")
+            click.echo(f"Project '{name}' already exists.")
             return
 
         github_owner = None
@@ -450,12 +449,11 @@ def add_project_cmd(name, github, git_url, opp_env_name, tier, deps):
             github_owner=github_owner,
             github_repo=github_repo,
             git_url=git_url,
-            tier=tier,
             dependency_names=dep_list,
         )
         session.add(project)
         session.commit()
-        click.echo(f"Project '{name}' added (tier={tier}, deps={dep_list}).")
+        click.echo(f"Project '{name}' added (deps={dep_list}).")
     finally:
         session.close()
 
@@ -464,9 +462,8 @@ def add_project_cmd(name, github, git_url, opp_env_name, tier, deps):
 def sync_catalog_cmd():
     """Sync projects from the opp_env catalog into the database.
 
-    Imports all opp_env projects as Tier 2 (if not already present),
-    adds new versions, and creates default test matrices for new projects.
-    Existing Tier 1 projects are not demoted.
+    Imports all opp_env projects (if not already present), adds new
+    versions, and creates a default test matrix for each new project.
     """
     from opp_ci.opp_env_adapter import sync_catalog
     Base.metadata.create_all(engine)
@@ -480,18 +477,18 @@ def sync_catalog_cmd():
 
 @main.command("list-projects")
 def list_projects():
-    """List known projects with tier, last test status, and GitHub info."""
+    """List known projects with last test status and GitHub info."""
     Base.metadata.create_all(engine)
     session = SessionLocal()
     try:
         projects = session.execute(
-            select(Project).order_by(Project.tier, Project.name)
+            select(Project).order_by(Project.name)
         ).scalars().all()
         if not projects:
             click.echo("No projects. Run 'opp_ci seed-projects' or 'opp_ci sync-catalog'.")
             return
 
-        click.echo(f"{'Name':<20} {'Tier':<6} {'Last Test':<14} {'Status':<10} {'GitHub'}")
+        click.echo(f"{'Name':<20} {'Last Test':<14} {'Status':<10} {'GitHub'}")
         click.echo("-" * 80)
         for p in projects:
             # Find most recent finished run for this project
@@ -511,7 +508,7 @@ def list_projects():
                 status = "-"
 
             github = f"{p.github_owner}/{p.github_repo}" if p.github_owner else "-"
-            click.echo(f"{p.name:<20} {p.tier:<6} {version:<14} {status:<10} {github}")
+            click.echo(f"{p.name:<20} {version:<14} {status:<10} {github}")
     finally:
         session.close()
 

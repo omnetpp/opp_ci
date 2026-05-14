@@ -10,7 +10,7 @@ All configuration is via environment variables, read by
 | `OPP_CI_DATABASE_URL` | `sqlite:///opp_ci.db` | SQLAlchemy connection string. Use `postgresql://user:pass@host/db` in production. |
 | `OPP_CI_COORDINATOR_URL` | auto-detected `http://<host-ip>:8080` | Coordinator API base URL. Read by `--remote` CLI mode and by workers. |
 | `OPP_CI_API_TOKEN` | *(empty)* | API token used by `--remote` CLI submissions. |
-| `OPP_CI_REFERENCE_PLATFORM` | `Ubuntu 24.04/gcc-13` | Default platform spec for auto-generated Tier 2 matrices. |
+| `OPP_CI_REFERENCE_PLATFORM` | `Ubuntu 24.04/gcc-13` | Default platform spec for auto-generated default matrices. |
 
 ## Workers
 

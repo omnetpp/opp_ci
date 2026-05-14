@@ -179,7 +179,7 @@ def sync_catalog(session):
     """
     Sync the full opp_env catalog into the opp_ci database.
 
-    - Inserts new projects as Tier 2
+    - Inserts new projects
     - Adds new versions for existing projects
     - Generates a default TestMatrix for new projects
     - Seeds OS and Compiler tables from opp_env options
@@ -220,13 +220,12 @@ def sync_catalog(session):
                 opp_env_name=name,
                 github_owner=owner,
                 github_repo=repo,
-                tier=2,
                 dependency_names=sorted(all_deps),
             )
             session.add(project)
             session.flush()
             new_projects += 1
-            _logger.info("New Tier 2 project: %s", name)
+            _logger.info("New project: %s", name)
 
             # Create default matrix
             os_name, os_ver = _parse_os(REFERENCE_PLATFORM.split("/")[0] if "/" in REFERENCE_PLATFORM else REFERENCE_PLATFORM)
@@ -245,7 +244,7 @@ def sync_catalog(session):
                 matrix_config["compiler"] = [comp_str]
 
             matrix = TestMatrix(
-                name=f"{name}-tier2",
+                name=f"{name}-default",
                 project=name,
                 config=matrix_config,
             )

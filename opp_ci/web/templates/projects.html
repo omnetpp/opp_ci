@@ -8,13 +8,8 @@
 
 <form method="get" action="/projects" class="filters">
     <input type="text" name="name" value="{{ filter_name }}" placeholder="Name contains…">
-    <select name="tier">
-        <option value="">Any tier</option>
-        <option value="1" {% if filter_tier == "1" %}selected{% endif %}>Tier 1</option>
-        <option value="2" {% if filter_tier == "2" %}selected{% endif %}>Tier 2</option>
-    </select>
     <button type="submit">Filter</button>
-    {% if filter_name or filter_tier %}<a href="/projects" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+    {% if filter_name %}<a href="/projects" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
 </form>
 
 {% if projects %}
@@ -22,7 +17,6 @@
     <thead>
         <tr>
             <th>Name</th>
-            <th>Tier</th>
             <th>opp_env</th>
             <th>GitHub</th>
             <th>Dependencies</th>
@@ -35,7 +29,6 @@
         {% for p in projects %}
         <tr data-href="/projects/{{ p.name }}" style="cursor:pointer;">
             <td>{{ p.name }}</td>
-            <td>{{ p.tier }}</td>
             <td>{{ p.opp_env_name or "-" }}</td>
             <td>
                 {% if p.github_owner and p.github_repo %}

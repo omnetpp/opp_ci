@@ -388,7 +388,7 @@ def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
 def run_new_form(request: Request, message: str = Query(default=None), message_type: str = Query(default=None)):
     session = SessionLocal()
     try:
-        projects = session.execute(select(Project).order_by(Project.tier, Project.name)).scalars().all()
+        projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
         matrices = session.execute(select(TestMatrix).order_by(TestMatrix.name)).scalars().all()
         os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
         compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
@@ -653,18 +653,12 @@ def run_detail(request: Request, run_id: int):
 def projects_list(
     request: Request,
     name: str = Query(default=None),
-    tier: str = Query(default=None),
 ):
     session = SessionLocal()
     try:
-        query = select(Project).order_by(Project.tier, Project.name)
+        query = select(Project).order_by(Project.name)
         if name:
             query = query.where(Project.name.ilike(f"%{name}%"))
-        if tier:
-            try:
-                query = query.where(Project.tier == int(tier))
-            except ValueError:
-                pass
         projects = session.execute(query).scalars().all()
 
         run_counts = {}
@@ -687,7 +681,6 @@ def projects_list(
             "run_counts": run_counts,
             "last_status": last_status,
             "filter_name": name or "",
-            "filter_tier": tier or "",
         })
     finally:
         session.close()
@@ -707,7 +700,6 @@ def project_new_submit(
     github_owner: str = Form(default=""),
     github_repo: str = Form(default=""),
     git_url: str = Form(default=""),
-    tier: int = Form(default=2),
 ):
     session = SessionLocal()
     try:
@@ -723,7 +715,6 @@ def project_new_submit(
             github_owner=github_owner or None,
             github_repo=github_repo or None,
             git_url=git_url or None,
-            tier=tier,
         )
         session.add(project)
         session.commit()
@@ -810,7 +801,7 @@ def compatibility_index(request: Request):
     session = SessionLocal()
     try:
         projects = session.execute(
-            select(Project).where(Project.dependency_names.isnot(None)).order_by(Project.tier, Project.name)
+            select(Project).where(Project.dependency_names.isnot(None)).order_by(Project.name)
         ).scalars().all()
         # Filter to only those with non-empty dependency lists
         projects = [p for p in projects if p.dependency_names]
@@ -1428,7 +1419,6 @@ def admin_register_project(
     opp_env_name: str = Form(default=""),
     github_owner: str = Form(default=""),
     github_repo: str = Form(default=""),
-    tier: int = Form(default=2),
 ):
     session = SessionLocal()
     try:
@@ -1443,7 +1433,6 @@ def admin_register_project(
             opp_env_name=opp_env_name or None,
             github_owner=github_owner or None,
             github_repo=github_repo or None,
-            tier=tier,
         )
         session.add(project)
         session.commit()

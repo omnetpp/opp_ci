@@ -16,7 +16,7 @@
                 <select name="project" id="project" required>
                     <option value="">— select —</option>
                     {% for p in projects %}
-                    <option value="{{ p.name }}">{{ p.name }} (tier {{ p.tier }})</option>
+                    <option value="{{ p.name }}">{{ p.name }}</option>
                     {% endfor %}
                 </select>
             </div>

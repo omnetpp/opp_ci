@@ -17,11 +17,10 @@ class Project(Base):
     github_owner = Column(String, nullable=True)
     github_repo = Column(String, nullable=True)
     git_url = Column(String, nullable=True)
-    tier = Column(Integer, default=2)
     dependency_names = Column(JSON, default=list)
 
     def __repr__(self):
-        return f"<Project(name={self.name!r}, tier={self.tier})>"
+        return f"<Project(name={self.name!r})>"
 
 
 class Version(Base):

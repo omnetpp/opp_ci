@@ -1,18 +1,17 @@
 """
-Tier 1 project catalog for opp_ci.
+Core project catalog for opp_ci.
 
-Defines the known projects and their dependency relationships.
-Later stages will import this from the opp_env database dynamically.
+Defines the well-known projects and their dependency relationships.
+opp_ci sync-catalog imports the rest from the opp_env catalog.
 """
 
-TIER1_PROJECTS = [
+CORE_PROJECTS = [
     {
         "name": "omnetpp",
         "opp_env_name": "omnetpp",
         "github_owner": "omnetpp",
         "github_repo": "omnetpp",
         "git_url": "https://github.com/omnetpp/omnetpp.git",
-        "tier": 1,
         "dependency_names": [],
     },
     {
@@ -21,7 +20,6 @@ TIER1_PROJECTS = [
         "github_owner": "inet-framework",
         "github_repo": "inet",
         "git_url": "https://github.com/inet-framework/inet.git",
-        "tier": 1,
         "dependency_names": ["omnetpp"],
     },
     {
@@ -30,7 +28,6 @@ TIER1_PROJECTS = [
         "github_owner": "Unipisa",
         "github_repo": "Simu5G",
         "git_url": "https://github.com/Unipisa/Simu5G.git",
-        "tier": 1,
         "dependency_names": ["inet", "omnetpp"],
     },
     {
@@ -39,17 +36,16 @@ TIER1_PROJECTS = [
         "github_owner": "sommer",
         "github_repo": "veins",
         "git_url": "https://github.com/sommer/veins.git",
-        "tier": 1,
         "dependency_names": ["omnetpp"],
     },
 ]
 
 
 def seed_projects(session):
-    """Insert Tier 1 projects into the database if they don't already exist."""
+    """Insert core projects into the database if they don't already exist."""
     from opp_ci.db.models import Project
 
-    for proj_data in TIER1_PROJECTS:
+    for proj_data in CORE_PROJECTS:
         existing = session.query(Project).filter_by(name=proj_data["name"]).first()
         if existing is None:
             session.add(Project(**proj_data))

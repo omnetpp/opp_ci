@@ -36,7 +36,7 @@ opp_ci/
 ├── scheduler.py        — matrix expansion, job dispatch
 ├── executor.py         — runs tests via opp_repl (direct or opp_env)
 ├── worker.py           — worker agent (poll/heartbeat/result loop)
-├── catalog.py          — Tier 1 project seed data
+├── catalog.py          — core project seed data
 ├── opp_env_adapter.py  — wraps opp_env CLI/API for catalog discovery
 ├── dependency.py       — resolve and pin dependency versions
 ├── compatibility.py    — pass/fail aggregation across version pairs
@@ -64,7 +64,7 @@ opp_ci/
 
 | Model | Purpose |
 |---|---|
-| **Project** | name, opp_env_name, github_owner, github_repo, git_url, tier (1/2), dependency_names |
+| **Project** | name, opp_env_name, github_owner, github_repo, git_url, dependency_names |
 | **Version** | project FK, opp_env_version, git_ref (branch/tag/SHA), label, `resolved_dependencies` JSON (e.g. `{"omnetpp": "6.1"}`) |
 | **OS** | name, version, arch |
 | **Compiler** | name, version |

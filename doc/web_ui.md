@@ -8,7 +8,7 @@ with `opp_ci serve` (default `127.0.0.1:8000`).
 | Path | Purpose |
 |---|---|
 | `/` | Dashboard — project health badges, recent activity, summary stats |
-| `/projects` | Project catalog list with tier, last tested version, status |
+| `/projects` | Project catalog list with last tested version and status |
 | `/projects/{name}` | Per-project summary, version history, run buttons |
 | `/runs` | Test runs list — filterable/sortable, cancel and re-run actions |
 | `/runs/new` | Submit form — single run or "Run from Matrix" |

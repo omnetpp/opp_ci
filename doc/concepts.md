@@ -18,10 +18,11 @@ either in opp_env's recipe or in the matrix config.
 
 ## Supported projects
 
-`opp_ci` can test any project in the opp_env catalog. Projects are
-grouped into two tiers based on how heavily they are tested.
-
-### Tier 1 — active development, full test suite
+`opp_ci` can test any project in the opp_env catalog. The actively
+developed core (omnetpp, inet, simu5g, veins) ships in the seed
+catalog; the remaining ~60 opp_env projects (simulte, plexe, flora,
+artery_allinone, core4inet, nesting, …) are imported on demand by
+`opp_ci sync-catalog`.
 
 | Project | Example versions | Dependencies |
 |---|---|---|
@@ -30,19 +31,15 @@ grouped into two tiers based on how heavily they are tested.
 | simu5g | 1.3, 1.2, git | inet, omnetpp |
 | veins | 5.3, 5.2, 5.1, git | omnetpp |
 
-### Tier 2 — smoke + build verification
+How heavily a project is tested is determined by the `TestMatrix`
+entries attached to it and any `AutoTestRule` triggers — see
+[Test Matrices](#test-matrices) and
+[GitHub Integration](github_integration.md). Newly imported projects
+get a default `build + smoke` matrix on the reference platform, which
+you can extend or replace without any code change.
 
-The opp_env catalog ships ~60 additional projects (simulte, plexe, flora,
-artery_allinone, core4inet, nesting, …). These are auto-imported as
-Tier 2 with a default `build + smoke` matrix on the reference platform.
-
-A Tier 2 project is promoted to Tier 1 by attaching a richer
-`TestMatrix` (more platforms, more test types) and optional
-`AutoTestRule` entries for branch/PR triggers. No code change is needed
-— see [Test Matrices](#test-matrices) and [GitHub Integration](github_integration.md).
-
-The reference platform used for Tier 2 is configurable via the
-`OPP_CI_REFERENCE_PLATFORM` env var (default: `Ubuntu 24.04/gcc-13`).
+The reference platform used for the default matrix is configurable via
+the `OPP_CI_REFERENCE_PLATFORM` env var (default: `Ubuntu 24.04/gcc-13`).
 
 ## How opp_env drives the matrix
 
@@ -59,8 +56,7 @@ the `opp_env_adapter` module) to:
    version selectors in the web UI and matrix configs.
 
 `opp_ci sync-catalog` upserts the discovered projects and versions into
-opp_ci's database and generates default matrices for new Tier 2
-entries.
+opp_ci's database and generates default matrices for new entries.
 
 ## Test matrices
 

@@ -37,7 +37,7 @@ Supported test types (comma-separated for `--test`): `smoke`,
 |---|---|
 | `opp_ci create-matrix` | Create a named matrix. Required: `--name`, `--project`, `--tests`. Axes: `--project-versions`, `--builds`, `--os` [`--os-version`], `--compiler` [`--compiler-version`], `--refs`, `--ref-range`, `--deps`, `--isolation`, `--toolchain`, `--opp-file`. `--replace` overwrites an existing matrix of the same name. |
 | `opp_ci list-matrices` | List matrices with expanded job count. |
-| `opp_ci seed-matrices` | Seed default matrices for Tier 1 projects. |
+| `opp_ci seed-matrices` | Seed default matrices for the core projects. |
 
 Platform axes accept two styles:
 
@@ -58,10 +58,10 @@ Platform axes accept two styles:
 
 | Command | Purpose |
 |---|---|
-| `opp_ci seed-projects` | Seed Tier 1 projects from the static catalog. |
-| `opp_ci sync-catalog` | Import all opp_env projects + versions. Tier 2 projects get default matrices. |
-| `opp_ci add-project --name NAME` | Manually register a project not in opp_env. Options: `--github owner/repo`, `--git-url`, `--opp-env-name`, `--tier`, `--deps`. |
-| `opp_ci list-projects` | Show project catalog (tier, deps, GitHub). |
+| `opp_ci seed-projects` | Seed the core projects from the static catalog. |
+| `opp_ci sync-catalog` | Import all opp_env projects + versions. New projects get a default matrix. |
+| `opp_ci add-project --name NAME` | Manually register a project not in opp_env. Options: `--github owner/repo`, `--git-url`, `--opp-env-name`, `--deps`. |
+| `opp_ci list-projects` | Show project catalog (deps, GitHub). |
 | `opp_ci add-version --project P --label L` | Register a version. Options: `--ref`, `--opp-env-version`, `--deps` (JSON). |
 | `opp_ci list-versions [--project P]` | Show known versions per project. |
 | `opp_ci resolve-deps PROJECT-VERSION` | Print resolved deps. `--pin dep=ver` to override. |
