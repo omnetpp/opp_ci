@@ -26,15 +26,14 @@ RUN dnf -y install \
 RUN false
 {%- endif %}
 
-# opp_ci + opp_repl come from wheels built on the host by
-# build_runner_image() — they're not on PyPI, so the build context drops
-# them under wheels/ and pip picks them up via --find-links. Transitive
-# deps still come from the regular index.
-COPY wheels/ /tmp/opp_ci_wheels/
+# opp_ci + opp_repl aren't on PyPI — pip-install them straight from GitHub.
+# Pins to the default branch; switch to git+https://...@<ref> for reproducible
+# builds, or override at image-build time once the templating supports it.
 RUN python3 -m venv /opt/opp_ci_venv \
  && /opt/opp_ci_venv/bin/pip install --upgrade pip \
- && /opt/opp_ci_venv/bin/pip install --find-links /tmp/opp_ci_wheels opp_ci opp_repl \
- && rm -rf /tmp/opp_ci_wheels
+ && /opt/opp_ci_venv/bin/pip install \
+        git+https://github.com/omnetpp/opp_repl.git \
+        git+https://github.com/omnetpp/opp_ci.git
 ENV PATH=/opt/opp_ci_venv/bin:$PATH
 
 WORKDIR /work
