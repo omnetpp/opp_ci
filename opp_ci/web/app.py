@@ -894,6 +894,51 @@ def compiler_delete(compiler_id: int):
         session.close()
 
 
+@app.get("/workers", response_class=HTMLResponse)
+def workers_list(request: Request):
+    """List registered workers, flagging those whose heartbeat is fresh as connected."""
+    import datetime as _dt
+    from opp_ci.config import WORKER_HEARTBEAT_TIMEOUT
+
+    session = SessionLocal()
+    try:
+        workers = session.execute(select(Worker).order_by(Worker.name)).scalars().all()
+        now = _dt.datetime.utcnow()
+        threshold = now - _dt.timedelta(seconds=WORKER_HEARTBEAT_TIMEOUT)
+
+        rows = []
+        for w in workers:
+            connected = w.last_heartbeat is not None and w.last_heartbeat > threshold
+            age = (now - w.last_heartbeat).total_seconds() if w.last_heartbeat else None
+            tags = w.tags or []
+            os_tags = [t for t in tags if t.startswith("os:")]
+            compiler_tags = [t for t in tags if t.startswith("compiler:")]
+            has_docker = "docker" in tags
+            has_nix = "nix" in tags
+            other_tags = [t for t in tags
+                          if not (t.startswith("os:") or t.startswith("compiler:")
+                                  or t in ("docker", "nix"))]
+            rows.append({
+                "worker": w,
+                "connected": connected,
+                "heartbeat_age_seconds": age,
+                "os_tags": os_tags,
+                "compiler_tags": compiler_tags,
+                "has_docker": has_docker,
+                "has_nix": has_nix,
+                "other_tags": other_tags,
+            })
+        connected_count = sum(1 for r in rows if r["connected"])
+
+        return templates.TemplateResponse(request, "workers.html", {
+            "rows": rows,
+            "connected_count": connected_count,
+            "heartbeat_timeout": WORKER_HEARTBEAT_TIMEOUT,
+        })
+    finally:
+        session.close()
+
+
 @app.get("/rules", response_class=HTMLResponse)
 def rules_list(request: Request):
     session = SessionLocal()

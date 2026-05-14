@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Workers{% endblock %}
+{% block content %}
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+    <h2>Workers</h2>
+    <div style="color:var(--muted); font-size:0.9rem;">
+        {{ connected_count }} connected / {{ rows|length }} registered
+        &middot; heartbeat timeout {{ heartbeat_timeout }}s
+    </div>
+</div>
+
+{% if rows %}
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Connected</th>
+            <th>Status</th>
+            <th>Capabilities</th>
+            <th>Other Tags</th>
+            <th>Jobs</th>
+            <th>Concurrency</th>
+            <th>Last Heartbeat</th>
+            <th>Registered</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for row in rows %}
+        {% set w = row.worker %}
+        <tr style="{{ 'opacity:0.55;' if not row.connected else '' }}">
+            <td><strong>{{ w.name }}</strong></td>
+            <td>
+                {% if row.connected %}
+                <span class="badge badge-passed">● online</span>
+                {% else %}
+                <span class="badge badge-queued">○ offline</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if w.status == "online" %}<span class="badge badge-passed">online</span>
+                {% elif w.status == "busy" %}<span class="badge badge-running">busy</span>
+                {% else %}<span class="badge badge-queued">{{ w.status }}</span>{% endif %}
+            </td>
+            <td>
+                {% if row.has_docker %}<span class="badge badge-passed">docker</span>{% endif %}
+                {% if row.has_nix %}<span class="badge badge-passed">nix</span>{% endif %}
+                {% if row.os_tags or row.compiler_tags %}
+                <div style="margin-top:0.25rem; font-size:0.85rem; color:var(--muted);">
+                    {% for t in row.os_tags %}<code>{{ t }}</code>{% if not loop.last %} {% endif %}{% endfor %}
+                    {% if row.os_tags and row.compiler_tags %} &middot; {% endif %}
+                    {% for t in row.compiler_tags %}<code>{{ t }}</code>{% if not loop.last %} {% endif %}{% endfor %}
+                </div>
+                {% endif %}
+                {% if not (row.has_docker or row.has_nix or row.os_tags or row.compiler_tags) %}
+                <span style="color:var(--muted);">-</span>
+                {% endif %}
+            </td>
+            <td>{{ row.other_tags|join(", ") if row.other_tags else "-" }}</td>
+            <td>{{ w.current_job_count }}</td>
+            <td>{{ w.concurrency }}</td>
+            <td>
+                {% if w.last_heartbeat %}
+                <span title="{{ w.last_heartbeat.strftime('%Y-%m-%d %H:%M:%S') }} UTC">
+                    {% if row.heartbeat_age_seconds < 60 %}{{ row.heartbeat_age_seconds|int }}s ago
+                    {% elif row.heartbeat_age_seconds < 3600 %}{{ (row.heartbeat_age_seconds / 60)|int }}m ago
+                    {% else %}{{ (row.heartbeat_age_seconds / 3600)|int }}h ago{% endif %}
+                </span>
+                {% else %}
+                <span style="color:var(--muted);">never</span>
+                {% endif %}
+            </td>
+            <td>{{ w.registered_at.strftime("%Y-%m-%d %H:%M") if w.registered_at else "-" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty">
+    No workers registered. Use
+    <code>opp_ci worker register --name &lt;name&gt; --auto-tags --concurrency &lt;n&gt;</code>
+    to add one.
+</p>
+{% endif %}
+
+<p style="color:var(--muted); font-size:0.85rem; margin-top:1rem;">
+    A worker is shown as <strong>connected</strong> when its last heartbeat
+    is within the last {{ heartbeat_timeout }} seconds. The <code>Status</code>
+    column reflects the value the coordinator last wrote (online/busy/offline)
+    and may lag if the worker process exited without notice.
+</p>
+{% endblock %}
