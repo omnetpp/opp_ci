@@ -28,13 +28,29 @@ RUN false
 
 # opp_ci + opp_repl aren't on PyPI — install straight from GitHub. The SHA
 # is resolved at image-build time on the host via 'git ls-remote' so a new
-# push invalidates this layer's docker cache. To pin: edit render_dockerfile.
+# push invalidates this layer's docker cache. opp_env IS on PyPI.
 RUN python3 -m venv /opt/opp_ci_venv \
  && /opt/opp_ci_venv/bin/pip install --upgrade pip \
  && /opt/opp_ci_venv/bin/pip install \
+        opp_env \
         git+https://github.com/omnetpp/opp_repl.git@{{ opp_repl_ref }} \
         git+https://github.com/omnetpp/opp_ci.git@{{ opp_ci_ref }}
 ENV PATH=/opt/opp_ci_venv/bin:$PATH
 
+# Install OMNeT++ {{ omnetpp_version }} into a nixless opp_env workspace.
+# Using --nixless-workspace means opp_env uses the apt-installed compiler
+# and libs (which we picked above) rather than pulling Nix into the image.
+RUN mkdir -p /opt/opp_env_workspace \
+ && opp_env -l ERROR install --init --nixless-workspace \
+        -w /opt/opp_env_workspace omnetpp-{{ omnetpp_version }}
+
+# Entry wrapper: container is invoked with opp_ci args, but opp_repl needs
+# OMNETPP_ROOT / PATH etc. set. 'opp_env run' does exactly that.
+RUN cat > /opt/opp_ci_entry.sh <<'SCRIPT'
+#!/bin/sh
+exec opp_env -l ERROR run -w /opt/opp_env_workspace omnetpp-{{ omnetpp_version }} -c "opp_ci $*"
+SCRIPT
+RUN chmod +x /opt/opp_ci_entry.sh
+
 WORKDIR /work
-ENTRYPOINT ["opp_ci"]
+ENTRYPOINT ["/opt/opp_ci_entry.sh"]

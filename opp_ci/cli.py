@@ -1367,24 +1367,32 @@ def image_group():
 @click.option("--os-version", required=True, help="OS version tag, e.g. '26.04'")
 @click.option("--compiler", default=None, help="Compiler name (required for --toolchain=host)")
 @click.option("--compiler-version", default=None, help="Compiler version (required for --toolchain=host)")
+@click.option("--omnetpp-version", default=None,
+              help="OMNeT++ version baked into the image (required for --toolchain=host)")
 @click.option("--toolchain", type=click.Choice(["host", "nix"]), required=True,
               help="Whether the compiler comes from the OS package manager (host) or opp_env/Nix")
 @click.option("--push", is_flag=True, help="Push the built image to the configured registry")
-def image_build(os_name, os_version, compiler, compiler_version, toolchain, push):
-    """Build one opp-ci-runner image for a (toolchain, os, compiler) combination."""
+def image_build(os_name, os_version, compiler, compiler_version, omnetpp_version, toolchain, push):
+    """Build one opp-ci-runner image for a (toolchain, os, compiler, omnetpp) combination."""
     from opp_ci.executor import build_runner_image
 
-    if toolchain == "host" and (not compiler or not compiler_version):
-        raise click.ClickException("--compiler and --compiler-version are required when --toolchain=host")
+    if toolchain == "host":
+        if not compiler or not compiler_version:
+            raise click.ClickException("--compiler and --compiler-version are required when --toolchain=host")
+        if not omnetpp_version:
+            raise click.ClickException("--omnetpp-version is required when --toolchain=host")
 
     os_slug = f"{os_name.lower()}-{os_version}"
     if toolchain == "nix":
         tag = f"opp-ci-runner:nix-{os_slug}"
     else:
-        tag = f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}"
+        tag = f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}-omnetpp-{omnetpp_version}"
 
     try:
-        build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version, push=push)
+        build_runner_image(
+            tag, toolchain, os_name, os_version, compiler, compiler_version,
+            omnetpp_version=omnetpp_version, push=push,
+        )
     except RuntimeError as e:
         raise click.ClickException(str(e))
     click.echo(f"Built {tag}{' and pushed' if push else ''}")
@@ -1416,8 +1424,10 @@ def image_build_matrix(ctx, matrix_name, push):
         for job in jobs:
             if (job.get("isolation") or "none") != "docker":
                 continue
+            deps = job.get("resolved_deps") or {}
+            omnetpp_version = deps.get("omnetpp") if isinstance(deps, dict) else None
             key = (job.get("toolchain") or "none", job.get("os"), job.get("os_version"),
-                   job.get("compiler"), job.get("compiler_version"))
+                   job.get("compiler"), job.get("compiler_version"), omnetpp_version)
             if key in seen:
                 continue
             seen.add(key)
@@ -1429,6 +1439,7 @@ def image_build_matrix(ctx, matrix_name, push):
                 os_version=key[2],
                 compiler=key[3],
                 compiler_version=key[4],
+                omnetpp_version=key[5],
                 toolchain=toolchain_arg,
                 push=push,
             )

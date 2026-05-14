@@ -342,12 +342,17 @@ def _create_git_worktree(project_dir, git_ref):
     return target
 
 
-def _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version):
-    """Compute the runner image tag for a given (toolchain, os, compiler) combination.
+def _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version,
+                      omnetpp_version=None):
+    """Compute the runner image tag for a given combination.
 
     Naming convention:
       toolchain=nix:  opp-ci-runner:nix-<os>-<osver>
-      toolchain=none: opp-ci-runner:host-<os>-<osver>-<compiler>-<compver>
+      toolchain=none: opp-ci-runner:host-<os>-<osver>-<compiler>-<compver>-omnetpp-<ompver>
+
+    The host-toolchain image has a specific OMNeT++ version baked in (built
+    via opp_env install --nixless-workspace at image-build time), so a
+    different omnetpp version means a different image.
     """
     if not os_name or not os_version:
         raise ValueError("isolation=docker requires both 'os' and 'os_version' to be set on the run")
@@ -358,7 +363,12 @@ def _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version
         raise ValueError(
             "isolation=docker with toolchain=none requires both 'compiler' and 'compiler_version'"
         )
-    return f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}"
+    if not omnetpp_version:
+        raise ValueError(
+            "isolation=docker with toolchain=none requires an omnetpp version "
+            "(set resolved_deps['omnetpp'] on the run, or pick one in the New Run form)"
+        )
+    return f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}-omnetpp-{omnetpp_version}"
 
 
 def _resolve_remote_head(url, ref="HEAD"):
@@ -382,17 +392,19 @@ _OPP_CI_REPO = "https://github.com/omnetpp/opp_ci.git"
 _OPP_REPL_REPO = "https://github.com/omnetpp/opp_repl.git"
 
 
-def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version):
+def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version,
+                      omnetpp_version=None):
     """Render opp_ci/docker/Dockerfile.{toolchain}.j2 into a string.
 
     Accepts both the matrix-axis spelling ("none") and the CLI spelling
-    ("host") — they refer to the same template (use the host OS's package
-    manager for the compiler) but the two layers came in independently.
+    ("host") — they refer to the same template.
 
-    For the host template, the current HEAD SHA of opp_ci and opp_repl is
-    resolved via 'git ls-remote' and baked into the pip-install lines, so
-    a fresh push to either repo invalidates the docker layer cache and
-    triggers a real rebuild on the next image-build call.
+    For the host template:
+      * Current HEAD SHAs of opp_ci and opp_repl are resolved via
+        'git ls-remote' and baked into the pip-install lines, so a fresh
+        push invalidates the docker layer cache.
+      * *omnetpp_version* is required: it's installed via opp_env at
+        build time using a nixless workspace.
     """
     import importlib.resources
     from jinja2 import Environment, FileSystemLoader
@@ -411,13 +423,14 @@ def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version
         "compiler_version": compiler_version,
     }
     if template_name == "host":
+        if not omnetpp_version:
+            raise ValueError("host-toolchain image requires omnetpp_version")
+        ctx["omnetpp_version"] = omnetpp_version
         pkgs_path = docker_dir.joinpath("packages.yml")
         with open(pkgs_path) as f:
             pkg_map = yaml.safe_load(f) or {}
         key = f"{ctx['os']}+{ctx['compiler']}-{ctx['compiler_version']}"
         ctx["compiler_package"] = pkg_map.get(key, f"{ctx['compiler']}-{ctx['compiler_version']}")
-        # Pin pip install lines to current upstream HEADs so 'docker build'
-        # rebuilds the install layer whenever either repo gets new commits.
         ctx["opp_ci_ref"] = _resolve_remote_head(_OPP_CI_REPO) or "HEAD"
         ctx["opp_repl_ref"] = _resolve_remote_head(_OPP_REPL_REPO) or "HEAD"
     return template.render(**ctx)
@@ -438,15 +451,19 @@ def _image_exists_locally(tag):
     return result.returncode == 0
 
 
-def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version, *, push=False):
+def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version,
+                       *, omnetpp_version=None, push=False):
     """Build (and optionally push) one opp-ci-runner image.
 
-    Used by both 'opp_ci image build' and the worker's on-demand image build.
-    opp_ci + opp_repl are installed inside the container from their GitHub
-    HEADs (see Dockerfile.host.j2); no host-side source tree is required.
-    Raises RuntimeError on any docker step failure.
+    For host toolchain, *omnetpp_version* is required — the Dockerfile uses
+    'opp_env install --nixless-workspace' at build time to bake that specific
+    OMNeT++ into the image so the container can run opp_repl tests without
+    needing OMNeT++ at run time.
     """
-    dockerfile_content = render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version)
+    dockerfile_content = render_dockerfile(
+        toolchain, os_name, os_version, compiler, compiler_version,
+        omnetpp_version=omnetpp_version,
+    )
     with tempfile.TemporaryDirectory() as tmp:
         dockerfile_path = os.path.join(tmp, "Dockerfile")
         with open(dockerfile_path, "w") as f:
@@ -463,17 +480,22 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
             raise RuntimeError(f"docker push {tag} failed (exit {result.returncode})")
 
 
-def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version):
+def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version,
+                         *, omnetpp_version=None):
     """Invoke 'docker build' for the image so docker's layer cache picks up
     any changes — new pinned SHAs from an upstream push, edits to the
-    Dockerfile template, a different compiler package, etc.
+    Dockerfile template, a different compiler package, a different OMNeT++
+    version, etc.
 
     When nothing relevant has changed, every layer hits the cache and the
     call finishes in a couple of seconds. When something has changed, only
     the affected layers (and downstream ones) actually rebuild.
     """
     _logger.info("Ensuring image %s is up to date", tag)
-    build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version)
+    build_runner_image(
+        tag, toolchain, os_name, os_version, compiler, compiler_version,
+        omnetpp_version=omnetpp_version,
+    )
 
 
 def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
@@ -494,9 +516,17 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
     os_version = kwargs.get("os_version")
     compiler = kwargs.get("compiler")
     compiler_version = kwargs.get("compiler_version")
+    resolved_deps = kwargs.get("resolved_deps") or {}
+    omnetpp_version = resolved_deps.get("omnetpp") if isinstance(resolved_deps, dict) else None
 
-    image = _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version)
-    _ensure_runner_image(image, toolchain, os_name, os_version, compiler, compiler_version)
+    image = _docker_image_tag(
+        toolchain, os_name, os_version, compiler, compiler_version,
+        omnetpp_version=omnetpp_version,
+    )
+    _ensure_runner_image(
+        image, toolchain, os_name, os_version, compiler, compiler_version,
+        omnetpp_version=omnetpp_version,
+    )
 
     project_dir = _resolve_project_dir(project, opp_file)
     worktree_path = None

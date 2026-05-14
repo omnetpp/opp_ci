@@ -111,6 +111,7 @@ class WorkerAgent:
             "os_version": job.get("os_version"),
             "compiler": job.get("compiler"),
             "compiler_version": job.get("compiler_version"),
+            "resolved_deps": job.get("resolved_deps"),
         }
 
         _logger.info(
