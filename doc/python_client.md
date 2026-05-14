@@ -1,0 +1,58 @@
+# Python Client
+
+`opp_ci/client.py` provides `OppCiClient`, a thin wrapper around the
+[REST API](rest_api.md) for programmatic submission and querying.
+
+## Setup
+
+```python
+from opp_ci.client import OppCiClient
+
+ci = OppCiClient(url="https://ci.omnetpp.org/api", token="<submitter-token>")
+```
+
+Token roles are described in [rest_api.md](rest_api.md#authentication).
+Use a `submitter` token for run submission and a `readonly` token for
+read-only scripts.
+
+## Submitting runs
+
+```python
+# Single run
+run = ci.submit_run(project="inet", test_type="smoke", git_ref="topic/my-feature")
+print(run)  # {"id": 42, "status": "queued"}
+
+# All jobs in a named matrix
+ci.submit_matrix(matrix_name="inet-full")
+```
+
+## Querying
+
+```python
+ci.get_run(42)
+ci.list_runs(project="inet", status="FAIL")
+ci.list_workers()
+```
+
+## Admin operations (admin token required)
+
+```python
+ci.register_worker(name="builder-1", tags=["linux", "amd64"], concurrency=4)
+ci.create_token(name="github-bot", role="submitter")
+```
+
+## CLI equivalent
+
+The CLI accepts `--remote` to route through the API instead of running
+locally:
+
+```bash
+export OPP_CI_COORDINATOR_URL=https://ci.omnetpp.org
+export OPP_CI_API_TOKEN=<submitter-token>
+
+opp_ci --remote run --project inet-4.5 --test smoke,fingerprint --ref master
+opp_ci --remote list-runs --project inet --status FAIL
+```
+
+Useful for one-off submissions, cron jobs, or scripting around the CI
+without writing Python.

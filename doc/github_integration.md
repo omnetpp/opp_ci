@@ -1,0 +1,119 @@
+# GitHub Integration
+
+opp_ci can be wired to GitHub in two directions:
+
+- **Inbound** — webhooks trigger test runs on push / PR events.
+- **Outbound** — opp_ci posts commit statuses, PR comments, and (via
+  `workflow_dispatch`) git notes back to GitHub.
+
+The webhook receiver, status updater, and API client live in
+`opp_ci/github/`.
+
+## Webhook receiver
+
+`opp_ci/github/webhook.py` exposes the receiver mounted at
+`POST /api/github/webhook`. The receiver:
+
+1. Verifies `X-Hub-Signature-256` against
+   `OPP_CI_GITHUB_WEBHOOK_SECRET` (HMAC-SHA256).
+2. Dispatches `push`, `pull_request`, and `ping` events.
+3. Looks up the `Project` by `github_owner` / `github_repo`.
+4. Matches the event's branch / tag / PR head against `AutoTestRule`
+   patterns using `fnmatch` glob.
+5. Expands each matched rule's linked matrix and queues `TestRun` rows.
+6. Posts a `pending` commit status to the head SHA.
+
+Webhook secret configuration: see [configuration.md](configuration.md).
+
+## AutoTestRule
+
+A rule says "for this project, on this kind of event, matching this
+pattern, run this matrix". Stored in the `auto_test_rules` table:
+
+| Column | Type | Purpose |
+|---|---|---|
+| `project_id` | FK Project | Which project to trigger on |
+| `rule_type` | enum: `branch` / `pr` / `tag` | Event type |
+| `pattern` | glob string | e.g. `master`, `topic/*`, `v6.*`, `*` |
+| `matrix_id` | FK TestMatrix (nullable) | Matrix to expand. If null, smoke-only. |
+| `enabled` | bool | Rule on/off |
+
+Examples:
+
+| Project | Type | Pattern | Matrix | Meaning |
+|---|---|---|---|---|
+| inet | branch | `master` | `inet-full` | Full matrix on every push to master |
+| inet | pr | `*` | `inet-smoke` | Smoke on every PR |
+| omnetpp | tag | `v6.*` | `omnetpp-release` | Release matrix on `v6.x` tags |
+
+Manage rules via:
+
+- CLI: `opp_ci rule create / list / delete / test-webhook`
+- Web: `/rules` (create form, delete per-row, detail at `/rules/{id}`)
+- API: `GET/POST /api/github/rules`, `DELETE /api/github/rules/{id}`
+
+`opp_ci rule test-webhook` simulates a webhook locally — useful for
+verifying rule patterns without hitting GitHub.
+
+## Outbound: status checks and PR comments
+
+`opp_ci/github/client.py` wraps the GitHub REST API v3:
+
+- `create_commit_status()` — pending / success / failure / error
+- `set_status_pending()` and `set_status_from_run()` — convenience for
+  the lifecycle: pending when queued → final state when the worker
+  reports back.
+- `create_pr_comment()` and `update_or_create_pr_comment()` — PR
+  comments include a hidden HTML marker so subsequent runs update the
+  same comment rather than spamming new ones.
+- `get_pr()`, `get_commit()` — metadata reads.
+
+`opp_ci/github/status.py:update_github_status()` is invoked from
+`/api/workers/result` once a worker finishes a job. It posts the final
+commit status and refreshes the PR comment.
+
+GitHub fields stored on each `TestRun`:
+
+- `github_owner`, `github_repo`
+- `github_commit_sha`
+- `github_pr_number` (null for push events)
+- `github_status_url` — link back to the run's web page, used in the
+  status's `target_url`
+
+## Token model
+
+opp_ci uses two separate GitHub tokens, each with the minimum scope:
+
+| Token | Scope | Purpose |
+|---|---|---|
+| `OPP_CI_GITHUB_TOKEN` (or file) | classic / repo statuses | Post commit statuses and PR comments. |
+| `OPP_CI_GITHUB_ACTIONS_TOKEN` (or file) | fine-grained, `Actions: Write` only | Trigger `ci-notes.yml` on target repos. opp_ci never gets `Contents: Write`; the workflow itself uses the built-in `GITHUB_TOKEN` to push notes. |
+
+See [git_notes.md](git_notes.md) for the notes-delivery flow.
+
+## Webhook setup
+
+1. Generate a webhook secret:
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+2. Set `OPP_CI_GITHUB_WEBHOOK_SECRET` on the coordinator and restart.
+
+3. In GitHub repo settings → Webhooks → Add webhook:
+   - Payload URL: `https://ci.omnetpp.org/api/github/webhook`
+   - Content type: `application/json`
+   - Secret: the value from step 1
+   - Events: `push`, `pull_request` (or "Send me everything")
+
+4. Add a rule:
+
+   ```bash
+   opp_ci rule create --project inet --type branch --pattern master --matrix inet-full
+   ```
+
+5. Push a commit → check `/runs` for the queued job.
+
+For local-only setup without a public coordinator, see
+[deployment.md](deployment.md#local-github-integration).

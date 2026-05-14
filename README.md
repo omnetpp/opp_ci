@@ -24,14 +24,23 @@ and feature matrices.
 
 ## Documentation
 
-- [Getting Started](doc/getting_started.md) — installation, configuration, and first run
-- [Architecture](doc/architecture.md) — system components and data flow
-- [CLI Reference](doc/cli_reference.md) — command-line interface usage
-- [Deployment](doc/deployment.md) — production deployment guide
+User guides:
 
-## Status
+- [Getting Started](doc/getting_started.md) — installation and first run
+- [Concepts](doc/concepts.md) — opp_env / opp_repl / opp_ci roles, tiers, matrices
+- [CLI Reference](doc/cli_reference.md) — command-line interface
+- [Web UI](doc/web_ui.md) — page map and result-search modes
+- [Configuration](doc/configuration.md) — environment variables
+- [Deployment](doc/deployment.md) — local, cloud, hybrid
+- [Workers](doc/workers.md) — register and run remote workers
+- [GitHub integration](doc/github_integration.md) — webhooks, statuses, rules
+- [Git notes](doc/git_notes.md) — per-commit CI summaries delivered via `git fetch`
+- [Python client](doc/python_client.md) — programmatic API access
 
-Early development. See [PLAN.md](PLAN.md) for the design and staged development roadmap.
+For developers:
+
+- [Architecture](doc/architecture.md) — components, schema, execution flow
+- [REST API](doc/rest_api.md) — endpoints and authentication
 
 ## License
 

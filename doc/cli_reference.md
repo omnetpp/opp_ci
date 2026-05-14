@@ -1,188 +1,144 @@
 # CLI Reference
 
-## Global Options
+```
+opp_ci [GLOBAL OPTIONS] COMMAND [ARGS]...
+```
 
-```
-opp_ci [OPTIONS] COMMAND [ARGS]...
-```
+For full per-command flags, run `opp_ci <command> --help`.
+
+## Global options
 
 | Option | Description |
 |---|---|
 | `-v`, `--verbose` | Enable debug-level logging |
+| `--remote` | Submit to a remote coordinator instead of running locally. Uses `OPP_CI_COORDINATOR_URL` and `OPP_CI_API_TOKEN`. |
 
-## Commands
+## Database
 
-### `opp_ci init-db`
+| Command | Purpose |
+|---|---|
+| `opp_ci init-db` | Create tables. Auto-runs on first `run`, so usually optional. |
+| `opp_ci reset-db --yes` | Drop and recreate all tables. Destructive. |
 
-Create database tables explicitly. Not required — tables are auto-created on first `run`.
+## Running tests
 
-### `opp_ci run`
+| Command | Purpose |
+|---|---|
+| `opp_ci run` | Run a single test for a project. Required: `--project`, `--test`. Common: `--ref`, `--mode`, `--isolation {none\|docker}`, `--toolchain {none\|nix}`, `--os`, `--os-version`, `--compiler`, `--compiler-version`, `--pin <dep>=<ver>` (repeatable), `--force`, `--skip-install`. |
+| `opp_ci run-matrix --matrix NAME` | Expand a named matrix and run all jobs. Options: `--force`, `--skip-install`. |
 
-Run a test for a project and store the result.
+Supported test types (comma-separated for `--test`): `smoke`,
+`fingerprint`, `statistical`, `feature`, `speed`, `sanitizer`, `chart`,
+`release`, `build`, `all`.
 
-```
-opp_ci run --project PROJECT --test TEST_TYPE [--skip-install]
-```
+## Matrices
 
-| Option | Required | Description |
-|---|---|---|
-| `--project` | yes | Project name (e.g. `inet`, `inet-4.5`, `omnetpp`, `fifo`) |
-| `--test` | yes | Test type(s), comma-separated (e.g. `smoke,fingerprint`) |
-| `--skip-install` | no | Skip the `opp_env install` step (opp_env mode only) |
+| Command | Purpose |
+|---|---|
+| `opp_ci create-matrix` | Create a named matrix. Required: `--name`, `--project`, `--tests`. Axes: `--project-versions`, `--builds`, `--os` [`--os-version`], `--compiler` [`--compiler-version`], `--refs`, `--ref-range`, `--deps`, `--isolation`, `--toolchain`, `--opp-file`. `--replace` overwrites an existing matrix of the same name. |
+| `opp_ci list-matrices` | List matrices with expanded job count. |
+| `opp_ci seed-matrices` | Seed default matrices for Tier 1 projects. |
 
-Supported test types: `smoke`, `fingerprint`, `statistical`, `feature`, `speed`, `sanitizer`, `chart`
+Platform axes accept two styles:
 
-In direct mode (`OPP_CI_USE_OPP_ENV=0`), runs `opp_repl` commands directly with `--output-format json` to capture structured test details.
+- **Combined**: `--os 'Ubuntu 24.04,Fedora 41'` — auto-parsed into name + version
+- **Structured**: `--os 'Ubuntu,Fedora' --os-version '24.04,41'` — cross-product
 
-### `opp_ci run-matrix`
+## Runs and results
 
-Expand a test matrix and run all jobs sequentially.
+| Command | Purpose |
+|---|---|
+| `opp_ci list-runs` | List runs. Filters: `--project`, `--ref`, `--test`, `--status`, `--limit`. |
+| `opp_ci show-run RUN_ID` | Run detail + stdout/stderr. |
+| `opp_ci show-results` | Same filters as `list-runs`; presents stored results. |
+| `opp_ci delete-run RUN_ID --yes` | Delete a single run. |
+| `opp_ci delete-runs` | Bulk delete. Filters: `--project`, `--ref`, `--test`, `--status`, `--before YYYY-MM-DD`, `--yes`. |
 
-```
-opp_ci run-matrix --matrix NAME [--skip-install]
-```
+## Projects and versions
 
-| Option | Required | Description |
-|---|---|---|
-| `--matrix` | yes | Matrix name (must exist in DB, created via `create-matrix` or `seed-matrices`) |
-| `--skip-install` | no | Skip the `opp_env install` step |
+| Command | Purpose |
+|---|---|
+| `opp_ci seed-projects` | Seed Tier 1 projects from the static catalog. |
+| `opp_ci sync-catalog` | Import all opp_env projects + versions. Tier 2 projects get default matrices. |
+| `opp_ci add-project --name NAME` | Manually register a project not in opp_env. Options: `--github owner/repo`, `--git-url`, `--opp-env-name`, `--tier`, `--deps`. |
+| `opp_ci list-projects` | Show project catalog (tier, deps, GitHub). |
+| `opp_ci add-version --project P --label L` | Register a version. Options: `--ref`, `--opp-env-version`, `--deps` (JSON). |
+| `opp_ci list-versions [--project P]` | Show known versions per project. |
+| `opp_ci resolve-deps PROJECT-VERSION` | Print resolved deps. `--pin dep=ver` to override. |
 
-### `opp_ci create-matrix`
+## Workers (`opp_ci worker ...`)
 
-Create a test matrix configuration.
+| Command | Purpose |
+|---|---|
+| `worker register --name N` | Register a worker, prints its token. Options: `--tags`, `--concurrency`. |
+| `worker list` | List registered workers, status, tags. |
+| `worker start --coordinator URL --token T` | Run the worker agent. Options: `--tags`, `--concurrency`, `--poll-interval`, `--heartbeat-interval`. |
 
-```
-opp_ci create-matrix --name NAME --project PROJECT [OPTIONS] --tests TESTS
-```
+See [workers.md](workers.md).
 
-| Option | Required | Default | Description |
-|---|---|---|---|
-| `--name` | yes | — | Matrix name (e.g. `inet-default`) |
-| `--project` | yes | — | Project name |
-| `--project-versions` | no | project name | Comma-separated project versions |
-| `--builds` | no | `release` | Comma-separated build modes (e.g. `release,debug`) |
-| `--os` | no | — | Comma-separated OS (e.g. `Ubuntu 24.04,Fedora 41`) |
-| `--os-version` | no | — | Comma-separated OS versions for cross-product with `--os` |
-| `--compiler` | no | — | Comma-separated compilers (e.g. `gcc-14,clang-18`) |
-| `--compiler-version` | no | — | Comma-separated compiler versions for cross-product with `--compiler` |
-| `--tests` | yes | — | Comma-separated test types |
+## API tokens (`opp_ci token ...`)
 
-**Platform axes support two styles:**
+| Command | Purpose |
+|---|---|
+| `token create --name N --role R` | Create a token. Roles: `readonly`, `submitter`, `worker`, `admin`. Prints the token once. |
+| `token list` | List tokens (values masked). |
+| `token revoke TOKEN_ID` | Disable a token. |
 
-- **Combined**: `--os 'Ubuntu 24.04,Fedora 41'` — automatically parsed into name + version
-- **Structured**: `--os 'Ubuntu,Fedora' --os-version '24.04,41'` — cross-product of names × versions
+## GitHub rules (`opp_ci rule ...`)
 
-Same for `--compiler` / `--compiler-version`.
+| Command | Purpose |
+|---|---|
+| `rule create --project P --type T --pattern G` | Create an AutoTestRule. `--type {branch\|pr\|tag}`, `--pattern` is a glob, `--matrix` links a matrix (smoke-only if omitted), `--replace` overwrites duplicates. |
+| `rule list` | List configured rules. |
+| `rule delete RULE_ID` | Delete a rule. |
+| `rule test-webhook --project P --ref R` | Simulate a webhook locally for the given event. Options: `--type {push\|pr}`, `--sha`, `--pr-number`. |
 
-**Example:**
+See [github_integration.md](github_integration.md).
 
-```bash
-opp_ci create-matrix \
-  --name inet-full \
-  --project inet \
-  --project-versions "master,4.5" \
-  --builds "release,debug" \
-  --os "Ubuntu 24.04" \
-  --compiler "gcc-14,clang-18" \
-  --tests "smoke,fingerprint"
-```
+## Web server
 
-### `opp_ci list-matrices`
+| Command | Purpose |
+|---|---|
+| `opp_ci serve` | Start the FastAPI server. Options: `--host` (default `127.0.0.1`), `--port` (default `8000`). |
 
-List all defined test matrices with their expanded job count.
+See [web_ui.md](web_ui.md).
 
-```
-opp_ci list-matrices
-```
+## Docker images (`opp_ci image ...`)
 
-### `opp_ci seed-matrices`
+| Command | Purpose |
+|---|---|
+| `image build` | Build one of the bundled Docker images used for `--isolation docker` runs. |
+| `image build-matrix` | Build all images required by a matrix. |
 
-Seed the database with default matrix configurations for Tier 1 projects.
+## Environment
 
-```
-opp_ci seed-matrices
-```
+The CLI reads its configuration from environment variables. See
+[configuration.md](configuration.md).
 
-### `opp_ci list-runs`
+## Typical workflows
 
-List test runs.
-
-```
-opp_ci list-runs [--project PROJECT] [--test TEST_TYPE] [--status STATUS] [--limit N]
-```
-
-| Option | Default | Description |
-|---|---|---|
-| `--project` | all | Filter by project name |
-| `--test` | all | Filter by test type |
-| `--status` | all | Filter by status: `PASS`, `FAIL`, `ERROR` |
-| `--limit` | 20 | Maximum number of rows to display |
-
-### `opp_ci show-run`
-
-Show details of a specific test run including result, stdout/stderr.
-
-```
-opp_ci show-run RUN_ID
-```
-
-### `opp_ci show-results`
-
-Display stored test results (alias for `list-runs`).
-
-```
-opp_ci show-results [--project PROJECT] [--test TEST_TYPE] [--status STATUS] [--limit N]
-```
-
-### `opp_ci seed-projects`
-
-Seed the database with Tier 1 projects from the catalog.
-
-```
-opp_ci seed-projects
-```
-
-### `opp_ci list-projects`
-
-List known projects with tier, dependencies, and GitHub info.
-
-```
-opp_ci list-projects
-```
-
-### `opp_ci serve`
-
-Start the web UI server.
-
-```
-opp_ci serve [--host HOST] [--port PORT]
-```
-
-| Option | Default | Description |
-|---|---|---|
-| `--host` | `127.0.0.1` | Bind address |
-| `--port` | `8000` | Bind port |
-
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `OPP_CI_DATABASE_URL` | `sqlite:///opp_ci.db` | Database connection URL |
-| `OPP_CI_USE_OPP_ENV` | `0` | Set to `1` to use `opp_env` for environment setup |
-
-## Typical Workflows
-
-### Quick local test
+### Local single test
 
 ```bash
 opp_ci init-db
 opp_ci run --project fifo --test smoke --skip-install
-opp_ci serve  # browse results at http://localhost:8000
+opp_ci serve  # browse at http://localhost:8000
 ```
 
-### Matrix testing
+### Local matrix
 
 ```bash
-opp_ci create-matrix --name fifo-default --project fifo --builds "release,debug" --tests "smoke,fingerprint"
+opp_ci create-matrix --name fifo-default --project fifo \
+  --builds "release,debug" --tests "smoke,fingerprint"
 opp_ci run-matrix --matrix fifo-default --skip-install
+```
+
+### Remote submission
+
+```bash
+export OPP_CI_COORDINATOR_URL=https://ci.omnetpp.org
+export OPP_CI_API_TOKEN=<submitter-token>
+
+opp_ci --remote run --project inet-4.5 --test smoke,fingerprint --ref master
+opp_ci --remote list-runs --project inet --status FAIL
 ```

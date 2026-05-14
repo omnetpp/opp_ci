@@ -1,120 +1,179 @@
 # Architecture
 
-## Overview
+## High-level layout
 
 ```
-opp_ci CLI / Web UI
-        │
-        ├── scheduler       ←  matrix expansion (versions × platforms × tests)
-        ├── executor        ←  runs tests (direct or via opp_env)
-        ├── database        ←  SQLite (local) or PostgreSQL (cloud)
-        └── opp_repl        ←  actual test execution (JSON structured output)
+GitHub (webhooks/API)
+       │
+       ▼
+  opp_ci coordinator        ←──  CLI for manual control
+       │                    ←──  Python client (REST API)
+       ├── scheduler         ←──  matrix expansion, job queue
+       ├── REST API          ←──  /api/* — workers, runs, github
+       ├── web UI            ←──  FastAPI + Jinja2
+       └── database          ←──  SQLite (local) or PostgreSQL (cloud)
+                    ▲
+                    │  poll / heartbeat / result
+                    │
+              ┌─────┴──────┐
+              │  workers   │  ──  opp_env + opp_repl + Nix
+              └────────────┘
 ```
 
-## Components
+The coordinator owns the database and the scheduler. Workers are
+separate processes that may run on the same machine, on dedicated
+self-hosted hardware, or in the cloud. See [workers.md](workers.md).
 
-### CLI (`opp_ci/cli.py`)
+## Package layout
 
-Click-based command-line interface. Commands for running tests, managing matrices, and querying results. See [CLI Reference](cli_reference.md).
+```
+opp_ci/
+├── __init__.py / __main__.py
+├── cli.py              — Click CLI entry point
+├── config.py           — env-var configuration
+├── auth.py             — token roles, permission checks
+├── client.py           — OppCiClient (Python REST wrapper)
+├── scheduler.py        — matrix expansion, job dispatch
+├── executor.py         — runs tests via opp_repl (direct or opp_env)
+├── worker.py           — worker agent (poll/heartbeat/result loop)
+├── catalog.py          — Tier 1 project seed data
+├── opp_env_adapter.py  — wraps opp_env CLI/API for catalog discovery
+├── dependency.py       — resolve and pin dependency versions
+├── compatibility.py    — pass/fail aggregation across version pairs
+├── notes.py            — formatter for git note payloads
+├── docker/             — Docker images for isolated builds
+├── db/
+│   ├── models.py       — SQLAlchemy models
+│   ├── connection.py   — engine + session factory
+│   └── migrations/     — Alembic
+├── github/
+│   ├── client.py       — GitHubClient (REST API v3 wrapper)
+│   ├── webhook.py      — receiver, HMAC verification, dispatch
+│   └── status.py       — post commit statuses / PR comments
+└── web/
+    ├── app.py          — FastAPI app and routes
+    ├── api.py          — /api/* JSON endpoints
+    ├── rollup.py       — hierarchical result aggregation
+    └── templates/      — Jinja2 HTML
+```
 
-### Scheduler (`opp_ci/scheduler.py`)
+## Database schema
 
-Expands matrix configurations into individual test jobs. Handles multi-dimensional cross-products across:
-- Project versions
-- Build modes (release, debug)
-- OS (name × version)
-- Compiler (name × version)
+`opp_ci/db/models.py` — SQLAlchemy. Migrations live in
+`opp_ci/db/migrations/` (Alembic, config in `alembic.ini`).
+
+| Model | Purpose |
+|---|---|
+| **Project** | name, opp_env_name, github_owner, github_repo, git_url, tier (1/2), dependency_names |
+| **Version** | project FK, opp_env_version, git_ref (branch/tag/SHA), label, `resolved_dependencies` JSON (e.g. `{"omnetpp": "6.1"}`) |
+| **OS** | name, version, arch |
+| **Compiler** | name, version |
+| **TestMatrix** | project FK, JSON config of versions × platforms × test types |
+| **Worker** | name (unique), token, tags JSON, concurrency, status, last_heartbeat, current_job_count |
+| **ApiToken** | token, name, role (readonly/submitter/worker/admin), enabled, created_at |
+| **AutoTestRule** | project FK, rule_type (branch/pr/tag), pattern (glob), matrix FK, enabled |
+| **TestRun** | matrix entry, worker FK, git_ref, version, timestamp, status (queued/running/PASS/FAIL/ERROR), trigger (manual/webhook/schedule/remote), `github_*` fields |
+| **TestResult** | run FK, test_type, test_name, result_code, duration, stdout/stderr (raw with ANSI), `details` JSON (per-test breakdown from opp_repl) |
+
+Connection pool and engine factory in `opp_ci/db/connection.py`;
+configured by `OPP_CI_DATABASE_URL`.
+
+## Executor
+
+`opp_ci/executor.py` invokes test commands in one of several
+isolation × toolchain combinations:
+
+| `--isolation` | `--toolchain` | What runs |
+|---|---|---|
+| `none` | `none` | Direct subprocess on the host using the host's installed compilers and opp_repl. |
+| `none` | `nix` | `opp_env install <pkg-version>` then `opp_env run <pkg-version> -c <cmd>`. Reproducible Nix env. |
+| `docker` | `none` | Run inside a Docker image with the host's project tree mounted. Image picked by `--os` / `--os-version` / `--compiler`. |
+| `docker` | `nix` | Run inside Docker, with opp_env/Nix inside the container. |
+
+Regardless of mode, the executor:
+
+1. Asks opp_repl for structured per-test results via
+   `--result-file <tmp>` (or parses the last JSON line when running
+   with `--output-format json`).
+2. Captures the human-readable stdout/stderr with ANSI codes intact.
+3. Returns `(result_code, stdout, stderr, details_json)` to the caller
+   (worker or CLI).
+
+## Scheduler
+
+`opp_ci/scheduler.py:expand_matrix()` produces the list of jobs for a
+named matrix. The axes are cross-producted:
+
+- Project versions (and resolved or pinned dependency versions)
+- Build modes
+- OS × OS version
+- Compiler × compiler version
+- Isolation × toolchain
 - Test types
 
-Supports both combined strings (e.g. "Ubuntu 24.04") and structured cross-product (separate name/version lists).
+Platform axes accept two styles: combined strings (`Ubuntu 24.04`,
+auto-parsed) or structured (`--os Ubuntu,Fedora --os-version 24.04,41`,
+cross-producted).
 
-### Executor (`opp_ci/executor.py`)
+Each expanded job is inserted as a `TestRun` with status `queued`.
+Workers pick them up via `/api/workers/poll`.
 
-Responsible for invoking test commands. Two modes:
+## Execution flow
 
-- **Direct mode** (`OPP_CI_USE_OPP_ENV=0`): calls `opp_run_smoke_tests` etc. directly with `--output-format json`. Assumes the current environment has opp_repl and the simulation project available.
-- **opp_env mode** (`OPP_CI_USE_OPP_ENV=1`): calls `opp_env install <project>` then `opp_env run <project> -c "<cmd>"`. Provides full Nix-based isolation.
-
-In direct mode, the executor:
-1. Passes `--output-format json` to opp_repl
-2. Parses the last line of stdout as JSON (structured test details)
-3. Strips the JSON line from stored stdout
-4. Returns both raw output and parsed details
-
-### Database (`opp_ci/db/`)
-
-- **`models.py`** — SQLAlchemy ORM models: `Project`, `TestMatrix`, `TestRun`, `TestResult`
-- **`connection.py`** — engine and session factory, handles both SQLite and PostgreSQL
-- **`migrations/`** — Alembic migration environment
-
-### Web UI (`opp_ci/web/`)
-
-- **`app.py`** — FastAPI application with Jinja2 templates, ANSI-to-HTML filter
-- **`rollup.py`** — Hierarchical result aggregation for summary views
-- **`templates/`** — HTML templates for dashboard, runs, results, run detail
-
-### Config (`opp_ci/config.py`)
-
-Environment variable-based configuration:
-
-| Variable | Default | Description |
-|---|---|---|
-| `OPP_CI_DATABASE_URL` | `sqlite:///opp_ci.db` | SQLAlchemy database URL |
-| `OPP_CI_USE_OPP_ENV` | `0` | Enable opp_env/Nix mode |
-
-## Data Model
-
-### Project
-
-Registered project with tier, GitHub info, dependency list. Seeded from catalog.
-
-### TestMatrix
-
-Named matrix configuration. Stores expansion config (versions, modes, platforms, test types). Expanded into jobs by the scheduler.
-
-### TestRun
-
-A single invocation of a test. Tracks:
-- Project, test type, build mode
-- Platform: os, os_version, compiler, compiler_version
-- Status (queued/running/PASS/FAIL/ERROR), timing, trigger source
-- Optional link to parent matrix
-
-### TestResult
-
-Outcome of a test run:
-- Result code (PASS/FAIL/ERROR)
-- Raw stdout/stderr (with ANSI codes, rendered as colored HTML in web UI)
-- Structured details (JSON): per-test breakdown with parameters, durations, reasons
-
-## Execution Flow
-
-### Single test
+### Single CLI run
 
 ```
 opp_ci run --project fifo --test smoke --skip-install
     │
     ├── create TestRun record (status=running)
-    ├── install_project()    ← no-op in direct mode or --skip-install
-    ├── run_test()           ← subprocess: opp_run_smoke_tests --output-format json
-    │     ├── capture stdout (progress text + JSON on last line)
-    │     ├── parse last line as JSON → details
-    │     └── strip JSON line from stdout
-    ├── create TestResult record (result_code, stdout, stderr, details)
+    ├── executor.install_project()  ←  no-op in direct mode / --skip-install
+    ├── executor.run_test()         ←  subprocess, captures stdout + JSON details
+    ├── create TestResult record(s)
     └── update TestRun (status=PASS/FAIL, duration)
 ```
 
-### Matrix run
+### Matrix run (local)
 
 ```
-opp_ci run-matrix --matrix inet-default --skip-install
+opp_ci run-matrix --matrix inet-default
     │
     ├── load TestMatrix from DB
-    ├── expand_matrix() → list of jobs
-    ├── install_project() for each unique project version
+    ├── scheduler.expand_matrix() → list of jobs
+    ├── for each unique (project, version, deps): executor.install_project()
     └── for each job:
-          ├── create TestRun record
-          ├── run_test()
-          ├── create TestResult record
+          ├── create TestRun
+          ├── executor.run_test()
+          ├── create TestResult
           └── update TestRun status
 ```
+
+### Matrix run (remote / worker pool)
+
+```
+opp_ci --remote run-matrix ...        Workers
+    │                                    │
+    └── POST /api/runs/matrix            │
+          └── insert N TestRuns (queued) │
+                                         │
+                  ┌──────────────────────┘
+                  ▼
+          POST /api/workers/poll  → next queued TestRun
+          executor.run_test()
+          POST /api/workers/result → coordinator updates TestRun + posts GitHub status
+```
+
+## Web UI
+
+FastAPI + Jinja2 in `opp_ci/web/`. See [web_ui.md](web_ui.md) for the
+page map. The same FastAPI app serves both the HTML routes and the
+JSON `/api/*` endpoints. ANSI-to-HTML is a Jinja filter applied at
+render time so the DB keeps the raw escape codes.
+
+## Cross-cutting concerns
+
+- **Authentication** — bearer tokens with four roles. See
+  [rest_api.md](rest_api.md#authentication).
+- **GitHub** — webhooks in, commit statuses + PR comments + git notes
+  out. See [github_integration.md](github_integration.md) and
+  [git_notes.md](git_notes.md).
+- **Configuration** — env vars only. See [configuration.md](configuration.md).
