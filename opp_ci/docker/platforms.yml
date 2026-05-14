@@ -1,0 +1,22 @@
+# Catalogue of known OS distributions, OS versions, and compiler versions
+# offered as suggestions on the "New Run" form. These are *hints*, not a
+# whitelist — the form accepts free text, and matrix configs accept any
+# string. Add or remove entries as the team's coverage matrix evolves.
+
+os_distributions:
+  - ubuntu
+  - debian
+  - fedora
+
+os_versions:
+  ubuntu: ["22.04", "24.04", "26.04"]
+  debian: ["12", "13"]
+  fedora: ["41", "42"]
+
+compilers:
+  - gcc
+  - clang
+
+compiler_versions:
+  gcc: ["12", "13", "14", "15"]
+  clang: ["16", "17", "18", "19", "22"]

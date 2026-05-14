@@ -56,24 +56,40 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label for="os">OS (optional)</label>
-                <select name="os" id="os">
-                    <option value="">— any —</option>
-                    {% for o in os_entries %}
-                    <option value="{{ o.name }}">{{ o.label }}</option>
-                    {% endfor %}
-                </select>
+                <label for="os">OS</label>
+                <input type="text" name="os" id="os" list="os-options" placeholder="ubuntu">
+                <datalist id="os-options">
+                    {% for o in os_suggestions %}<option value="{{ o }}">{% endfor %}
+                </datalist>
             </div>
             <div class="form-group">
-                <label for="compiler">Compiler (optional)</label>
-                <select name="compiler" id="compiler">
-                    <option value="">— any —</option>
-                    {% for c in compilers %}
-                    <option value="{{ c.name }}">{{ c.label }}</option>
-                    {% endfor %}
-                </select>
+                <label for="os_version">OS Version</label>
+                <input type="text" name="os_version" id="os_version" list="os-version-options" placeholder="26.04">
+                <datalist id="os-version-options">
+                    {% for v in os_version_suggestions %}<option value="{{ v }}">{% endfor %}
+                </datalist>
             </div>
         </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="compiler">Compiler</label>
+                <input type="text" name="compiler" id="compiler" list="compiler-options" placeholder="clang">
+                <datalist id="compiler-options">
+                    {% for c in compiler_suggestions %}<option value="{{ c }}">{% endfor %}
+                </datalist>
+            </div>
+            <div class="form-group">
+                <label for="compiler_version">Compiler Version</label>
+                <input type="text" name="compiler_version" id="compiler_version" list="compiler-version-options" placeholder="22">
+                <datalist id="compiler-version-options">
+                    {% for v in compiler_version_suggestions %}<option value="{{ v }}">{% endfor %}
+                </datalist>
+            </div>
+        </div>
+        <p style="font-size:0.85rem; color:var(--muted); margin-top:-0.25rem;">
+            Suggestions come from <code>opp_ci/docker/platforms.yml</code> plus the OS/Compiler tables.
+            Type any value — these are hints, not a whitelist. Required for <code>isolation=docker</code>.
+        </p>
         <div class="form-row">
             <div class="form-group">
                 <label for="isolation">Isolation</label>

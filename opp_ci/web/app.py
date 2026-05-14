@@ -384,6 +384,19 @@ def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
     return rows
 
 
+def _load_platforms_catalog():
+    """Read opp_ci/docker/platforms.yml; returns {} on any error so callers
+    can still render the form with whatever the DB provides."""
+    try:
+        import importlib.resources
+        import yaml
+        path = importlib.resources.files("opp_ci").joinpath("docker/platforms.yml")
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except (ImportError, OSError, ValueError):
+        return {}
+
+
 @app.get("/runs/new", response_class=HTMLResponse)
 def run_new_form(request: Request, message: str = Query(default=None), message_type: str = Query(default=None)):
     session = SessionLocal()
@@ -392,11 +405,30 @@ def run_new_form(request: Request, message: str = Query(default=None), message_t
         matrices = session.execute(select(TestMatrix).order_by(TestMatrix.name)).scalars().all()
         os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
         compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
+
+        # Build datalist suggestions by unioning the platforms catalog with
+        # the DB-seeded rows. Free text wins — these are just hints.
+        catalog = _load_platforms_catalog()
+        os_suggestions = sorted(set(catalog.get("os_distributions", []))
+                                | {o.name for o in os_entries if o.name})
+        os_version_suggestions = sorted({
+            v for versions in catalog.get("os_versions", {}).values() for v in versions
+        } | {o.version for o in os_entries if o.version})
+        compiler_suggestions = sorted(set(catalog.get("compilers", []))
+                                      | {c.name for c in compilers if c.name})
+        compiler_version_suggestions = sorted({
+            v for versions in catalog.get("compiler_versions", {}).values() for v in versions
+        } | {c.version for c in compilers if c.version})
+
         return templates.TemplateResponse(request, "run_new.html", {
             "projects": projects,
             "matrices": matrices,
             "os_entries": os_entries,
             "compilers": compilers,
+            "os_suggestions": os_suggestions,
+            "os_version_suggestions": os_version_suggestions,
+            "compiler_suggestions": compiler_suggestions,
+            "compiler_version_suggestions": compiler_version_suggestions,
             "message": message,
             "message_type": message_type,
         })
@@ -412,7 +444,9 @@ def run_new_submit(
     mode: str = Form(default=""),
     git_ref: str = Form(default=""),
     os: str = Form(default="", alias="os"),
+    os_version: str = Form(default=""),
     compiler: str = Form(default=""),
+    compiler_version: str = Form(default=""),
     isolation: str = Form(default="none"),
     toolchain: str = Form(default="none"),
 ):
@@ -425,7 +459,9 @@ def run_new_submit(
             mode=mode or None,
             git_ref=git_ref or None,
             os=os or None,
+            os_version=os_version or None,
             compiler=compiler or None,
+            compiler_version=compiler_version or None,
             isolation=isolation or None,
             toolchain=toolchain or None,
             status=TestRunStatus.queued,
