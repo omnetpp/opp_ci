@@ -398,6 +398,34 @@ def run_new_form(request: Request, message: str = Query(default=None), message_t
         compiler_suggestions = sorted({c.name for c in compilers if c.name})
         compiler_version_suggestions = sorted({c.version for c in compilers if c.version})
 
+        all_versions = session.execute(select(Version)).scalars().all()
+        project_by_id = {p.id: p.name for p in projects}
+        versions_by_project = {p.name: [] for p in projects}
+        for v in all_versions:
+            pname = project_by_id.get(v.project_id)
+            if pname is None:
+                continue
+            deps = v.resolved_dependencies or {}
+            omnetpp_dep = deps.get("omnetpp") if isinstance(deps, dict) else None
+            if isinstance(omnetpp_dep, str):
+                omnetpp_compat = [omnetpp_dep]
+            elif isinstance(omnetpp_dep, list):
+                omnetpp_compat = list(omnetpp_dep)
+            else:
+                omnetpp_compat = []
+            versions_by_project[pname].append({
+                "opp_env_version": v.opp_env_version or "",
+                "git_ref": v.git_ref or "",
+                "label": v.label or v.opp_env_version or v.git_ref or "",
+                "omnetpp_compat": omnetpp_compat,
+            })
+        for pname in versions_by_project:
+            versions_by_project[pname].sort(key=lambda d: d["label"])
+
+        omnetpp_versions = sorted({
+            v["opp_env_version"] for v in versions_by_project.get("omnetpp", []) if v["opp_env_version"]
+        })
+
         return templates.TemplateResponse(request, "run_new.html", {
             "projects": projects,
             "matrices": matrices,
@@ -407,6 +435,8 @@ def run_new_form(request: Request, message: str = Query(default=None), message_t
             "os_version_suggestions": os_version_suggestions,
             "compiler_suggestions": compiler_suggestions,
             "compiler_version_suggestions": compiler_version_suggestions,
+            "versions_by_project": versions_by_project,
+            "omnetpp_versions": omnetpp_versions,
             "message": message,
             "message_type": message_type,
         })
@@ -421,6 +451,8 @@ def run_new_submit(
     test_type: str = Form(...),
     mode: str = Form(default=""),
     git_ref: str = Form(default=""),
+    version: str = Form(default=""),
+    omnetpp_version: str = Form(default=""),
     os: str = Form(default="", alias="os"),
     os_version: str = Form(default=""),
     compiler: str = Form(default=""),
@@ -431,11 +463,16 @@ def run_new_submit(
     import datetime
     session = SessionLocal()
     try:
+        resolved_deps = None
+        if omnetpp_version and project != "omnetpp":
+            resolved_deps = {"omnetpp": omnetpp_version}
         run = TestRun(
             project=project,
             test_type=test_type,
             mode=mode or None,
             git_ref=git_ref or None,
+            version=version or None,
+            resolved_deps=resolved_deps,
             os=os or None,
             os_version=os_version or None,
             compiler=compiler or None,

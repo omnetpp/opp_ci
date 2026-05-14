@@ -12,6 +12,7 @@
         <tr><th>Test type</th><td>{{ run.test_type }}</td></tr>
         <tr><th>Mode</th><td>{{ run.mode or "-" }}</td></tr>
         <tr><th>Version</th><td>{{ run.version or "-" }}</td></tr>
+        <tr><th>Resolved deps</th><td>{% if run.resolved_deps %}{% for k, v in run.resolved_deps.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}-{% endif %}</td></tr>
         <tr><th>Platform</th><td>{{ run.platform_desc or "-" }}</td></tr>
         <tr><th>OS</th><td>{{ (run.os ~ " " ~ run.os_version) if run.os else "-" }}</td></tr>
         <tr><th>Compiler</th><td>{{ (run.compiler ~ "-" ~ run.compiler_version) if run.compiler else "-" }}</td></tr>

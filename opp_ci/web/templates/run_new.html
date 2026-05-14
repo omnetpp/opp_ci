@@ -42,6 +42,20 @@
         </div>
         <div class="form-row">
             <div class="form-group">
+                <label for="version">Project Version</label>
+                <select name="version" id="version">
+                    <option value="">— any —</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="omnetpp_version">OMNeT++ Version</label>
+                <select name="omnetpp_version" id="omnetpp_version">
+                    <option value="">— any —</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
                 <label for="mode">Build Mode</label>
                 <select name="mode" id="mode">
                     <option value="">— default —</option>
@@ -127,4 +141,65 @@
         <button type="submit" class="btn btn-primary">Queue Matrix</button>
     </form>
 </div>
+
+<script>
+(function() {
+    const versionsByProject = {{ versions_by_project|tojson }};
+    const omnetppVersions = {{ omnetpp_versions|tojson }};
+
+    const projectSel = document.getElementById("project");
+    const versionSel = document.getElementById("version");
+    const omnetppSel = document.getElementById("omnetpp_version");
+    const omnetppGroup = omnetppSel.closest(".form-group");
+
+    function setOptions(sel, values, placeholder) {
+        const current = sel.value;
+        sel.innerHTML = "";
+        const opt0 = document.createElement("option");
+        opt0.value = "";
+        opt0.textContent = placeholder;
+        sel.appendChild(opt0);
+        for (const v of values) {
+            const opt = document.createElement("option");
+            if (typeof v === "string") { opt.value = v; opt.textContent = v; }
+            else { opt.value = v.value; opt.textContent = v.label; }
+            sel.appendChild(opt);
+        }
+        if (Array.from(sel.options).some(o => o.value === current)) sel.value = current;
+    }
+
+    function refreshVersions() {
+        const pname = projectSel.value;
+        const versions = versionsByProject[pname] || [];
+        const opts = versions
+            .filter(v => v.opp_env_version || v.git_ref)
+            .map(v => ({ value: v.opp_env_version || v.git_ref, label: v.label || v.opp_env_version || v.git_ref }));
+        setOptions(versionSel, opts, "— any —");
+        refreshOmnetpp();
+    }
+
+    function refreshOmnetpp() {
+        const pname = projectSel.value;
+        if (pname === "omnetpp") {
+            omnetppGroup.style.display = "none";
+            omnetppSel.value = "";
+            return;
+        }
+        omnetppGroup.style.display = "";
+        const versions = versionsByProject[pname] || [];
+        const selectedVersion = versionSel.value;
+        let compat = [];
+        if (selectedVersion) {
+            const v = versions.find(x => (x.opp_env_version || x.git_ref) === selectedVersion);
+            if (v) compat = v.omnetpp_compat || [];
+        }
+        const opts = (compat.length > 0 ? compat : omnetppVersions);
+        setOptions(omnetppSel, opts, "— any —");
+    }
+
+    projectSel.addEventListener("change", refreshVersions);
+    versionSel.addEventListener("change", refreshOmnetpp);
+    refreshVersions();
+})();
+</script>
 {% endblock %}
