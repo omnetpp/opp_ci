@@ -734,6 +734,7 @@ def run_matrix(matrix_name, force, skip_install):
                 isolation=job.get("isolation"),
                 toolchain=job.get("toolchain"),
                 platform_desc=job.get("platform_desc"),
+                resolved_deps=job.get("resolved_deps"),
                 matrix_id=matrix.id,
                 status=TestRunStatus.running,
                 started_at=datetime.datetime.utcnow(),

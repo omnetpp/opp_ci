@@ -32,6 +32,14 @@
         <tr><th>Compiler Version</th><td>{{ matrix.config.get("compiler_version", ["-"])|join(", ") }}</td></tr>
         <tr><th>Isolation</th><td>{{ matrix.config.get("isolation", ["none"])|join(", ") }}</td></tr>
         <tr><th>Toolchain</th><td>{{ matrix.config.get("toolchain", ["none"])|join(", ") }}</td></tr>
+        {% set deps_axis = matrix.config.get("deps", {}) %}
+        {% if deps_axis %}
+        <tr><th>Deps</th><td>
+            {% for dep_name, dep_versions in deps_axis.items() -%}
+                <code>{{ dep_name }}</code>: {{ dep_versions|join(", ") }}{% if not loop.last %} &middot; {% endif %}
+            {%- endfor %}
+        </td></tr>
+        {% endif %}
         <tr><th>Expanded Jobs</th><td>{{ jobs|length }}</td></tr>
     </table>
 </div>

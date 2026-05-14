@@ -529,6 +529,8 @@ def run_new_matrix(request: Request, matrix_name: str = Form(...)):
                 os_version=job.get("os_version"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
+                isolation=job.get("isolation"),
+                toolchain=job.get("toolchain"),
             )
             if existing:
                 skipped += 1
@@ -543,6 +545,8 @@ def run_new_matrix(request: Request, matrix_name: str = Form(...)):
                 os_version=job.get("os_version"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
+                isolation=job.get("isolation"),
+                toolchain=job.get("toolchain"),
                 platform_desc=job.get("platform_desc"),
                 resolved_deps=job.get("resolved_deps"),
                 opp_file=matrix.opp_file,
