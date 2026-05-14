@@ -919,6 +919,69 @@ def worker_group():
     pass
 
 
+def _detect_capability_tags():
+    """Probe the host for execution capabilities.
+
+    Returns a list of opp_ci worker tags reflecting what this host can run:
+      - os:<id>-<version>          from /etc/os-release
+      - compiler:<name>-<major>    for each of gcc, clang found on PATH
+      - docker                     if "docker version" succeeds (daemon reachable)
+      - nix                        if both nix and opp_env are on PATH
+    """
+    import re
+    import shutil
+    import subprocess as sp
+
+    tags = []
+
+    try:
+        with open("/etc/os-release") as f:
+            kv = {}
+            for line in f:
+                if "=" in line:
+                    k, _, v = line.strip().partition("=")
+                    kv[k] = v.strip('"')
+        os_id = kv.get("ID", "").lower()
+        os_ver = kv.get("VERSION_ID", "")
+        if os_id and os_ver:
+            tags.append(f"os:{os_id}-{os_ver}")
+    except OSError:
+        pass
+
+    for compiler in ("gcc", "clang"):
+        if not shutil.which(compiler):
+            continue
+        try:
+            out = sp.run([compiler, "--version"], capture_output=True, text=True, timeout=5)
+        except (OSError, sp.SubprocessError):
+            continue
+        if out.returncode != 0:
+            continue
+        m = re.search(r"(\d+)\.\d+(?:\.\d+)?", out.stdout)
+        if m:
+            tags.append(f"compiler:{compiler}-{m.group(1)}")
+
+    if shutil.which("docker"):
+        try:
+            out = sp.run(["docker", "version"], capture_output=True, timeout=5)
+            if out.returncode == 0:
+                tags.append("docker")
+        except (OSError, sp.SubprocessError):
+            pass
+
+    if shutil.which("nix") and shutil.which("opp_env"):
+        tags.append("nix")
+
+    return tags
+
+
+@worker_group.command("detect-tags")
+def worker_detect_tags():
+    """Print the capability tags this host would advertise (one per line)."""
+    for tag in _detect_capability_tags():
+        click.echo(tag)
+
+
 @worker_group.command("start")
 @click.option("--coordinator", required=True, help="Coordinator URL (e.g. https://ci.omnetpp.org)")
 @click.option("--token", required=True, help="Worker token")
@@ -944,8 +1007,10 @@ def worker_start(coordinator, token, tags, concurrency, poll_interval, heartbeat
 @worker_group.command("register")
 @click.option("--name", required=True, help="Worker name (unique)")
 @click.option("--tags", default="", help="Comma-separated capability tags")
+@click.option("--auto-tags/--no-auto-tags", default=False,
+              help="Detect os:/compiler:/docker/nix tags from this host and union them with --tags")
 @click.option("--concurrency", default=1, help="Max concurrent jobs")
-def worker_register(name, tags, concurrency):
+def worker_register(name, tags, auto_tags, concurrency):
     """Register a new worker in the local database and print its token."""
     Base.metadata.create_all(engine)
     session = SessionLocal()
@@ -957,7 +1022,17 @@ def worker_register(name, tags, concurrency):
             click.echo(f"Worker '{name}' already exists (token: {existing.token})")
             return
 
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+        explicit_tags = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+        detected_tags = _detect_capability_tags() if auto_tags else []
+        # Union, preserving order: detected first, then explicit (so --tags can
+        # supplement but not override the order shown to the user).
+        seen = set()
+        tag_list = []
+        for t in detected_tags + explicit_tags:
+            if t not in seen:
+                tag_list.append(t)
+                seen.add(t)
+
         worker = Worker(name=name, tags=tag_list, concurrency=concurrency)
         session.add(worker)
         session.commit()
@@ -965,6 +1040,8 @@ def worker_register(name, tags, concurrency):
         click.echo(f"  ID:          {worker.id}")
         click.echo(f"  Token:       {worker.token}")
         click.echo(f"  Tags:        {worker.tags}")
+        if auto_tags and detected_tags:
+            click.echo(f"  (detected:   {', '.join(detected_tags)})")
         click.echo(f"  Concurrency: {worker.concurrency}")
     finally:
         session.close()
