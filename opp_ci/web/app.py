@@ -384,19 +384,6 @@ def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
     return rows
 
 
-def _load_platforms_catalog():
-    """Read opp_ci/docker/platforms.yml; returns {} on any error so callers
-    can still render the form with whatever the DB provides."""
-    try:
-        import importlib.resources
-        import yaml
-        path = importlib.resources.files("opp_ci").joinpath("docker/platforms.yml")
-        with open(path) as f:
-            return yaml.safe_load(f) or {}
-    except (ImportError, OSError, ValueError):
-        return {}
-
-
 @app.get("/runs/new", response_class=HTMLResponse)
 def run_new_form(request: Request, message: str = Query(default=None), message_type: str = Query(default=None)):
     session = SessionLocal()
@@ -406,19 +393,10 @@ def run_new_form(request: Request, message: str = Query(default=None), message_t
         os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
         compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
 
-        # Build datalist suggestions by unioning the platforms catalog with
-        # the DB-seeded rows. Free text wins — these are just hints.
-        catalog = _load_platforms_catalog()
-        os_suggestions = sorted(set(catalog.get("os_distributions", []))
-                                | {o.name for o in os_entries if o.name})
-        os_version_suggestions = sorted({
-            v for versions in catalog.get("os_versions", {}).values() for v in versions
-        } | {o.version for o in os_entries if o.version})
-        compiler_suggestions = sorted(set(catalog.get("compilers", []))
-                                      | {c.name for c in compilers if c.name})
-        compiler_version_suggestions = sorted({
-            v for versions in catalog.get("compiler_versions", {}).values() for v in versions
-        } | {c.version for c in compilers if c.version})
+        os_suggestions = sorted({o.name for o in os_entries if o.name})
+        os_version_suggestions = sorted({o.version for o in os_entries if o.version})
+        compiler_suggestions = sorted({c.name for c in compilers if c.name})
+        compiler_version_suggestions = sorted({c.version for c in compilers if c.version})
 
         return templates.TemplateResponse(request, "run_new.html", {
             "projects": projects,

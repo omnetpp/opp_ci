@@ -9,6 +9,7 @@ set -e
 
 opp_ci reset-db --yes
 opp_ci seed-projects
+opp_ci seed-platforms
 opp_ci seed-matrices
 opp_ci sync-catalog
 opp_ci token create --name notes-readonly --role readonly

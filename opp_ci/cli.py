@@ -394,6 +394,25 @@ def seed_projects_cmd():
         session.close()
 
 
+@main.command("seed-platforms")
+def seed_platforms_cmd():
+    """Seed the OS and Compiler tables from opp_ci/docker/platforms.yml.
+
+    Idempotent — existing (name, version) rows are left alone, so editing
+    platforms.yml and re-running only inserts new entries. After running,
+    the new rows show up on the /os and /compilers pages and in the
+    /runs/new autocomplete dropdowns.
+    """
+    from opp_ci.catalog import seed_platforms
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        os_n, comp_n = seed_platforms(session)
+        click.echo(f"Platforms seeded: {os_n} new OS row(s), {comp_n} new compiler row(s).")
+    finally:
+        session.close()
+
+
 @main.command("add-project")
 @click.option("--name", required=True, help="Project name (e.g. mm1k)")
 @click.option("--github", default=None, help="GitHub owner/repo (e.g. levy/mm1k)")

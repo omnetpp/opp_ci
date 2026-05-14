@@ -54,3 +54,51 @@ def seed_projects(session):
         if existing is None:
             session.add(Project(**proj_data))
     session.commit()
+
+
+def load_platforms_catalog():
+    """Read opp_ci/docker/platforms.yml. Returns {} if the file is missing.
+
+    Kept here so both seed_platforms() and any future caller (e.g. a one-shot
+    web "seed from catalog" button) read the same source.
+    """
+    try:
+        import importlib.resources
+        import yaml
+        path = importlib.resources.files("opp_ci").joinpath("docker/platforms.yml")
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except (ImportError, OSError, ValueError):
+        return {}
+
+
+def seed_platforms(session):
+    """Insert (OS, version) and (Compiler, version) rows from platforms.yml.
+
+    Existing rows with the same (name, version) are left untouched, so the
+    command is idempotent: edit platforms.yml, re-run, only new entries land.
+    Returns a tuple (os_inserted, compilers_inserted) for the caller to log.
+    """
+    from opp_ci.db.models import OS, Compiler
+
+    catalog = load_platforms_catalog()
+    os_inserted = 0
+    for name in catalog.get("os_distributions", []):
+        versions = catalog.get("os_versions", {}).get(name, []) or [None]
+        for version in versions:
+            existing = session.query(OS).filter_by(name=name, version=version).first()
+            if existing is None:
+                session.add(OS(name=name, version=version))
+                os_inserted += 1
+
+    comp_inserted = 0
+    for name in catalog.get("compilers", []):
+        versions = catalog.get("compiler_versions", {}).get(name, []) or [None]
+        for version in versions:
+            existing = session.query(Compiler).filter_by(name=name, version=version).first()
+            if existing is None:
+                session.add(Compiler(name=name, version=version))
+                comp_inserted += 1
+
+    session.commit()
+    return os_inserted, comp_inserted
