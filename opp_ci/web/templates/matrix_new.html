@@ -14,15 +14,127 @@
             </div>
             <div class="form-group">
                 <label for="project">Project</label>
-                <input type="text" name="project" id="project" list="project-options" required placeholder="e.g. inet-4.5">
-                <datalist id="project-options">
-                    {% for p in projects %}<option value="{{ p.name }}">{% endfor %}
+                <select name="project" id="project" required>
+                    <option value="">— select —</option>
+                    {% for p in projects %}
+                    <option value="{{ p.name }}">{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <p style="font-size:0.85rem; color:var(--muted); margin-top:-0.25rem; margin-bottom:1rem;">
+            Each field below accepts a comma-separated list of values; the matrix is the cross-product of all axes.
+            Leave a field blank to use its default.
+        </p>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="test_types">Test Types</label>
+                <input type="text" name="test_types" id="test_types" list="test-type-options" placeholder="smoke, fingerprint, statistical">
+                <datalist id="test-type-options">
+                    <option value="smoke">
+                    <option value="fingerprint">
+                    <option value="statistical">
+                    <option value="build">
+                    <option value="module">
+                    <option value="unit">
+                    <option value="chart">
+                    <option value="feature">
+                    <option value="packet">
+                    <option value="queueing">
+                    <option value="protocol">
+                    <option value="validation">
+                    <option value="sanitizer">
+                    <option value="speed">
+                </datalist>
+            </div>
+            <div class="form-group">
+                <label for="modes">Build Modes</label>
+                <input type="text" name="modes" id="modes" list="mode-options" placeholder="release, debug">
+                <datalist id="mode-options">
+                    <option value="release">
+                    <option value="debug">
                 </datalist>
             </div>
         </div>
-        <div class="form-group">
-            <label for="config_json">Config (JSON)</label>
-            <textarea name="config_json" id="config_json" placeholder='{"test_types": ["smoke", "fingerprint"], "modes": ["release", "debug"]}' rows="6"></textarea>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="versions">Project Versions</label>
+                <input type="text" name="versions" id="versions" list="version-options" placeholder="e.g. inet-4.5, inet-4.6">
+                <datalist id="version-options"></datalist>
+            </div>
+            <div class="form-group">
+                <label for="omnetpp_versions">OMNeT++ Versions</label>
+                <input type="text" name="omnetpp_versions" id="omnetpp_versions" list="omnetpp-version-options" placeholder="e.g. 6.2.0, 6.3.0">
+                <datalist id="omnetpp-version-options">
+                    {% for v in omnetpp_versions %}<option value="{{ v }}">{% endfor %}
+                </datalist>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="refs">Git Refs</label>
+                <input type="text" name="refs" id="refs" placeholder="e.g. master, v4.5.0, abc123">
+            </div>
+            <div class="form-group">
+                <label>&nbsp;</label>
+                <div style="font-size:0.85rem; color:var(--muted); padding-top:0.5rem;">
+                    Use the ref range below to expand a base..head range via GitHub instead of listing refs explicitly.
+                </div>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="os">OS</label>
+                <input type="text" name="os" id="os" list="os-options" placeholder="Ubuntu, Fedora">
+                <datalist id="os-options">
+                    {% for o in os_suggestions %}<option value="{{ o }}">{% endfor %}
+                </datalist>
+            </div>
+            <div class="form-group">
+                <label for="os_version">OS Versions</label>
+                <input type="text" name="os_version" id="os_version" list="os-version-options" placeholder="24.04, 26.04">
+                <datalist id="os-version-options">
+                    {% for v in os_version_suggestions %}<option value="{{ v }}">{% endfor %}
+                </datalist>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="compiler">Compiler</label>
+                <input type="text" name="compiler" id="compiler" list="compiler-options" placeholder="gcc, clang">
+                <datalist id="compiler-options">
+                    {% for c in compiler_suggestions %}<option value="{{ c }}">{% endfor %}
+                </datalist>
+            </div>
+            <div class="form-group">
+                <label for="compiler_version">Compiler Versions</label>
+                <input type="text" name="compiler_version" id="compiler_version" list="compiler-version-options" placeholder="14, 18, 22">
+                <datalist id="compiler-version-options">
+                    {% for v in compiler_version_suggestions %}<option value="{{ v }}">{% endfor %}
+                </datalist>
+            </div>
+        </div>
+        <p style="font-size:0.85rem; color:var(--muted); margin-top:-0.25rem;">
+            OS/Compiler suggestions come from <code>opp_ci/docker/platforms.yml</code> plus the OS/Compiler tables.
+            Type any value — these are hints, not a whitelist.
+        </p>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="isolation">Isolation</label>
+                <input type="text" name="isolation" id="isolation" list="isolation-options" placeholder="none, docker">
+                <datalist id="isolation-options">
+                    <option value="none">
+                    <option value="docker">
+                </datalist>
+            </div>
+            <div class="form-group">
+                <label for="toolchain">Toolchain</label>
+                <input type="text" name="toolchain" id="toolchain" list="toolchain-options" placeholder="none, nix">
+                <datalist id="toolchain-options">
+                    <option value="none">
+                    <option value="nix">
+                </datalist>
+            </div>
         </div>
         <div class="form-row">
             <div class="form-group">
@@ -35,7 +147,8 @@
             </div>
         </div>
         <p style="font-size:0.85rem; color:var(--muted); margin-bottom:1rem;">
-            If both base and head are provided, commits between them are resolved via GitHub and added to the matrix's <code>refs</code> axis.
+            If both base and head are provided, commits between them are resolved via GitHub and used as the matrix's
+            <code>refs</code> axis (overriding the Git Refs field above).
         </p>
         <div class="actions">
             <button type="submit" class="btn btn-success">Create</button>
@@ -43,4 +156,29 @@
         </div>
     </form>
 </div>
+
+<script>
+(function() {
+    const versionsByProject = {{ versions_by_project|tojson }};
+    const projectSel = document.getElementById("project");
+    const versionList = document.getElementById("version-options");
+
+    function refreshVersionDatalist() {
+        const pname = projectSel.value;
+        const versions = versionsByProject[pname] || [];
+        versionList.innerHTML = "";
+        for (const v of versions) {
+            const value = v.opp_env_version || v.git_ref;
+            if (!value) continue;
+            const opt = document.createElement("option");
+            opt.value = value;
+            if (v.label && v.label !== value) opt.textContent = v.label;
+            versionList.appendChild(opt);
+        }
+    }
+
+    projectSel.addEventListener("change", refreshVersionDatalist);
+    refreshVersionDatalist();
+})();
+</script>
 {% endblock %}

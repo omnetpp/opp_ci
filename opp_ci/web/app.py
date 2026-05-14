@@ -865,8 +865,41 @@ def matrix_new_form(request: Request, error: str = Query(default=None)):
     session = SessionLocal()
     try:
         projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
+        os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
+        compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
+
+        os_suggestions = sorted({o.name for o in os_entries if o.name})
+        os_version_suggestions = sorted({o.version for o in os_entries if o.version})
+        compiler_suggestions = sorted({c.name for c in compilers if c.name})
+        compiler_version_suggestions = sorted({c.version for c in compilers if c.version})
+
+        all_versions = session.execute(select(Version)).scalars().all()
+        project_by_id = {p.id: p.name for p in projects}
+        versions_by_project = {p.name: [] for p in projects}
+        for v in all_versions:
+            pname = project_by_id.get(v.project_id)
+            if pname is None:
+                continue
+            versions_by_project[pname].append({
+                "opp_env_version": v.opp_env_version or "",
+                "git_ref": v.git_ref or "",
+                "label": v.label or v.opp_env_version or v.git_ref or "",
+            })
+        for pname in versions_by_project:
+            versions_by_project[pname].sort(key=lambda d: d["label"])
+
+        omnetpp_versions = sorted({
+            v["opp_env_version"] for v in versions_by_project.get("omnetpp", []) if v["opp_env_version"]
+        })
+
         return templates.TemplateResponse(request, "matrix_new.html", {
             "projects": projects,
+            "os_suggestions": os_suggestions,
+            "os_version_suggestions": os_version_suggestions,
+            "compiler_suggestions": compiler_suggestions,
+            "compiler_version_suggestions": compiler_version_suggestions,
+            "versions_by_project": versions_by_project,
+            "omnetpp_versions": omnetpp_versions,
             "error": error,
         })
     finally:
@@ -900,25 +933,33 @@ def matrix_detail(request: Request, matrix_id: int):
         session.close()
 
 
+def _split_csv(value):
+    """Split a comma-separated string into a list of stripped, non-empty values."""
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 @app.post("/matrices/create")
 def matrix_create(
     name: str = Form(...),
     project: str = Form(...),
-    config_json: str = Form(default="{}"),
+    test_types: str = Form(default=""),
+    modes: str = Form(default=""),
+    versions: str = Form(default=""),
+    omnetpp_versions: str = Form(default=""),
+    refs: str = Form(default=""),
+    os: str = Form(default=""),
+    os_version: str = Form(default=""),
+    compiler: str = Form(default=""),
+    compiler_version: str = Form(default=""),
+    isolation: str = Form(default=""),
+    toolchain: str = Form(default=""),
     ref_range_base: str = Form(default=""),
     ref_range_head: str = Form(default=""),
 ):
-    import json
     session = SessionLocal()
     try:
-        try:
-            config = json.loads(config_json) if config_json.strip() else {}
-        except json.JSONDecodeError:
-            return RedirectResponse(
-                url="/matrices/new?error=Invalid+JSON",
-                status_code=303,
-            )
-
         existing = session.execute(
             select(TestMatrix).where(TestMatrix.name == name)
         ).scalar_one_or_none()
@@ -928,8 +969,30 @@ def matrix_create(
                 status_code=303,
             )
 
+        config = {}
+        axes = {
+            "test_types": _split_csv(test_types),
+            "modes": _split_csv(modes),
+            "versions": _split_csv(versions),
+            "refs": _split_csv(refs),
+            "os": _split_csv(os),
+            "os_version": _split_csv(os_version),
+            "compiler": _split_csv(compiler),
+            "compiler_version": _split_csv(compiler_version),
+            "isolation": _split_csv(isolation),
+            "toolchain": _split_csv(toolchain),
+        }
+        for key, values in axes.items():
+            if values:
+                config[key] = values
+
+        omnetpp_values = _split_csv(omnetpp_versions)
+        if omnetpp_values and project != "omnetpp":
+            config["deps"] = {"omnetpp": omnetpp_values}
+
         if ref_range_base.strip() and ref_range_head.strip():
             config["ref_range"] = {"base": ref_range_base.strip(), "head": ref_range_head.strip()}
+            config.pop("refs", None)
 
         matrix = TestMatrix(name=name, project=project, config=config)
         session.add(matrix)
