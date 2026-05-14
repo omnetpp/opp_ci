@@ -31,13 +31,51 @@ def init_db():
 
 @main.command("reset-db")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
-def reset_db(yes):
+@click.option("--preserve-tokens", is_flag=True,
+              help="Snapshot api_tokens and workers rows and restore them after the reset, "
+                   "so external systems (GitHub Actions, remote workers) keep working.")
+def reset_db(yes, preserve_tokens):
     """Drop all tables and recreate them (destructive!)."""
     if not yes:
         click.confirm("This will DELETE all data. Continue?", abort=True)
+
+    saved_api_tokens = []
+    saved_workers = []
+    if preserve_tokens:
+        Base.metadata.create_all(engine)
+        session = SessionLocal()
+        try:
+            saved_api_tokens = [
+                {c.name: getattr(t, c.name) for c in ApiToken.__table__.columns}
+                for t in session.execute(select(ApiToken)).scalars().all()
+            ]
+            saved_workers = [
+                {c.name: getattr(w, c.name) for c in Worker.__table__.columns}
+                for w in session.execute(select(Worker)).scalars().all()
+            ]
+        finally:
+            session.close()
+
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
-    click.echo("Database reset.")
+
+    if preserve_tokens and (saved_api_tokens or saved_workers):
+        session = SessionLocal()
+        try:
+            for row in saved_api_tokens:
+                session.add(ApiToken(**row))
+            for row in saved_workers:
+                session.add(Worker(**row))
+            session.commit()
+            click.echo("Database reset.")
+            token_names = ", ".join(r["name"] for r in saved_api_tokens) or "(none)"
+            worker_names = ", ".join(r["name"] for r in saved_workers) or "(none)"
+            click.echo(f"  Preserved api tokens: {token_names}")
+            click.echo(f"  Preserved workers:    {worker_names}")
+        finally:
+            session.close()
+    else:
+        click.echo("Database reset.")
 
 
 @main.command("run")
