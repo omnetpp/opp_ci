@@ -94,7 +94,10 @@ class WorkerAgent:
     def _execute(self, job):
         """Execute a job and report the result back to the coordinator."""
         run_id = job["run_id"]
-        project = job["project"]
+        # If the run has a specific version (e.g. "inet-4.5"), use it as the
+        # opp_env project identifier; otherwise fall back to the bare project
+        # name (e.g. "mm1k") for projects with a single version.
+        project = job.get("version") or job["project"]
         test_type = job["test_type"]
         git_ref = job.get("git_ref")
         opp_file = job.get("opp_file")

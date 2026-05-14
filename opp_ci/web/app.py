@@ -522,6 +522,7 @@ def run_new_matrix(request: Request, matrix_name: str = Form(...)):
             existing = find_existing_run(
                 session,
                 project=job.get("project", matrix.project),
+                version=job.get("version"),
                 test_type=job.get("test_type", "smoke"),
                 mode=job.get("mode"),
                 git_ref=job.get("git_ref"),
@@ -538,6 +539,7 @@ def run_new_matrix(request: Request, matrix_name: str = Form(...)):
 
             run = TestRun(
                 project=job.get("project", matrix.project),
+                version=job.get("version"),
                 test_type=job.get("test_type", "smoke"),
                 mode=job.get("mode"),
                 git_ref=job.get("git_ref"),
@@ -583,6 +585,7 @@ def run_rerun(run_id: int):
 
         new_run = TestRun(
             project=original.project,
+            version=original.version,
             test_type=original.test_type,
             mode=original.mode,
             git_ref=original.git_ref,

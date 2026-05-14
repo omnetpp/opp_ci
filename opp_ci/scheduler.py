@@ -230,7 +230,8 @@ def expand_matrix(project, config):
 
     Each job spec is a dict:
         {
-            "project": "inet-4.5",
+            "project": "inet",
+            "version": "inet-4.5",
             "test_type": "smoke",
             "mode": "release",
             "git_ref": "master",
@@ -242,10 +243,14 @@ def expand_matrix(project, config):
             "toolchain": "none",
             "platform_desc": "Ubuntu 24.04 / gcc-14",
         }
+
+    ``project`` is the matrix's project name (constant across the expansion).
+    ``version`` comes from the ``versions`` axis and identifies which version
+    record of the project to build (parallels TestRun.version for single runs).
     """
     test_types = config.get("test_types", ["smoke"])
     modes = config.get("modes", ["release"])
-    versions = config.get("versions", [project])
+    versions = config.get("versions", [None])
     if "refs" in config:
         refs = config["refs"]
     elif "ref_range" in config:
@@ -266,7 +271,8 @@ def expand_matrix(project, config):
         if toolchain == "nix":
             _validate_nix_compiler(comp_name, comp_ver)
         jobs.append({
-            "project": version,
+            "project": project,
+            "version": version,
             "test_type": test_type,
             "mode": mode,
             "git_ref": ref,
@@ -292,7 +298,6 @@ DEFAULT_MATRICES = {
             "modes": ["release", "debug"],
             "os": ["Ubuntu 24.04"],
             "compiler": ["gcc-14", "clang-18"],
-            "versions": ["inet"],
         },
     },
     "omnetpp-default": {
@@ -302,7 +307,6 @@ DEFAULT_MATRICES = {
             "modes": ["release", "debug"],
             "os": ["Ubuntu 24.04"],
             "compiler": ["gcc-14", "clang-18"],
-            "versions": ["omnetpp"],
         },
     },
     # Example exercising the execution-environment axes: same project, four
@@ -312,7 +316,6 @@ DEFAULT_MATRICES = {
         "config": {
             "test_types": ["smoke"],
             "modes": ["release"],
-            "versions": ["omnetpp"],
             "os": ["Ubuntu 26.04", "Fedora 42"],
             "compiler": ["clang-22"],
             "isolation": ["docker"],

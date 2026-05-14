@@ -397,6 +397,7 @@ async def worker_poll(
             "job": {
                 "run_id": run.id,
                 "project": run.project,
+                "version": run.version,
                 "test_type": run.test_type,
                 "mode": run.mode,
                 "git_ref": run.git_ref,
