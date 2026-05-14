@@ -2,6 +2,7 @@ import contextlib
 import io
 import logging
 import os
+import shlex
 import subprocess
 import tempfile
 import time
@@ -13,6 +14,55 @@ from opp_ci.db.connection import SessionLocal
 from opp_ci.db.models import TestRun, TestRunStatus
 
 _logger = logging.getLogger(__name__)
+
+
+def _format_argv(args):
+    """Render an argv list as a copy-pasteable shell command."""
+    return " ".join(shlex.quote(str(a)) for a in args)
+
+
+def _log_captured_output(label, result, level):
+    """Log a CompletedProcess's stdout/stderr at *level*, tail-truncated to
+    keep worker logs manageable. Use DEBUG level if you want everything."""
+    def _tail(text, max_bytes=2000):
+        if not text:
+            return "(empty)"
+        if len(text) <= max_bytes:
+            return text
+        return f"... ({len(text) - max_bytes} bytes elided) ...\n{text[-max_bytes:]}"
+    _logger.log(level, "[%s] stdout:\n%s", label, _tail(result.stdout))
+    _logger.log(level, "[%s] stderr:\n%s", label, _tail(result.stderr))
+
+
+def run_external(args, *, label, timeout=None, env=None, cwd=None):
+    """subprocess.run + structured logging.
+
+    Always logs the command at INFO and the exit code + elapsed time. On a
+    non-zero exit also logs a tail of stdout/stderr at WARNING — so when an
+    'opp_env install' or 'docker run' returns FAIL in 0.0s the worker's
+    log shows *why* without having to fish through the coordinator.
+
+    With DEBUG logging enabled (e.g. `opp_ci -v worker start ...`), the
+    full output is logged on every call, success or not.
+
+    Returns the CompletedProcess.
+    """
+    _logger.info("[%s] $ %s", label, _format_argv(args))
+    start = time.time()
+    result = subprocess.run(
+        args, capture_output=True, text=True,
+        timeout=timeout, env=env, cwd=cwd,
+    )
+    elapsed = time.time() - start
+
+    if result.returncode == 0:
+        _logger.info("[%s] exit=0 (%.1fs)", label, elapsed)
+        if _logger.isEnabledFor(logging.DEBUG):
+            _log_captured_output(label, result, logging.DEBUG)
+    else:
+        _logger.warning("[%s] exit=%d (%.1fs)", label, result.returncode, elapsed)
+        _log_captured_output(label, result, logging.WARNING)
+    return result
 
 
 def find_existing_run(session, *, project, test_type, mode=None, git_ref=None,
@@ -201,13 +251,11 @@ def install_project(project, git_ref=None, *, isolation="none", toolchain="none"
         return
 
     effective_project, _ = resolve_git_project(project, git_ref, toolchain="nix")
-    _logger.info("Installing %s via opp_env", effective_project)
-    result = subprocess.run(
+    result = run_external(
         ["opp_env", "install", effective_project],
-        capture_output=True, text=True
+        label=f"opp_env install {effective_project}",
     )
     if result.returncode != 0:
-        _logger.error("opp_env install failed:\n%s", result.stderr)
         raise RuntimeError(f"opp_env install {effective_project} failed (exit code {result.returncode})")
     _logger.info("Installation of %s complete", effective_project)
 
@@ -256,10 +304,12 @@ def _resolve_project_dir(project, opp_file=None):
 def _create_git_worktree(project_dir, git_ref):
     """Create a detached git worktree for *git_ref* in a temp dir and return its path."""
     target = os.path.join(tempfile.gettempdir(), f"opp-ci-worktree-{uuid.uuid4().hex[:8]}")
-    subprocess.run(["git", "fetch", "origin"], cwd=project_dir, capture_output=True, timeout=120)
-    result = subprocess.run(
+    run_external(
+        ["git", "fetch", "origin"], label="git fetch", cwd=project_dir, timeout=120,
+    )
+    result = run_external(
         ["git", "worktree", "add", "--detach", target, git_ref],
-        cwd=project_dir, capture_output=True, text=True,
+        label=f"git worktree add {git_ref}", cwd=project_dir,
     )
     if result.returncode != 0:
         raise RuntimeError(f"git worktree add {git_ref} failed: {result.stderr.strip()}")
@@ -342,17 +392,15 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
     docker_cmd.append(image)
     docker_cmd += container_args
 
-    _logger.info("Running test in docker: %s", " ".join(docker_cmd))
     start = time.time()
     try:
-        result = subprocess.run(docker_cmd, capture_output=True, text=True)
+        result = run_external(docker_cmd, label=f"docker:{image}")
         duration = time.time() - start
     finally:
         if worktree_path:
             _remove_git_worktree(worktree_path)
 
     result_code = "PASS" if result.returncode == 0 else "FAIL"
-    _logger.info("Test finished: %s (%.1fs)", result_code, duration)
     return {
         "result_code": result_code,
         "duration_seconds": duration,
@@ -381,13 +429,11 @@ def _run_test_via_opp_env(project, test_type, **kwargs):
         env["OPP_ENV_GIT_REF"] = effective_ref
     args = ["opp_env", "run", effective_project, "-c", cmd]
 
-    _logger.info("Running test: %s", " ".join(args))
     start = time.time()
-    result = subprocess.run(args, capture_output=True, text=True, env=env)
+    result = run_external(args, label=f"opp_env:{effective_project}", env=env)
     duration = time.time() - start
 
     result_code = "PASS" if result.returncode == 0 else "FAIL"
-    _logger.info("Test finished: %s (%.1fs)", result_code, duration)
     return {
         "result_code": result_code,
         "duration_seconds": duration,
