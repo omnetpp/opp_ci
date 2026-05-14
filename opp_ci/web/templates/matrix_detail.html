@@ -26,12 +26,12 @@
                 -
             {% endif %}
         </td></tr>
-        <tr><th>OS</th><td>{{ matrix.config.get("os", ["-"])|join(", ") }}</td></tr>
-        <tr><th>OS Version</th><td>{{ matrix.config.get("os_version", ["-"])|join(", ") }}</td></tr>
-        <tr><th>Compiler</th><td>{{ matrix.config.get("compiler", ["-"])|join(", ") }}</td></tr>
-        <tr><th>Compiler Version</th><td>{{ matrix.config.get("compiler_version", ["-"])|join(", ") }}</td></tr>
-        <tr><th>Isolation</th><td>{{ matrix.config.get("isolation", ["none"])|join(", ") }}</td></tr>
-        <tr><th>Toolchain</th><td>{{ matrix.config.get("toolchain", ["none"])|join(", ") }}</td></tr>
+        <tr><th>OSes</th><td>{{ matrix.config.get("os", ["-"])|join(", ") }}</td></tr>
+        <tr><th>OS Versions</th><td>{{ matrix.config.get("os_version", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Compilers</th><td>{{ matrix.config.get("compiler", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Compiler Versions</th><td>{{ matrix.config.get("compiler_version", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Isolations</th><td>{{ matrix.config.get("isolation", ["none"])|join(", ") }}</td></tr>
+        <tr><th>Toolchains</th><td>{{ matrix.config.get("toolchain", ["none"])|join(", ") }}</td></tr>
         {% set deps_axis = matrix.config.get("deps", {}) %}
         {% if deps_axis %}
         <tr><th>Deps</th><td>
@@ -50,6 +50,7 @@
         <thead>
             <tr>
                 <th>Project</th>
+                <th>Version</th>
                 <th>Test</th>
                 <th>Mode</th>
                 <th>Ref</th>
@@ -61,6 +62,7 @@
             {% for job in jobs[:50] %}
             <tr>
                 <td>{{ job.project }}</td>
+                <td>{{ job.version or "-" }}</td>
                 <td>{{ job.test_type }}</td>
                 <td>{{ job.mode }}</td>
                 <td>{{ job.git_ref or "-" }}</td>
@@ -69,7 +71,7 @@
             </tr>
             {% endfor %}
             {% if jobs|length > 50 %}
-            <tr><td colspan="6" style="text-align:center; color:var(--muted);">... and {{ jobs|length - 50 }} more</td></tr>
+            <tr><td colspan="7" style="text-align:center; color:var(--muted);">... and {{ jobs|length - 50 }} more</td></tr>
             {% endif %}
         </tbody>
     </table>

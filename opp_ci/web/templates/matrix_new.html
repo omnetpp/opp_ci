@@ -7,11 +7,11 @@
 
 <div class="card">
     <form method="post" action="/matrices/create">
+        <div class="form-group">
+            <label for="name">Name</label>
+            <input type="text" name="name" id="name" required placeholder="e.g. inet-full">
+        </div>
         <div class="form-row">
-            <div class="form-group">
-                <label for="name">Name</label>
-                <input type="text" name="name" id="name" required placeholder="e.g. inet-full">
-            </div>
             <div class="form-group">
                 <label for="project">Project</label>
                 <select name="project" id="project" required>
@@ -21,12 +21,6 @@
                     {% endfor %}
                 </select>
             </div>
-        </div>
-        <p style="font-size:0.85rem; color:var(--muted); margin-top:-0.25rem; margin-bottom:1rem;">
-            Each field below accepts a comma-separated list of values; the matrix is the cross-product of all axes.
-            Leave a field blank to use its default.
-        </p>
-        <div class="form-row">
             <div class="form-group">
                 <label for="test_types">Tests</label>
                 <input type="text" name="test_types" id="test_types" list="test-type-options" placeholder="smoke, fingerprint, statistical">
@@ -48,15 +42,11 @@
                     <option value="opp">
                 </datalist>
             </div>
-            <div class="form-group">
-                <label for="modes">Build Modes</label>
-                <input type="text" name="modes" id="modes" list="mode-options" placeholder="release, debug">
-                <datalist id="mode-options">
-                    <option value="release">
-                    <option value="debug">
-                </datalist>
-            </div>
         </div>
+        <p style="font-size:0.85rem; color:var(--muted); margin-top:-0.25rem; margin-bottom:1rem;">
+            Each field below accepts a comma-separated list of values; the matrix is the cross-product of all axes.
+            Leave a field blank to use its default.
+        </p>
         <div class="form-row">
             <div class="form-group">
                 <label for="versions">Project Versions</label>
@@ -73,19 +63,21 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label for="refs">Git Refs</label>
-                <input type="text" name="refs" id="refs" placeholder="e.g. master, v4.5.0, abc123">
+                <label for="modes">Modes</label>
+                <input type="text" name="modes" id="modes" list="mode-options" placeholder="release, debug">
+                <datalist id="mode-options">
+                    <option value="release">
+                    <option value="debug">
+                </datalist>
             </div>
             <div class="form-group">
-                <label>&nbsp;</label>
-                <div style="font-size:0.85rem; color:var(--muted); padding-top:0.5rem;">
-                    Use the ref range below to expand a base..head range via GitHub instead of listing refs explicitly.
-                </div>
+                <label for="refs">Git Refs</label>
+                <input type="text" name="refs" id="refs" placeholder="e.g. master, v4.5.0, abc123">
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label for="os">OS</label>
+                <label for="os">OSes</label>
                 <input type="text" name="os" id="os" list="os-options" placeholder="Ubuntu, Fedora">
                 <datalist id="os-options">
                     {% for o in os_suggestions %}<option value="{{ o }}">{% endfor %}
@@ -101,7 +93,7 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label for="compiler">Compiler</label>
+                <label for="compiler">Compilers</label>
                 <input type="text" name="compiler" id="compiler" list="compiler-options" placeholder="gcc, clang">
                 <datalist id="compiler-options">
                     {% for c in compiler_suggestions %}<option value="{{ c }}">{% endfor %}
@@ -121,7 +113,7 @@
         </p>
         <div class="form-row">
             <div class="form-group">
-                <label for="isolation">Isolation</label>
+                <label for="isolation">Isolations</label>
                 <input type="text" name="isolation" id="isolation" list="isolation-options" placeholder="none, docker">
                 <datalist id="isolation-options">
                     <option value="none">
@@ -129,7 +121,7 @@
                 </datalist>
             </div>
             <div class="form-group">
-                <label for="toolchain">Toolchain</label>
+                <label for="toolchain">Toolchains</label>
                 <input type="text" name="toolchain" id="toolchain" list="toolchain-options" placeholder="none, nix">
                 <datalist id="toolchain-options">
                     <option value="none">
@@ -148,8 +140,8 @@
             </div>
         </div>
         <p style="font-size:0.85rem; color:var(--muted); margin-bottom:1rem;">
-            If both base and head are provided, commits between them are resolved via GitHub and used as the matrix's
-            <code>refs</code> axis (overriding the Git Refs field above).
+            If both base and head are provided, commits between them are resolved via GitHub and used as the
+            <strong>Git Refs</strong> axis (overriding the Git Refs field above).
         </p>
         <div class="actions">
             <button type="submit" class="btn btn-success">Create</button>
