@@ -456,6 +456,9 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
         "-v", f"{os.path.abspath(mount_path)}:/work",
         "-w", "/work",
     ]
+    # The image's ENTRYPOINT is the runner binary (opp_env / opp_ci), so we
+    # only need to pass its arguments here — repeating the binary name would
+    # produce `opp_ci opp_ci ...` and "No such command" from click.
     if toolchain == "nix":
         docker_cmd += ["-v", "opp-ci-nix-store:/nix"]
         if git_ref:
@@ -466,9 +469,9 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
             raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(COMMAND_MAP.keys())}")
         if mode:
             inner_cmd += f" --mode {mode}"
-        container_args = ["opp_env", "run", effective_project, "-c", inner_cmd]
+        container_args = ["run", effective_project, "-c", inner_cmd]
     else:
-        container_args = ["opp_ci", "internal", "run-direct",
+        container_args = ["internal", "run-direct",
                           "--project", project, "--test-type", test_type]
         if mode:
             container_args += ["--mode", mode]
