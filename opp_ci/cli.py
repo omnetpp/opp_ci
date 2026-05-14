@@ -1399,7 +1399,7 @@ def image_group():
 
 
 @image_group.command("build")
-@click.option("--os", "os_name", required=True, help="Base OS name, e.g. 'ubuntu' or 'fedora'")
+@click.option("--os", "os_name", required=True, help="Base OS name, e.g. 'Ubuntu' or 'Fedora'")
 @click.option("--os-version", required=True, help="OS version tag, e.g. '26.04'")
 @click.option("--compiler", default=None, help="Compiler name (required for --toolchain=host)")
 @click.option("--compiler-version", default=None, help="Compiler version (required for --toolchain=host)")

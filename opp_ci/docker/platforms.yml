@@ -4,19 +4,31 @@
 # string. Add or remove entries as the team's coverage matrix evolves.
 
 os_distributions:
-  - ubuntu
-  - debian
-  - fedora
+  - Ubuntu
+  - Debian
+  - Fedora
+  - macOS
+  - Windows
 
 os_versions:
-  ubuntu: ["22.04", "24.04", "26.04"]
-  debian: ["12", "13"]
-  fedora: ["41", "42"]
+  Ubuntu: ["22.04", "24.04", "26.04"]
+  Debian: ["12", "13"]
+  Fedora: ["41", "42"]
+  macOS: ["13", "14", "15"]
+  Windows: ["10", "11", "Server 2019", "Server 2022"]
 
 compilers:
   - gcc
   - clang
+  - appleclang
+  - msvc
+  - clang-cl
+  - mingw-gcc
 
 compiler_versions:
   gcc: ["12", "13", "14", "15"]
   clang: ["16", "17", "18", "19", "20", "21", "22"]
+  appleclang: ["14", "15", "16"]
+  msvc: ["19.38", "19.39", "19.40"]
+  clang-cl: ["17", "18", "19"]
+  mingw-gcc: ["13", "14"]
