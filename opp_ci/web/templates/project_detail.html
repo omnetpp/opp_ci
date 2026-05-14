@@ -88,5 +88,10 @@
 <p class="empty">No runs yet for this project.</p>
 {% endif %}
 
-<p style="margin-top:1rem;"><a href="/projects">&larr; Back to projects</a></p>
+<div class="actions">
+    <form method="post" action="/projects/{{ project.name }}/delete" class="inline-form">
+        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete project {{ project.name }} and its versions/rules?')">Delete</button>
+    </form>
+    <a href="/projects" class="btn btn-secondary btn-sm">&larr; Back to projects</a>
+</div>
 {% endblock %}

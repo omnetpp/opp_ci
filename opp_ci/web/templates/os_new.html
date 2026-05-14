@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — New OS{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">New Operating System</h2>
+
+<div class="card">
+    <form method="post" action="/os/new">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="name">Name</label>
+                <input type="text" name="name" id="name" required placeholder="ubuntu, fedora, macos">
+            </div>
+            <div class="form-group">
+                <label for="version">Version</label>
+                <input type="text" name="version" id="version" placeholder="22.04, 40, 14">
+            </div>
+            <div class="form-group">
+                <label for="arch">Architecture</label>
+                <input type="text" name="arch" id="arch" value="x86_64" placeholder="x86_64, aarch64">
+            </div>
+        </div>
+        <div class="actions">
+            <button type="submit" class="btn btn-success">Add</button>
+            <a href="/os" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

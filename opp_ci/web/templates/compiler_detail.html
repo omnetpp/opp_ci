@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Compiler: {{ compiler.label }}{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Compiler: {{ compiler.label }}</h2>
+
+<div class="card">
+    <h2>Details</h2>
+    <table>
+        <tr><th style="width:150px;">ID</th><td>{{ compiler.id }}</td></tr>
+        <tr><th>Name</th><td>{{ compiler.name }}</td></tr>
+        <tr><th>Version</th><td>{{ compiler.version or "-" }}</td></tr>
+    </table>
+</div>
+
+<div class="actions">
+    <form method="post" action="/compilers/{{ compiler.id }}/delete" class="inline-form">
+        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete {{ compiler.label }}?')">Delete</button>
+    </form>
+    <a href="/compilers" class="btn btn-secondary btn-sm">&larr; Back to compilers</a>
+</div>
+{% endblock %}

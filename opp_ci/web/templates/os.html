@@ -1,28 +1,18 @@
 {% extends "base.html" %}
 {% block title %}opp_ci — Operating Systems{% endblock %}
 {% block content %}
-<h2 style="margin-bottom: 1rem;">Operating Systems</h2>
-
-<div class="card">
-    <h2>Add OS</h2>
-    <form method="post" action="/os/create">
-        <div class="form-row">
-            <div class="form-group">
-                <label for="name">Name</label>
-                <input type="text" name="name" id="name" required placeholder="ubuntu, fedora, macos">
-            </div>
-            <div class="form-group">
-                <label for="version">Version</label>
-                <input type="text" name="version" id="version" placeholder="22.04, 40, 14">
-            </div>
-            <div class="form-group">
-                <label for="arch">Architecture</label>
-                <input type="text" name="arch" id="arch" value="x86_64" placeholder="x86_64, aarch64">
-            </div>
-        </div>
-        <button type="submit" class="btn btn-success">Add</button>
-    </form>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+    <h2>Operating Systems</h2>
+    <a href="/os/new" class="btn btn-success btn-sm">+ New OS</a>
 </div>
+
+<form method="get" action="/os" class="filters">
+    <input type="text" name="name" value="{{ filter_name }}" placeholder="Name contains…">
+    <input type="text" name="version" value="{{ filter_version }}" placeholder="Version contains…">
+    <input type="text" name="arch" value="{{ filter_arch }}" placeholder="Arch contains…">
+    <button type="submit">Filter</button>
+    {% if filter_name or filter_version or filter_arch %}<a href="/os" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+</form>
 
 {% if os_entries %}
 <table>
@@ -32,26 +22,31 @@
             <th>Name</th>
             <th>Version</th>
             <th>Architecture</th>
-            <th>Actions</th>
+            <th></th>
         </tr>
     </thead>
     <tbody>
         {% for o in os_entries %}
-        <tr>
+        <tr data-href="/os/{{ o.id }}" style="cursor:pointer;">
             <td>{{ o.id }}</td>
             <td>{{ o.name }}</td>
             <td>{{ o.version or "-" }}</td>
             <td>{{ o.arch }}</td>
-            <td>
+            <td onclick="event.stopPropagation()">
                 <form method="post" action="/os/{{ o.id }}/delete" class="inline-form">
-                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete?')">Delete</button>
+                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete {{ o.name }} {{ o.version or '' }}?')">Delete</button>
                 </form>
             </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+<script>
+document.querySelectorAll("tr[data-href]").forEach(row => {
+    row.addEventListener("click", () => { window.location = row.dataset.href; });
+});
+</script>
 {% else %}
-<p class="empty">No operating systems registered.</p>
+<p class="empty">No operating systems match. <a href="/os/new">Add one</a>.</p>
 {% endif %}
 {% endblock %}

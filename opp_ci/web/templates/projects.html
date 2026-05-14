@@ -1,7 +1,21 @@
 {% extends "base.html" %}
 {% block title %}opp_ci — Projects{% endblock %}
 {% block content %}
-<h2 style="margin-bottom: 1rem;">Projects</h2>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+    <h2>Projects</h2>
+    <a href="/projects/new" class="btn btn-success btn-sm">+ New Project</a>
+</div>
+
+<form method="get" action="/projects" class="filters">
+    <input type="text" name="name" value="{{ filter_name }}" placeholder="Name contains…">
+    <select name="tier">
+        <option value="">Any tier</option>
+        <option value="1" {% if filter_tier == "1" %}selected{% endif %}>Tier 1</option>
+        <option value="2" {% if filter_tier == "2" %}selected{% endif %}>Tier 2</option>
+    </select>
+    <button type="submit">Filter</button>
+    {% if filter_name or filter_tier %}<a href="/projects" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+</form>
 
 {% if projects %}
 <table>
@@ -14,27 +28,38 @@
             <th>Dependencies</th>
             <th>Last Status</th>
             <th>Runs</th>
+            <th></th>
         </tr>
     </thead>
     <tbody>
         {% for p in projects %}
-        <tr>
-            <td><a href="/projects/{{ p.name }}">{{ p.name }}</a></td>
+        <tr data-href="/projects/{{ p.name }}" style="cursor:pointer;">
+            <td>{{ p.name }}</td>
             <td>{{ p.tier }}</td>
             <td>{{ p.opp_env_name or "-" }}</td>
             <td>
                 {% if p.github_owner and p.github_repo %}
-                <a href="https://github.com/{{ p.github_owner }}/{{ p.github_repo }}">{{ p.github_owner }}/{{ p.github_repo }}</a>
+                <a href="https://github.com/{{ p.github_owner }}/{{ p.github_repo }}" onclick="event.stopPropagation()">{{ p.github_owner }}/{{ p.github_repo }}</a>
                 {% else %}-{% endif %}
             </td>
             <td>{{ p.dependency_names|join(", ") if p.dependency_names else "-" }}</td>
             <td>{% if last_status.get(p.name) %}<span class="badge badge-{{ last_status[p.name] }}">{{ last_status[p.name] }}</span>{% else %}-{% endif %}</td>
             <td>{{ run_counts.get(p.name, 0) }}</td>
+            <td onclick="event.stopPropagation()">
+                <form method="post" action="/projects/{{ p.name }}/delete" class="inline-form">
+                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete project {{ p.name }} and its versions/rules?')">Delete</button>
+                </form>
+            </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+<script>
+document.querySelectorAll("tr[data-href]").forEach(row => {
+    row.addEventListener("click", () => { window.location = row.dataset.href; });
+});
+</script>
 {% else %}
-<p class="empty">No projects registered. Run <code>opp_ci seed-projects</code> to add them.</p>
+<p class="empty">No projects match. <a href="/projects/new">Create one</a> or run <code>opp_ci seed-projects</code>.</p>
 {% endif %}
 {% endblock %}

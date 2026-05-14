@@ -122,26 +122,6 @@
     </form>
 </div>
 
-<!-- Project Registration -->
-<div class="card">
-    <h2>Register Project</h2>
-    <form method="post" action="/admin/projects/register">
-        <div class="form-row">
-            <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="inet-4.5"></div>
-            <div class="form-group"><label>opp_env name</label><input type="text" name="opp_env_name" placeholder="inet-4.5"></div>
-        </div>
-        <div class="form-row">
-            <div class="form-group"><label>GitHub owner</label><input type="text" name="github_owner" placeholder="inet-framework"></div>
-            <div class="form-group"><label>GitHub repo</label><input type="text" name="github_repo" placeholder="inet"></div>
-            <div class="form-group">
-                <label>Tier</label>
-                <select name="tier"><option value="1">1 (full testing)</option><option value="2" selected>2 (smoke only)</option></select>
-            </div>
-        </div>
-        <button type="submit" class="btn btn-success btn-sm">Register Project</button>
-    </form>
-</div>
-
 {% if recent_errors %}
 <div class="card">
     <h2>Recent Errors</h2>

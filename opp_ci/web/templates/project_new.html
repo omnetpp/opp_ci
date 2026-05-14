@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — New Project{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">New Project</h2>
+
+{% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+
+<div class="card">
+    <form method="post" action="/projects/new">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="name">Name</label>
+                <input type="text" name="name" id="name" required placeholder="inet-4.5">
+            </div>
+            <div class="form-group">
+                <label for="opp_env_name">opp_env name</label>
+                <input type="text" name="opp_env_name" id="opp_env_name" placeholder="inet-4.5">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="github_owner">GitHub owner</label>
+                <input type="text" name="github_owner" id="github_owner" placeholder="inet-framework">
+            </div>
+            <div class="form-group">
+                <label for="github_repo">GitHub repo</label>
+                <input type="text" name="github_repo" id="github_repo" placeholder="inet">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="git_url">Git URL</label>
+                <input type="text" name="git_url" id="git_url" placeholder="https://github.com/inet-framework/inet.git">
+            </div>
+            <div class="form-group">
+                <label for="tier">Tier</label>
+                <select name="tier" id="tier">
+                    <option value="1">1 (full testing)</option>
+                    <option value="2" selected>2 (smoke only)</option>
+                </select>
+            </div>
+        </div>
+        <div class="actions">
+            <button type="submit" class="btn btn-success">Create</button>
+            <a href="/projects" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

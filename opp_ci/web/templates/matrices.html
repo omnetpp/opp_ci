@@ -3,41 +3,17 @@
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
     <h2>Test Matrices</h2>
+    <a href="/matrices/new" class="btn btn-success btn-sm">+ New Matrix</a>
 </div>
 
-<div class="card">
-    <h2>Create Matrix</h2>
-    <form method="post" action="/matrices/create">
-        <div class="form-row">
-            <div class="form-group">
-                <label for="name">Name</label>
-                <input type="text" name="name" id="name" required placeholder="e.g. inet-full">
-            </div>
-            <div class="form-group">
-                <label for="project">Project</label>
-                <input type="text" name="project" id="project" required placeholder="e.g. inet-4.5">
-            </div>
-        </div>
-        <div class="form-group">
-            <label for="config_json">Config (JSON)</label>
-            <textarea name="config_json" id="config_json" placeholder='{"test_types": ["smoke", "fingerprint"], "modes": ["release", "debug"]}' rows="4"></textarea>
-        </div>
-        <div class="form-row">
-            <div class="form-group">
-                <label for="ref_range_base">Ref Range — Base (optional)</label>
-                <input type="text" name="ref_range_base" id="ref_range_base" placeholder="e.g. main, v4.5.0, abc123">
-            </div>
-            <div class="form-group">
-                <label for="ref_range_head">Ref Range — Head (optional)</label>
-                <input type="text" name="ref_range_head" id="ref_range_head" placeholder="e.g. feature-branch, def456">
-            </div>
-        </div>
-        <p style="font-size:0.85rem; color:var(--muted); margin-top:-0.5rem;">
-            If both base and head are provided, commits between them are resolved via GitHub and added to the matrix's <code>refs</code> axis.
-        </p>
-        <button type="submit" class="btn btn-success">Create</button>
-    </form>
-</div>
+{% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+
+<form method="get" action="/matrices" class="filters">
+    <input type="text" name="name" value="{{ filter_name }}" placeholder="Name contains…">
+    <input type="text" name="project" value="{{ filter_project }}" placeholder="Project contains…">
+    <button type="submit">Filter</button>
+    {% if filter_name or filter_project %}<a href="/matrices" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+</form>
 
 {% if matrices %}
 <table>
@@ -50,25 +26,36 @@
             <th>Modes</th>
             <th>Refs</th>
             <th>Runs</th>
+            <th></th>
         </tr>
     </thead>
     <tbody>
         {% for m in matrices %}
-        <tr>
-            <td><a href="/matrices/{{ m.id }}">{{ m.id }}</a></td>
-            <td><a href="/matrices/{{ m.id }}">{{ m.name }}</a></td>
-            <td><a href="/projects/{{ m.project }}">{{ m.project }}</a></td>
+        <tr data-href="/matrices/{{ m.id }}" style="cursor:pointer;">
+            <td>{{ m.id }}</td>
+            <td>{{ m.name }}</td>
+            <td>{{ m.project }}</td>
             <td>{{ m.config.get("test_types", [])|join(", ") }}</td>
             <td>{{ m.config.get("modes", [])|join(", ") }}</td>
             {% set refs = m.config.get("refs", []) %}
             {% set ref_range = m.config.get("ref_range") %}
             <td>{% if ref_range %}{{ ref_range.base[:8] }}..{{ ref_range.head[:8] }}{% elif refs|length > 5 %}{{ refs|length }} commits{% elif refs %}{{ refs|join(", ") }}{% else %}-{% endif %}</td>
             <td>{{ run_counts.get(m.id, 0) }}</td>
+            <td onclick="event.stopPropagation()">
+                <form method="post" action="/matrices/{{ m.id }}/delete" class="inline-form">
+                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete matrix {{ m.name }}?')">Delete</button>
+                </form>
+            </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+<script>
+document.querySelectorAll("tr[data-href]").forEach(row => {
+    row.addEventListener("click", () => { window.location = row.dataset.href; });
+});
+</script>
 {% else %}
-<p class="empty">No matrices defined. Use <code>opp_ci create-matrix</code> or <code>opp_ci seed-matrices</code> to add them.</p>
+<p class="empty">No matrices match. <a href="/matrices/new">Create one</a> or use <code>opp_ci seed-matrices</code>.</p>
 {% endif %}
 {% endblock %}

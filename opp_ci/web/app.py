@@ -650,14 +650,23 @@ def run_detail(request: Request, run_id: int):
 
 
 @app.get("/projects", response_class=HTMLResponse)
-def projects_list(request: Request):
+def projects_list(
+    request: Request,
+    name: str = Query(default=None),
+    tier: str = Query(default=None),
+):
     session = SessionLocal()
     try:
-        projects = session.execute(
-            select(Project).order_by(Project.tier, Project.name)
-        ).scalars().all()
+        query = select(Project).order_by(Project.tier, Project.name)
+        if name:
+            query = query.where(Project.name.ilike(f"%{name}%"))
+        if tier:
+            try:
+                query = query.where(Project.tier == int(tier))
+            except ValueError:
+                pass
+        projects = session.execute(query).scalars().all()
 
-        # Collect run counts and last status per project
         run_counts = {}
         last_status = {}
         for p in projects:
@@ -677,7 +686,67 @@ def projects_list(request: Request):
             "projects": projects,
             "run_counts": run_counts,
             "last_status": last_status,
+            "filter_name": name or "",
+            "filter_tier": tier or "",
         })
+    finally:
+        session.close()
+
+
+@app.get("/projects/new", response_class=HTMLResponse)
+def project_new_form(request: Request, error: str = Query(default=None)):
+    return templates.TemplateResponse(request, "project_new.html", {
+        "error": error,
+    })
+
+
+@app.post("/projects/new")
+def project_new_submit(
+    name: str = Form(...),
+    opp_env_name: str = Form(default=""),
+    github_owner: str = Form(default=""),
+    github_repo: str = Form(default=""),
+    git_url: str = Form(default=""),
+    tier: int = Form(default=2),
+):
+    session = SessionLocal()
+    try:
+        existing = session.execute(
+            select(Project).where(Project.name == name)
+        ).scalar_one_or_none()
+        if existing:
+            return RedirectResponse(url="/projects/new?error=Project+already+exists", status_code=303)
+
+        project = Project(
+            name=name,
+            opp_env_name=opp_env_name or None,
+            github_owner=github_owner or None,
+            github_repo=github_repo or None,
+            git_url=git_url or None,
+            tier=tier,
+        )
+        session.add(project)
+        session.commit()
+        return RedirectResponse(url=f"/projects/{project.name}", status_code=303)
+    finally:
+        session.close()
+
+
+@app.post("/projects/{name}/delete")
+def project_delete(name: str):
+    session = SessionLocal()
+    try:
+        project = session.execute(
+            select(Project).where(Project.name == name)
+        ).scalar_one_or_none()
+        if project:
+            for v in session.execute(select(Version).where(Version.project_id == project.id)).scalars().all():
+                session.delete(v)
+            for r in session.execute(select(AutoTestRule).where(AutoTestRule.project_id == project.id)).scalars().all():
+                session.delete(r)
+            session.delete(project)
+            session.commit()
+        return RedirectResponse(url="/projects", status_code=303)
     finally:
         session.close()
 
@@ -767,14 +836,21 @@ def compatibility_page(request: Request, project_name: str):
 
 
 @app.get("/matrices", response_class=HTMLResponse)
-def matrices_list(request: Request):
+def matrices_list(
+    request: Request,
+    name: str = Query(default=None),
+    project: str = Query(default=None),
+    error: str = Query(default=None),
+):
     session = SessionLocal()
     try:
-        matrices = session.execute(
-            select(TestMatrix).order_by(TestMatrix.id)
-        ).scalars().all()
+        query = select(TestMatrix).order_by(TestMatrix.id)
+        if name:
+            query = query.where(TestMatrix.name.ilike(f"%{name}%"))
+        if project:
+            query = query.where(TestMatrix.project.ilike(f"%{project}%"))
+        matrices = session.execute(query).scalars().all()
 
-        # Count runs per matrix
         run_counts = {}
         for m in matrices:
             count = session.execute(
@@ -785,6 +861,22 @@ def matrices_list(request: Request):
         return templates.TemplateResponse(request, "matrices.html", {
             "matrices": matrices,
             "run_counts": run_counts,
+            "filter_name": name or "",
+            "filter_project": project or "",
+            "error": error,
+        })
+    finally:
+        session.close()
+
+
+@app.get("/matrices/new", response_class=HTMLResponse)
+def matrix_new_form(request: Request, error: str = Query(default=None)):
+    session = SessionLocal()
+    try:
+        projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
+        return templates.TemplateResponse(request, "matrix_new.html", {
+            "projects": projects,
+            "error": error,
         })
     finally:
         session.close()
@@ -832,7 +924,7 @@ def matrix_create(
             config = json.loads(config_json) if config_json.strip() else {}
         except json.JSONDecodeError:
             return RedirectResponse(
-                url="/matrices?error=Invalid+JSON",
+                url="/matrices/new?error=Invalid+JSON",
                 status_code=303,
             )
 
@@ -841,7 +933,7 @@ def matrix_create(
         ).scalar_one_or_none()
         if existing:
             return RedirectResponse(
-                url="/matrices?error=Matrix+already+exists",
+                url="/matrices/new?error=Matrix+already+exists",
                 status_code=303,
             )
 
@@ -872,27 +964,60 @@ def matrix_delete(matrix_id: int):
 
 
 @app.get("/os", response_class=HTMLResponse)
-def os_list(request: Request):
+def os_list(
+    request: Request,
+    name: str = Query(default=None),
+    version: str = Query(default=None),
+    arch: str = Query(default=None),
+):
     session = SessionLocal()
     try:
-        os_entries = session.execute(
-            select(OS).order_by(OS.name, OS.version)
-        ).scalars().all()
+        query = select(OS).order_by(OS.name, OS.version)
+        if name:
+            query = query.where(OS.name.ilike(f"%{name}%"))
+        if version:
+            query = query.where(OS.version.ilike(f"%{version}%"))
+        if arch:
+            query = query.where(OS.arch.ilike(f"%{arch}%"))
+        os_entries = session.execute(query).scalars().all()
 
         return templates.TemplateResponse(request, "os.html", {
             "os_entries": os_entries,
+            "filter_name": name or "",
+            "filter_version": version or "",
+            "filter_arch": arch or "",
         })
     finally:
         session.close()
 
 
-@app.post("/os/create")
-def os_create(name: str = Form(...), version: str = Form(default=""), arch: str = Form(default="x86_64")):
+@app.get("/os/new", response_class=HTMLResponse)
+def os_new_form(request: Request):
+    return templates.TemplateResponse(request, "os_new.html", {})
+
+
+@app.post("/os/new")
+def os_new_submit(name: str = Form(...), version: str = Form(default=""), arch: str = Form(default="x86_64")):
     session = SessionLocal()
     try:
-        session.add(OS(name=name, version=version or None, arch=arch or "x86_64"))
+        entry = OS(name=name, version=version or None, arch=arch or "x86_64")
+        session.add(entry)
         session.commit()
-        return RedirectResponse(url="/os", status_code=303)
+        return RedirectResponse(url=f"/os/{entry.id}", status_code=303)
+    finally:
+        session.close()
+
+
+@app.get("/os/{os_id}", response_class=HTMLResponse)
+def os_detail(request: Request, os_id: int):
+    session = SessionLocal()
+    try:
+        entry = session.execute(select(OS).where(OS.id == os_id)).scalar_one_or_none()
+        if entry is None:
+            return HTMLResponse("<h1>OS not found</h1>", status_code=404)
+        return templates.TemplateResponse(request, "os_detail.html", {
+            "os": entry,
+        })
     finally:
         session.close()
 
@@ -911,27 +1036,56 @@ def os_delete(os_id: int):
 
 
 @app.get("/compilers", response_class=HTMLResponse)
-def compilers_list(request: Request):
+def compilers_list(
+    request: Request,
+    name: str = Query(default=None),
+    version: str = Query(default=None),
+):
     session = SessionLocal()
     try:
-        compilers = session.execute(
-            select(Compiler).order_by(Compiler.name, Compiler.version)
-        ).scalars().all()
+        query = select(Compiler).order_by(Compiler.name, Compiler.version)
+        if name:
+            query = query.where(Compiler.name.ilike(f"%{name}%"))
+        if version:
+            query = query.where(Compiler.version.ilike(f"%{version}%"))
+        compilers = session.execute(query).scalars().all()
 
         return templates.TemplateResponse(request, "compilers.html", {
             "compilers": compilers,
+            "filter_name": name or "",
+            "filter_version": version or "",
         })
     finally:
         session.close()
 
 
-@app.post("/compilers/create")
-def compiler_create(name: str = Form(...), version: str = Form(default="")):
+@app.get("/compilers/new", response_class=HTMLResponse)
+def compiler_new_form(request: Request):
+    return templates.TemplateResponse(request, "compiler_new.html", {})
+
+
+@app.post("/compilers/new")
+def compiler_new_submit(name: str = Form(...), version: str = Form(default="")):
     session = SessionLocal()
     try:
-        session.add(Compiler(name=name, version=version or None))
+        entry = Compiler(name=name, version=version or None)
+        session.add(entry)
         session.commit()
-        return RedirectResponse(url="/compilers", status_code=303)
+        return RedirectResponse(url=f"/compilers/{entry.id}", status_code=303)
+    finally:
+        session.close()
+
+
+@app.get("/compilers/{compiler_id}", response_class=HTMLResponse)
+def compiler_detail(request: Request, compiler_id: int):
+    session = SessionLocal()
+    try:
+        entry = session.execute(select(Compiler).where(Compiler.id == compiler_id)).scalar_one_or_none()
+        if entry is None:
+            return HTMLResponse("<h1>Compiler not found</h1>", status_code=404)
+        return templates.TemplateResponse(request, "compiler_detail.html", {
+            "compiler": entry,
+        })
     finally:
         session.close()
 
