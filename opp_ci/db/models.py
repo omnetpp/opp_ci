@@ -155,6 +155,8 @@ class TestRun(Base):
     os_version = Column(String, nullable=True)
     compiler = Column(String, nullable=True)
     compiler_version = Column(String, nullable=True)
+    isolation = Column(String, nullable=True)   # "none" | "docker"; None == "none"
+    toolchain = Column(String, nullable=True)   # "none" | "nix";    None == "none"
     platform_desc = Column(String, nullable=True)
     git_ref = Column(String, nullable=True)
     commit_sha = Column(String, nullable=True)

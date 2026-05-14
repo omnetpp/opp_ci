@@ -41,6 +41,18 @@ The optional 'deps' axis maps dependency names to lists of versions.
 The cross-product produces one job per combination of dep versions,
 each with a ``resolved_deps`` dict pinning each dep to one version.
 
+Execution-environment axes (optional):
+
+    "isolation": ["none", "docker"]   # how to isolate the run
+    "toolchain": ["none", "nix"]      # where the C++ toolchain comes from
+
+Both are also cross-product axes; a single string is auto-promoted to a list.
+When omitted, both default to "none" — direct on the worker's host with whatever
+compiler is installed (matches the bare-metal "no Nix, no Docker" setup).
+
+When ``toolchain == "nix"``, the (compiler, compiler_version) pair must map to
+an option opp_env understands; otherwise expansion raises ValueError.
+
 The scheduler expands this into individual jobs (one per combination).
 """
 
@@ -94,6 +106,57 @@ def _resolve_compiler_axis(config):
         return list(itertools.product(compiler_list, compiler_versions))
     else:
         return [_parse_compiler(c) for c in compiler_list]
+
+
+def _resolve_isolation_axis(config):
+    """Return the list of isolation values; defaults to ["none"]."""
+    value = config.get("isolation", ["none"])
+    if isinstance(value, str):
+        value = [value]
+    return list(value)
+
+
+def _resolve_toolchain_axis(config):
+    """Return the list of toolchain values; defaults to ["none"]."""
+    value = config.get("toolchain", ["none"])
+    if isinstance(value, str):
+        value = [value]
+    return list(value)
+
+
+# Compiler (name, version) pairs that opp_env can provide via Nix.
+# opp_env currently exposes only two stdenv flavors (see
+# opp_env/database/omnetpp.py): the "gcc7" option pins gcc 7, while the
+# "clang" option uses llvmPackages.stdenv. Compiler version is implicit
+# for clang. Extend this allow-list when opp_env grows more options.
+_NIX_SUPPORTED_COMPILERS = {
+    ("gcc", "7"),
+    ("clang", None),  # clang of unspecified version → opp_env's llvmPackages.stdenv
+}
+
+
+def _validate_nix_compiler(compiler, compiler_version):
+    """
+    Raise ValueError if (compiler, compiler_version) can't be provided by opp_env.
+
+    When toolchain == "nix" but the matrix names a compiler opp_env doesn't
+    expose, the job would silently fall back to opp_env's default. Strict
+    validation makes the matrix honest about what is actually being tested.
+    """
+    if compiler is None:
+        return  # no constraint — opp_env's project default is fine
+    name = compiler.lower()
+    if (name, compiler_version) in _NIX_SUPPORTED_COMPILERS:
+        return
+    if name == "clang" and (name, None) in _NIX_SUPPORTED_COMPILERS:
+        # clang with any version is accepted as "clang"; version is advisory.
+        return
+    raise ValueError(
+        f"toolchain=nix does not support compiler {compiler!r}"
+        f" version {compiler_version!r}; opp_env only exposes "
+        f"gcc-7 and clang (unversioned). "
+        f"Either set toolchain=none (host or docker) or pick a supported compiler."
+    )
 
 
 def _build_platform_desc(os_name, os_version, compiler_name, compiler_version):
@@ -175,6 +238,8 @@ def expand_matrix(project, config):
             "os_version": "24.04",
             "compiler": "gcc",
             "compiler_version": "14",
+            "isolation": "docker",
+            "toolchain": "none",
             "platform_desc": "Ubuntu 24.04 / gcc-14",
         }
     """
@@ -190,10 +255,16 @@ def expand_matrix(project, config):
     os_tuples = _resolve_os_axis(config)
     compiler_tuples = _resolve_compiler_axis(config)
     dep_combos = _resolve_deps_axis(config)
+    isolations = _resolve_isolation_axis(config)
+    toolchains = _resolve_toolchain_axis(config)
 
     jobs = []
-    for version, ref, test_type, mode, (os_name, os_ver), (comp_name, comp_ver), dep_pins in itertools.product(
-            versions, refs, test_types, modes, os_tuples, compiler_tuples, dep_combos):
+    for (version, ref, test_type, mode, (os_name, os_ver),
+         (comp_name, comp_ver), dep_pins, isolation, toolchain) in itertools.product(
+            versions, refs, test_types, modes, os_tuples, compiler_tuples,
+            dep_combos, isolations, toolchains):
+        if toolchain == "nix":
+            _validate_nix_compiler(comp_name, comp_ver)
         jobs.append({
             "project": version,
             "test_type": test_type,
@@ -203,6 +274,8 @@ def expand_matrix(project, config):
             "os_version": os_ver,
             "compiler": comp_name,
             "compiler_version": comp_ver,
+            "isolation": isolation,
+            "toolchain": toolchain,
             "platform_desc": _build_platform_desc(os_name, os_ver, comp_name, comp_ver),
             "resolved_deps": dep_pins or None,
         })
@@ -230,6 +303,20 @@ DEFAULT_MATRICES = {
             "os": ["Ubuntu 24.04"],
             "compiler": ["gcc-14", "clang-18"],
             "versions": ["omnetpp"],
+        },
+    },
+    # Example exercising the execution-environment axes: same project, four
+    # different ways of running. Useful as a smoke matrix while developing.
+    "omnetpp-platforms": {
+        "project": "omnetpp",
+        "config": {
+            "test_types": ["smoke"],
+            "modes": ["release"],
+            "versions": ["omnetpp"],
+            "os": ["Ubuntu 26.04", "Fedora 42"],
+            "compiler": ["clang-22"],
+            "isolation": ["docker"],
+            "toolchain": ["none"],
         },
     },
 }
