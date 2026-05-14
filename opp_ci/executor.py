@@ -148,13 +148,38 @@ def _get_test_functions():
 
 
 def _load_workspace(project_name, opp_file=None):
-    """Create a fresh SimulationWorkspace, load .opp files, and return (workspace, project)."""
+    """Create a SimulationWorkspace and resolve the simulation project.
+
+    Project resolution order:
+      1. Bundled ``@opp`` registry.
+      2. Explicit *opp_file*, if given.
+      3. Auto-discover any ``*.opp`` files in the current working directory
+         (which inside an opp-ci-runner container is /work, the project root).
+      4. Fall back to a programmatic ``define_simulation_project`` rooted at
+         the cwd — for opp_env projects without an .opp file, opp_repl's
+         defaults (ned/cpp/include/ini folders all = ".") let it build and
+         test from a bare source tree.
+    """
     from opp_repl.simulation.workspace import SimulationWorkspace
     ws = SimulationWorkspace()
     ws.load_opp_file("@opp")
     if opp_file:
         ws.load_opp_file(opp_file)
-    simulation_project = ws.determine_default_simulation_project(name=project_name)
+
+    cwd = os.getcwd()
+    if os.path.isdir(cwd):
+        for entry in os.listdir(cwd):
+            if entry.endswith(".opp"):
+                ws.load_opp_file(os.path.join(cwd, entry))
+
+    try:
+        simulation_project = ws.determine_default_simulation_project(name=project_name)
+    except KeyError:
+        _logger.info(
+            "No .opp file defines project %r — registering programmatically "
+            "with root_folder=%s", project_name, cwd,
+        )
+        simulation_project = ws.define_simulation_project(name=project_name, root_folder=cwd)
     return ws, simulation_project
 
 
