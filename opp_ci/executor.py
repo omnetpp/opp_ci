@@ -383,17 +383,81 @@ def _image_exists_locally(tag):
     return result.returncode == 0
 
 
+def _locate_opp_repl_source():
+    """Find the opp_repl source tree on this host.
+
+    Search order:
+      1. OPP_REPL_SOURCE env var (explicit override)
+      2. ../opp_repl relative to opp_ci's repo root (standard layout)
+      3. The directory containing an installed opp_repl package, if its
+         parent has a pyproject.toml (editable install)
+    Returns the path or None.
+    """
+    import pathlib
+    env = os.environ.get("OPP_REPL_SOURCE")
+    if env and (pathlib.Path(env) / "pyproject.toml").exists():
+        return env
+
+    opp_ci_repo = pathlib.Path(__file__).resolve().parent.parent
+    sibling = opp_ci_repo.parent / "opp_repl"
+    if (sibling / "pyproject.toml").exists():
+        return str(sibling)
+
+    try:
+        import opp_repl
+        candidate = pathlib.Path(opp_repl.__file__).resolve().parent.parent
+        if (candidate / "pyproject.toml").exists():
+            return str(candidate)
+    except ImportError:
+        pass
+    return None
+
+
+def _build_local_wheels_into(dest_dir):
+    """Build opp_ci + opp_repl wheels (without their dependencies) into dest_dir.
+
+    They aren't on PyPI yet, so any image that needs them at install time has
+    to bring its own copy. Other transitive deps (sqlalchemy, click, etc.)
+    are installed from PyPI by the Dockerfile via --find-links + the regular
+    index, which avoids re-wheeling the whole graph.
+    """
+    import pathlib
+    opp_ci_repo = str(pathlib.Path(__file__).resolve().parent.parent)
+    opp_repl_repo = _locate_opp_repl_source()
+    if opp_repl_repo is None:
+        raise RuntimeError(
+            "Cannot find opp_repl source. Place it next to opp_ci/ or set "
+            "OPP_REPL_SOURCE=/path/to/opp_repl."
+        )
+    for src in (opp_ci_repo, opp_repl_repo):
+        result = run_external(
+            ["pip", "wheel", "--no-deps", "-w", dest_dir, src],
+            label=f"pip wheel {pathlib.Path(src).name}",
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Building wheel for {src} failed (exit {result.returncode}); "
+                f"see captured output above."
+            )
+
+
 def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version, *, push=False):
     """Build (and optionally push) one opp-ci-runner image.
 
     Used by both 'opp_ci image build' and the worker's on-demand image build.
-    Raises RuntimeError on docker build / push failure.
+    For toolchain=host (or "none"), opp_ci + opp_repl wheels are built from
+    the local source trees and laid into the build context so the Dockerfile
+    can install them via --find-links. Raises RuntimeError on any failure.
     """
     dockerfile_content = render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version)
     with tempfile.TemporaryDirectory() as tmp:
         dockerfile_path = os.path.join(tmp, "Dockerfile")
         with open(dockerfile_path, "w") as f:
             f.write(dockerfile_content)
+        if toolchain in ("none", "host"):
+            wheels_dir = os.path.join(tmp, "wheels")
+            os.makedirs(wheels_dir)
+            _build_local_wheels_into(wheels_dir)
         result = run_external(
             ["docker", "build", "-t", tag, "-f", dockerfile_path, tmp],
             label=f"docker build {tag}",

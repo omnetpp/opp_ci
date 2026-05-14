@@ -26,12 +26,15 @@ RUN dnf -y install \
 RUN false
 {%- endif %}
 
-# Install opp_ci + opp_repl into a venv on /opt so the image is self-contained.
-# Image consumers may add OMNeT++/INET via a derived FROM image; this base only
-# guarantees the toolchain + the opp_ci runner CLI.
+# opp_ci + opp_repl come from wheels built on the host by
+# build_runner_image() — they're not on PyPI, so the build context drops
+# them under wheels/ and pip picks them up via --find-links. Transitive
+# deps still come from the regular index.
+COPY wheels/ /tmp/opp_ci_wheels/
 RUN python3 -m venv /opt/opp_ci_venv \
  && /opt/opp_ci_venv/bin/pip install --upgrade pip \
- && /opt/opp_ci_venv/bin/pip install opp_ci opp_repl
+ && /opt/opp_ci_venv/bin/pip install --find-links /tmp/opp_ci_wheels opp_ci opp_repl \
+ && rm -rf /tmp/opp_ci_wheels
 ENV PATH=/opt/opp_ci_venv/bin:$PATH
 
 WORKDIR /work
