@@ -35,6 +35,10 @@
 {% if view == "summary" %}
 <!-- Summary roll-up view -->
 {% if summaries %}
+{% set extra_labels = {"isolation": "Isolation", "toolchain": "Toolchain", "commit_sha": "Commit", "version": "Version"} %}
+{% set primary_dims = ["project", "test_type", "mode", "os", "os_version", "compiler", "compiler_version", "git_ref"] %}
+{% set sha_dims = ["git_ref", "commit_sha"] %}
+{% set show_reps = summaries | selectattr("repetitions", "gt", 1) | list | length > 0 %}
 <table>
     <thead>
         <tr>
@@ -46,7 +50,9 @@
             <th>Compiler</th>
             <th>Comp. ver.</th>
             <th>Ref</th>
+            {% for dim in extra_dims %}<th>{{ extra_labels[dim] }}</th>{% endfor %}
             <th>×</th>
+            {% if show_reps %}<th title="Each cell repeated k times">Reps</th>{% endif %}
             <th>Total</th>
             <th>Status</th>
         </tr>
@@ -54,17 +60,17 @@
     <tbody>
         {% for s in summaries %}
         <tr style="cursor:pointer;" onclick="window.location='/results?run_ids={{ s.run_ids | join(',') }}&amp;view=detailed'">
-            {% for dim in ["project", "test_type", "mode", "os", "os_version", "compiler", "compiler_version", "git_ref"] %}
+            {% for dim in primary_dims + extra_dims %}
             <td>
                 {% set val = s.columns[dim] %}
                 {% if val is none %}
                 {% elif val is string %}
-                    {% if dim == "git_ref" and val|length > 12 %}<code title="{{ val }}">{{ val[:8] }}</code>{% else %}{{ val }}{% endif %}
+                    {% if dim in sha_dims and val|length > 12 %}<code title="{{ val }}">{{ val[:8] }}</code>{% else %}{{ val }}{% endif %}
                 {% else %}
-                    {% if dim == "git_ref" %}
+                    {% if dim in sha_dims %}
                     {% set short_refs = val | map('truncate', 8, end='') | join(", ") %}
                     {% if short_refs|length > 30 %}
-                    <span class="dim-set" title="{{ val | join(', ') }}">{{"{"}}{{ val|length }} refs{{"}"}}</span>
+                    <span class="dim-set" title="{{ val | join(', ') }}">{{"{"}}{{ val|length }}{% if dim == "git_ref" %} refs{% else %} shas{% endif %}{{"}"}}</span>
                     {% else %}
                     <span class="dim-set"><code>{{"{"}}{{ short_refs }}{{"}"}}</code></span>
                     {% endif %}
@@ -75,6 +81,7 @@
             </td>
             {% endfor %}
             <td>{% if s.cartesian %}●{% else %}○{% endif %}</td>
+            {% if show_reps %}<td>{% if s.repetitions > 1 %}×{{ s.repetitions }}{% endif %}</td>{% endif %}
             <td>{{ s.total }}</td>
             <td>
                 {% if s.uniform %}
@@ -138,7 +145,7 @@
 <p style="margin-top:1rem; font-size:0.8rem; color:var(--muted);">
     Showing {{ runs|length }} result(s).
     {% if view == "summary" %}
-    ● = full cross-product, ○ = incomplete.
+    ● = full cross-product, ○ = incomplete; Reps ×k = each cell repeated k times.
     {% endif %}
 </p>
 {% endblock %}

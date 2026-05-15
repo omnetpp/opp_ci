@@ -174,7 +174,7 @@ def results_page(
     grouping: str = Query(default="any"),
     limit: int = Query(default=200),
 ):
-    from opp_ci.web.rollup import rollup_runs
+    from opp_ci.web.rollup import rollup_runs, visible_extra_dims
 
     session = SessionLocal()
     try:
@@ -202,10 +202,12 @@ def results_page(
         runs = session.execute(query).scalars().all()
 
         summaries = rollup_runs(runs, grouping=grouping) if view == "summary" else None
+        extra_dims = visible_extra_dims(summaries) if summaries else []
 
         return templates.TemplateResponse(request, "results.html", {
             "runs": runs,
             "summaries": summaries,
+            "extra_dims": extra_dims,
             "view": view,
             "grouping": grouping,
             "filter_project": project or "",

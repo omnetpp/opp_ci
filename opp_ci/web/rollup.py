@@ -5,20 +5,30 @@ Merges runs with the same status into summary rows.  Each row reports
 per-dimension values: a single value when that dimension is constant
 across the group, or a set of values when it varies.  A Cartesian
 indicator (● or ○) shows whether the varying dimensions form a complete
-cross-product.
+cross-product.  A separate "repetitions" value reports k when each cell
+is filled exactly k times; the UI shows a Reps column only when some row
+has k>1.
 
-Dimensions: project, test_type, mode, os, os_version, compiler,
+Primary dimensions: project, test_type, mode, os, os_version, compiler,
 compiler_version, git_ref.
+
+Extra dimensions (isolation, toolchain, commit_sha, version) participate
+in classification and the Cartesian check but only appear as columns when
+they actually vary on the page.
 """
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from functools import reduce
 from operator import mul
 
-ALL_DIMENSIONS = [
+PRIMARY_DIMENSIONS = [
     "project", "test_type", "mode", "os", "os_version",
     "compiler", "compiler_version", "git_ref",
 ]
+
+EXTRA_DIMENSIONS = ["isolation", "toolchain", "commit_sha", "version"]
+
+ALL_DIMENSIONS = PRIMARY_DIMENSIONS + EXTRA_DIMENSIONS
 
 
 def rollup_runs(runs, grouping="any"):
@@ -42,6 +52,7 @@ def rollup_runs(runs, grouping="any"):
             "columns": {dim: value_or_set, ...},
             "total": int,
             "cartesian": bool,
+            "repetitions": int,   # k when each cell has k runs (>=1)
             "uniform": bool,
             "uniform_status": str | None,
             "breakdown": {"PASS": n, ...},
@@ -99,6 +110,30 @@ def rollup_runs(runs, grouping="any"):
 
     summaries.sort(key=_sort_key)
     return summaries
+
+
+def visible_extra_dims(summaries):
+    """
+    Return the subset of EXTRA_DIMENSIONS that should be rendered as columns
+    for this page — dims where values differ across the summaries (or appear
+    as a varying set within any single summary).
+    """
+    visible = []
+    for dim in EXTRA_DIMENSIONS:
+        seen = set()
+        varying_inside_row = False
+        for s in summaries:
+            v = s["columns"].get(dim)
+            if v is None:
+                continue
+            if isinstance(v, str):
+                seen.add(v)
+            else:
+                varying_inside_row = True
+                seen.update(v)
+        if varying_inside_row or len(seen) > 1:
+            visible.append(dim)
+    return visible
 
 
 def _split_to_cartesian(runs):
@@ -243,21 +278,30 @@ def _classify_dims(run_dims):
     return constant, varying
 
 
-def _is_cartesian(runs, varying_dims):
+def _cartesian_repetitions(runs, varying_dims):
     """
-    Check if the runs form a complete Cartesian product over the varying dims.
-    True when |runs| == product of |distinct values| per varying dim.
+    Return integer k >= 1 if the runs form a k-fold complete Cartesian product
+    over varying_dims — every combination of values appears exactly k times.
+    Return 0 if not.
+
+    With no varying dims, returns len(runs) (k-fold "cross product" of 1 cell).
     """
     if not varying_dims:
-        return True
+        return len(runs)
 
-    dim_sizes = []
-    for dim in varying_dims:
-        values = set(getattr(r, dim, None) for r in runs)
-        dim_sizes.append(len(values))
+    cells = Counter(
+        tuple(getattr(r, d, None) for d in varying_dims) for r in runs
+    )
+    counts = set(cells.values())
+    if len(counts) != 1:
+        return 0
+    k = counts.pop()
 
-    expected = reduce(mul, dim_sizes, 1)
-    return len(runs) == expected
+    dim_sizes = [len(set(getattr(r, d, None) for r in runs)) for d in varying_dims]
+    expected_cells = reduce(mul, dim_sizes, 1)
+    if len(cells) != expected_cells:
+        return 0
+    return k
 
 
 def _make_summary(runs):
@@ -275,7 +319,8 @@ def _make_summary(runs):
         else:
             columns[dim] = values  # list → multi-value
 
-    cartesian = _is_cartesian(runs, varying_dims)
+    repetitions = _cartesian_repetitions(runs, varying_dims)
+    cartesian = repetitions > 0
 
     breakdown = defaultdict(int)
     run_ids = []
@@ -292,6 +337,7 @@ def _make_summary(runs):
         "columns": columns,
         "total": total,
         "cartesian": cartesian,
+        "repetitions": repetitions,
         "uniform": uniform,
         "uniform_status": uniform_status,
         "breakdown": dict(breakdown),
