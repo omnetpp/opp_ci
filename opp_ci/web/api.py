@@ -203,6 +203,7 @@ async def submit_matrix_run(
 
             run = TestRun(
                 project=job["project"],
+                version=job.get("version"),
                 test_type=job["test_type"],
                 mode=job.get("mode"),
                 git_ref=job.get("git_ref"),
