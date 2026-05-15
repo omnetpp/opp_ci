@@ -667,7 +667,28 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
             raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(COMMAND_MAP.keys())}")
         if mode:
             inner_cmd += f" --mode {mode}"
-        container_args = ["run", effective_project, "-c", inner_cmd]
+        # Help opp_repl find the SimulationProject inside the container:
+        #   --load @opp  loads the bundled .opp registry (where inet.opp,
+        #                omnetpp.opp etc. live and reference the project
+        #                root via env vars like INET_ROOT that opp_env sets).
+        #   -p <bare>    selects the project; opp_repl knows it as the bare
+        #                name (e.g. "inet"), while opp_env's identifier is
+        #                versioned (e.g. "inet-4.6.0").
+        import re as _re
+        bare_project = _re.sub(r"-[0-9].*$", "", project)
+        inner_cmd += f" --load @opp -p {bare_project}"
+        # --install: have opp_env download + build the project (and its deps,
+        # including omnetpp) if not already present in the Nix store.
+        # --no-isolated: keep the host PATH visible so opp_build_project and
+        # the other opp_repl CLI entries (installed into /opt/opp_ci_venv/bin
+        # by the entrypoint) are findable from inside the nix shell.
+        # `env -u PYTHONPATH`: nix-shell exports PYTHONPATH pointing at the
+        # nix store's pandas/numpy (built for nix's python, e.g. 3.13). The
+        # venv's python (e.g. Ubuntu's 3.14) honours PYTHONPATH before its
+        # own site-packages and ends up trying to load incompatible packages
+        # — strip it so the venv's own pandas/numpy win.
+        container_args = ["run", "--install", "--no-isolated", effective_project,
+                          "-c", f"env -u PYTHONPATH {inner_cmd}"]
     else:
         container_args = ["internal", "run-direct",
                           "--project", project, "--test-type", test_type]
