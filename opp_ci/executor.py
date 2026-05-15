@@ -309,14 +309,88 @@ def run_test(project, test_type, *, isolation=None, toolchain=None, **kwargs):
     return _run_test_direct(project, test_type, **kwargs)
 
 
-def _resolve_project_dir(project, opp_file=None):
-    """Find the on-disk source dir for a project.
+def _opp_cache_root():
+    """Return the directory where the worker keeps cloned project sources."""
+    base = os.environ.get("OPP_CI_CACHE_DIR")
+    if base:
+        return base
+    return os.path.join(os.path.expanduser("~"), ".cache", "opp_ci", "clones")
 
-    Resolution order matches resolve_commit_sha():
-      1. opp_file's parent directory
-      2. $OPP_CI_PROJECT_DIR_<PROJECT>
-      3. $OPP_CI_PROJECT_DIR/<project>
+
+def _parse_opp_file_kwargs(opp_file):
+    """Parse a .opp file via opp_repl's restricted-AST parser.
+
+    Returns the SimulationProject/OmnetppProject keyword-argument dict, or
+    None if the file can't be parsed (missing, syntax error). Relative path
+    values inside the .opp are resolved against the file's directory.
     """
+    if not opp_file or not os.path.isfile(opp_file):
+        return None
+    try:
+        from opp_repl.simulation.workspace import _parse_opp_file, _resolve_opp_paths
+    except ImportError:
+        _logger.debug("opp_repl not importable — falling back to opp_file dirname")
+        return None
+    try:
+        _class_name, kwargs = _parse_opp_file(opp_file)
+    except (OSError, ValueError) as e:
+        _logger.warning("Could not parse %s: %s", opp_file, e)
+        return None
+    _resolve_opp_paths(opp_file, kwargs)
+    return kwargs
+
+
+def _ensure_github_clone(owner, repo):
+    """Clone github.com/<owner>/<repo> into the worker's cache (or fetch
+    into an existing clone) and return the absolute path. The clone is
+    left at origin/HEAD — callers that need a specific ref should create
+    a worktree via :py:func:`_create_git_worktree`.
+    """
+    cache_root = _opp_cache_root()
+    os.makedirs(cache_root, exist_ok=True)
+    target = os.path.join(cache_root, f"{owner}__{repo}")
+    url = f"https://github.com/{owner}/{repo}.git"
+    if not os.path.isdir(os.path.join(target, ".git")):
+        result = run_external(
+            ["git", "clone", url, target],
+            label=f"git clone {owner}/{repo}", timeout=300,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"git clone {url} failed: {result.stderr.strip()}")
+    else:
+        run_external(
+            ["git", "fetch", "--prune", "origin"],
+            label=f"git fetch {owner}/{repo}", cwd=target, timeout=120,
+        )
+    return target
+
+
+def _resolve_project_dir(project, opp_file=None):
+    """Resolve the on-disk source dir for *project*.
+
+    Resolution order:
+      1. Parse the .opp file (if given). If it sets
+         ``github_owner`` + ``github_repository``, clone (or fetch) that
+         repo into the worker cache and return the clone path. The clone
+         is at origin/HEAD; ref-specific checkouts happen later via
+         :py:func:`_create_git_worktree`.
+      2. If the .opp sets ``root_folder``, return that absolute path.
+      3. The .opp file's own parent directory.
+      4. ``$OPP_CI_PROJECT_DIR_<PROJECT>``.
+      5. ``$OPP_CI_PROJECT_DIR/<project>``.
+
+    The ``opp_env_project`` axis is handled separately by ``install_project``
+    (which calls ``opp_env install``) — it is not the source dir.
+    """
+    kwargs = _parse_opp_file_kwargs(opp_file) if opp_file else None
+    if kwargs:
+        owner = kwargs.get("github_owner")
+        repo = kwargs.get("github_repository")
+        if owner and repo:
+            return _ensure_github_clone(owner, repo)
+        root = kwargs.get("root_folder")
+        if root:
+            return os.path.abspath(root)
     if opp_file:
         return os.path.dirname(os.path.abspath(opp_file))
     env_key = f"OPP_CI_PROJECT_DIR_{project.upper().replace('-', '_')}"
@@ -396,15 +470,18 @@ _OPP_ENV_REPO = "https://github.com/omnetpp/opp_env.git"
 
 def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version,
                       omnetpp_version=None):
-    """Render opp_ci/docker/Dockerfile.{toolchain}.j2 into a string.
+    """Render the Dockerfile (and, for host toolchain, the entrypoint script)
+    for one runner-image combination.
 
-    Accepts both the matrix-axis spelling ("none") and the CLI spelling
-    ("host") — they refer to the same template.
+    Returns a dict ``{filename: rendered_content}`` — at minimum
+    ``{"Dockerfile": "..."}``, plus ``{"opp_ci_entry.sh": "..."}`` for the
+    host toolchain. The caller writes each file into the build context.
 
     For the host template:
-      * Current HEAD SHAs of opp_ci and opp_repl are resolved via
-        'git ls-remote' and baked into the pip-install lines, so a fresh
-        push invalidates the docker layer cache.
+      * Current HEAD SHA of opp_env is resolved via 'git ls-remote' and
+        baked into the pip-install line. opp_ci and opp_repl are *not*
+        baked into the image — the entrypoint clones them at container
+        start, so a push to either does not invalidate this image.
       * *omnetpp_version* is required: it's installed via opp_env at
         build time using a nixless workspace.
     """
@@ -417,7 +494,6 @@ def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version
     docker_dir = importlib.resources.files("opp_ci").joinpath("docker")
     jenv = Environment(loader=FileSystemLoader(str(docker_dir)),
                        keep_trailing_newline=True)
-    template = jenv.get_template(f"Dockerfile.{template_name}.j2")
     ctx = {
         "os": os_name.lower(),
         "os_version": os_version,
@@ -433,10 +509,12 @@ def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version
             pkg_map = yaml.safe_load(f) or {}
         key = f"{ctx['os']}+{ctx['compiler']}-{ctx['compiler_version']}"
         ctx["compiler_package"] = pkg_map.get(key, f"{ctx['compiler']}-{ctx['compiler_version']}")
-        ctx["opp_ci_ref"] = _resolve_remote_head(_OPP_CI_REPO) or "HEAD"
-        ctx["opp_repl_ref"] = _resolve_remote_head(_OPP_REPL_REPO) or "HEAD"
         ctx["opp_env_ref"] = _resolve_remote_head(_OPP_ENV_REPO) or "HEAD"
-    return template.render(**ctx)
+
+    files = {"Dockerfile": jenv.get_template(f"Dockerfile.{template_name}.j2").render(**ctx)}
+    if template_name == "host":
+        files["opp_ci_entry.sh"] = jenv.get_template("opp_ci_entry.sh.j2").render(**ctx)
+    return files
 
 
 def _image_exists_locally(tag):
@@ -463,14 +541,15 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
     OMNeT++ into the image so the container can run opp_repl tests without
     needing OMNeT++ at run time.
     """
-    dockerfile_content = render_dockerfile(
+    files = render_dockerfile(
         toolchain, os_name, os_version, compiler, compiler_version,
         omnetpp_version=omnetpp_version,
     )
     with tempfile.TemporaryDirectory() as tmp:
+        for name, content in files.items():
+            with open(os.path.join(tmp, name), "w") as f:
+                f.write(content)
         dockerfile_path = os.path.join(tmp, "Dockerfile")
-        with open(dockerfile_path, "w") as f:
-            f.write(dockerfile_content)
         result = run_external(
             ["docker", "build", "-t", tag, "-f", dockerfile_path, tmp],
             label=f"docker build {tag}",
