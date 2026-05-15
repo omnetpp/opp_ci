@@ -29,6 +29,7 @@ User guides:
 - [Getting Started](doc/getting_started.md) — installation and first run
 - [Concepts](doc/concepts.md) — opp_env / opp_repl / opp_ci roles, matrices
 - [Test Matrix Dimensions](doc/test_matrix_dimensions.md) — every axis in detail
+- [Single Test Parameters](doc/single_test_parameters.md) — every field on one TestRun
 - [CLI Reference](doc/cli_reference.md) — command-line interface
 - [Web UI](doc/web_ui.md) — page map and result-search modes
 - [Configuration](doc/configuration.md) — environment variables

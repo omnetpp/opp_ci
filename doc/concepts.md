@@ -112,6 +112,10 @@ Attached to a [Project](#project). Defines which [axes](#axis) to vary
 
 ### TestRun
 
+For an exhaustive field-by-field reference (CLI flag, REST field,
+defaults, validation, and lifecycle), see
+[single_test_parameters.md](single_test_parameters.md).
+
 One row per queued/in-flight/finished job — the unit of work. Records
 the full coordinate (project, version, test_type, mode, os, compiler,
 isolation, toolchain, git_ref, commit_sha, resolved_deps), the
