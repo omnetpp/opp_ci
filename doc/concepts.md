@@ -208,7 +208,10 @@ axes:
 
 Not every combination is tested — the matrix config defines which axes
 to cross. Matrix expansion happens in
-[scheduler.expand_matrix()](../opp_ci/scheduler.py).
+[scheduler.expand_matrix()](../opp_ci/scheduler.py). For an
+axis-by-axis reference (config syntax, defaults, validation rules,
+interactions) see
+[test_matrix_dimensions.md](test_matrix_dimensions.md).
 
 ### Axis
 
