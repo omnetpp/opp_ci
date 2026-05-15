@@ -484,6 +484,14 @@ def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version
         start, so a push to either does not invalidate this image.
       * *omnetpp_version* is required: it's installed via opp_env at
         build time using a nixless workspace.
+
+    For the nix template:
+      * Same opp_env pin behaviour, same opp_ci/opp_repl-at-startup model.
+      * No omnetpp pre-install: each container run does ``opp_env run
+        --install <project>``, which pulls omnetpp + the project + its
+        nix_packages (ffmpeg, z3, …) from the Nix store. The Nix store
+        is mounted as a named volume so deps are downloaded once per
+        worker, not per run.
     """
     import importlib.resources
     from jinja2 import Environment, FileSystemLoader
@@ -510,10 +518,14 @@ def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version
         key = f"{ctx['os']}+{ctx['compiler']}-{ctx['compiler_version']}"
         ctx["compiler_package"] = pkg_map.get(key, f"{ctx['compiler']}-{ctx['compiler_version']}")
         ctx["opp_env_ref"] = _resolve_remote_head(_OPP_ENV_REPO) or "HEAD"
+    elif template_name == "nix":
+        ctx["opp_env_ref"] = _resolve_remote_head(_OPP_ENV_REPO) or "HEAD"
 
     files = {"Dockerfile": jenv.get_template(f"Dockerfile.{template_name}.j2").render(**ctx)}
     if template_name == "host":
         files["opp_ci_entry.sh"] = jenv.get_template("opp_ci_entry.sh.j2").render(**ctx)
+    elif template_name == "nix":
+        files["opp_env_entry.sh"] = jenv.get_template("opp_env_entry.sh.j2").render(**ctx)
     return files
 
 

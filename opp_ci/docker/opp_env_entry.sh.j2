@@ -1,0 +1,35 @@
+#!/bin/sh
+# Entrypoint for the Nix-flavoured runner image. Runs at every container
+# start. Mirrors opp_ci_entry.sh.j2 but defers project + omnetpp install
+# to Nix (via 'opp_env run --install ...' inside the container) instead of
+# opp_env --nixless-workspace, so the image stays project-agnostic.
+#
+#   1. Clone (or fetch) opp_ci and opp_repl into /opt/<name>_src so a push
+#      to either repo is picked up without rebuilding this image.
+#   2. pip install -e them so opp_build_project, opp_run_smoke_tests, etc.
+#      land on PATH inside the venv.
+#   3. Exec opp_env directly with the args the worker passed (typically
+#      'run --install <project> -c "<opp_repl_command>"').
+set -e
+
+sync_repo() {
+    name=$1
+    url=$2
+    dir=/opt/${name}_src
+    if [ ! -d "$dir/.git" ]; then
+        git clone --depth 50 "$url" "$dir"
+    else
+        git -C "$dir" fetch --depth 50 origin
+        git -C "$dir" reset --hard origin/HEAD
+    fi
+}
+
+sync_repo opp_ci   https://github.com/omnetpp/opp_ci.git
+sync_repo opp_repl https://github.com/omnetpp/opp_repl.git
+
+pip install -q -e /opt/opp_ci_src /opt/opp_repl_src
+
+# opp_env's -w is a per-subcommand option, not a top-level flag, so cd
+# into the workspace and let opp_env auto-detect it from cwd.
+cd /opt/opp_env_workspace
+exec opp_env -l ERROR "$@"
