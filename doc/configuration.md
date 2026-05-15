@@ -25,7 +25,7 @@ All configuration is via environment variables, read by
 | Variable | Default | Description |
 |---|---|---|
 | `OPP_CI_GITHUB_TOKEN` | *(empty)* | GitHub API token (takes precedence over the file). |
-| `OPP_CI_GITHUB_TOKEN_FILE` | `~/.ssh/github_repo_token` | File path to read the GitHub API token from. |
+| `OPP_CI_GITHUB_TOKEN_FILE` | `~/.ssh/opp_ci_github_token` | File path to read the GitHub API token from. |
 | `OPP_CI_GITHUB_WEBHOOK_SECRET` | *(empty)* | HMAC secret for `X-Hub-Signature-256` verification. |
 | `OPP_CI_GITHUB_STATUS_CONTEXT` | `opp_ci` | Context string used when posting commit statuses. |
 | `OPP_CI_GITHUB_BASE_URL` | `https://api.github.com` | GitHub API base URL (override for GitHub Enterprise). |
@@ -35,7 +35,7 @@ All configuration is via environment variables, read by
 | Variable | Default | Description |
 |---|---|---|
 | `OPP_CI_GITHUB_ACTIONS_TOKEN` | *(empty)* | Fine-grained PAT with `Actions: Write` scope. Used to trigger the `ci-notes.yml` workflow on target repos. |
-| `OPP_CI_GITHUB_ACTIONS_TOKEN_FILE` | `~/.ssh/github_actions_token` | File path to read the Actions PAT from. |
+| `OPP_CI_GITHUB_ACTIONS_TOKEN_FILE` | `~/.ssh/opp_ci_github_actions_token` | File path to read the Actions PAT from. |
 
 See [git_notes.md](git_notes.md) for the full permission model.
 

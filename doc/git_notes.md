@@ -64,7 +64,7 @@ To enable notes delivery for a repository:
    - `OPP_CI_API_TOKEN` — a readonly API token from opp_ci
 3. Create a fine-grained GitHub PAT with **Actions: Write** permission for the
    target repo, and configure it as `OPP_CI_GITHUB_ACTIONS_TOKEN` on the
-   opp_ci coordinator (env var or `~/.ssh/github_actions_token` file).
+   opp_ci coordinator (env var or `~/.ssh/opp_ci_github_actions_token` file).
 
 ## Note format
 
@@ -84,7 +84,7 @@ Examples:
 | Variable | Default | Description |
 |---|---|---|
 | `OPP_CI_GITHUB_ACTIONS_TOKEN` | *(empty)* | Fine-grained PAT with Actions:Write scope |
-| `OPP_CI_GITHUB_ACTIONS_TOKEN_FILE` | `~/.ssh/github_actions_token` | File path to read the token from |
+| `OPP_CI_GITHUB_ACTIONS_TOKEN_FILE` | `~/.ssh/opp_ci_github_actions_token` | File path to read the token from |
 
 ## Permission model
 

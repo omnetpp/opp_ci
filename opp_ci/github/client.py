@@ -2,7 +2,7 @@
 GitHub API client for opp_ci.
 
 Posts commit statuses and PR comments to report test results back to GitHub.
-Reads the API token from ~/.ssh/github_repo_token or OPP_CI_GITHUB_TOKEN env var.
+Reads the API token from ~/.ssh/opp_ci_github_token or OPP_CI_GITHUB_TOKEN env var.
 """
 
 import logging
