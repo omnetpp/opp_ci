@@ -15,6 +15,35 @@ and [architecture.md](architecture.md#database-schema).
 
 ---
 
+## Parameters at a glance
+
+| Parameter | CLI flag | TestRun column | Default | Group |
+|---|---|---|---|---|
+| [`project`](#project) | `--project` *(required)* | `project` | — | Required |
+| [`test_type`](#test_type) | `--test` *(required)* | `test_type` | — | Required |
+| [`mode`](#mode) | `--mode` | `mode` | `None` | Identity |
+| [`git_ref`](#git_ref) | `--ref` | `git_ref` | `None` | Identity |
+| [`version`](#version) | *(matrix-only)* | `version` | `None` | Identity |
+| [`os`](#os-and-os_version) | `--os` | `os` | `None` | Platform |
+| [`os_version`](#os-and-os_version) | `--os-version` | `os_version` | `None` | Platform |
+| [`arch`](#arch) | `--arch` | `arch` | `None` | Platform |
+| [`compiler`](#compiler-and-compiler_version) | `--compiler` | `compiler` | `None` | Platform |
+| [`compiler_version`](#compiler-and-compiler_version) | `--compiler-version` | `compiler_version` | `None` | Platform |
+| [`isolation`](#isolation) | `--isolation` | `isolation` | `none` | Execution |
+| [`toolchain`](#toolchain) | `--toolchain` | `toolchain` | `none` | Execution |
+| [`pin`](#pin-cli--resolved_deps-column) | `--pin` *(repeatable)* | `resolved_deps` | `None` | Dependencies |
+| [`opp_file`](#opp_file) | *(matrix-only)* | `opp_file` | `None` | Descriptor |
+| [`force`](#force) | `--force` | *(not stored)* | `false` | Behavior |
+| [`skip_install`](#skip_install) | `--skip-install` | *(not stored)* | `false` | Behavior |
+
+Server-set fields not listed above — `platform_desc`, `status`,
+`trigger`, `worker_id`, `matrix_id`, `started_at`, `finished_at`,
+`duration_seconds`, `commit_sha`, and the `github_*` columns — are
+covered under [Lifecycle fields](#lifecycle-fields-system-set) and
+[GitHub linkage](#github-linkage-webhook-only).
+
+---
+
 ## Three ways to create a single test
 
 The same parameter set is accepted by three surfaces; pick whichever
