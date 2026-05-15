@@ -214,6 +214,7 @@ async def submit_matrix_run(
                 toolchain=job.get("toolchain"),
                 platform_desc=job.get("platform_desc"),
                 resolved_deps=job.get("resolved_deps"),
+                opp_file=matrix.opp_file,
                 matrix_id=matrix.id,
                 status=TestRunStatus.queued,
                 trigger="remote",
