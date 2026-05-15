@@ -4,7 +4,14 @@
 OMNeT++ simulation projects across version, dependency, platform, and
 test-type matrices.
 
-## The three tools
+This document is both the conceptual overview and the vocabulary
+reference: it explains what each concept *is*, what role it plays, and
+how it relates to the others. For the layered architecture see
+[architecture.md](architecture.md).
+
+---
+
+## The three-tool stack
 
 | Tool | Role |
 |---|---|
@@ -15,6 +22,144 @@ test-type matrices.
 The boundary is strict: opp_ci never duplicates test logic, and opp_repl
 never owns the environment. Anything reproducible about a CI run is
 either in opp_env's recipe or in the matrix config.
+
+---
+
+## Process roles
+
+### Coordinator
+
+The single `opp_ci serve` instance that owns the database. Exposes the
+REST API at `/api/*` and the web UI. Workers and `--remote` CLI clients
+all talk to one coordinator. Identified by `OPP_CI_COORDINATOR_URL`.
+
+### Worker
+
+A separate `opp_ci worker start` process that polls the coordinator for
+queued jobs, runs them via the [executor](#executor), and posts results
+back. Workers may live on the coordinator host, on dedicated self-hosted
+hardware, or in the cloud. They need only outbound connectivity — no
+inbound port is required. The coordinator is the source of truth for a
+worker's name, tags, and concurrency; the worker fetches them at start.
+
+### Executor
+
+The in-process component ([opp_ci/executor.py](../opp_ci/executor.py))
+that actually invokes test commands. Lives both inside workers and
+inside the CLI for local runs. Selects one of four combinations of
+[Isolation](#isolation) × [Toolchain](#toolchain): direct host,
+opp_env-on-host, Docker, and Docker-with-opp_env. Always returns
+`(result_code, stdout, stderr, details_json)` to its caller.
+
+### Scheduler
+
+The matrix-expansion engine
+([opp_ci/scheduler.py](../opp_ci/scheduler.py)). Turns a
+[TestMatrix](#testmatrix) config into a list of [TestRun](#testrun) rows
+via cross-product over its [axes](#axis). Inserts the resulting rows
+with status `queued`; workers consume them.
+
+### REST API client
+
+[opp_ci/client.py](../opp_ci/client.py) (`OppCiClient`). Python wrapper
+used by `--remote` CLI calls and by other tools. Authenticates with an
+[ApiToken](#apitoken). See [python_client.md](python_client.md).
+
+---
+
+## Domain model (database)
+
+The objects below are the SQLAlchemy models in
+[opp_ci/db/models.py](../opp_ci/db/models.py). They are the persistent
+shape of every other concept on this page.
+
+### Project
+
+A simulation codebase that can be tested. Carries `opp_env_name`,
+`github_owner/repo`, `git_url`, and `dependency_names`. Mirrors an entry
+in opp_env's catalog when one exists. See the
+[supported projects](#supported-projects) section below.
+
+### Version
+
+A specific version of a [Project](#project): either a released label
+(`6.1`, `4.5`) or a moving target (`git`, `master`). Holds the
+`opp_env_version`, the `git_ref`, and `resolved_dependencies` — a JSON
+map of dep-name → dep-version pinned at this version (e.g.
+`{"omnetpp": "6.1"}`). Versions are seeded by `opp_ci sync-catalog`
+from opp_env.
+
+### OS
+
+A `(name, version, arch)` triple, e.g. `Ubuntu / 24.04 / x86_64`.
+Referenced by [TestMatrix](#testmatrix) configs and recorded on
+[TestRun](#testrun) rows.
+
+### Compiler
+
+A `(name, version)` pair, e.g. `gcc / 13`. Referenced by
+[TestMatrix](#testmatrix) configs and recorded on [TestRun](#testrun)
+rows. When [Toolchain](#toolchain) is `nix`, the pair must be one that
+opp_env understands.
+
+### TestMatrix
+
+A named JSON configuration describing the cross-product to test.
+Attached to a [Project](#project). Defines which [axes](#axis) to vary
+(`test_types`, `modes`, `versions`, `refs`, `deps`, `os`, `compiler`,
+`isolation`, `toolchain`, `features`). Expanded by the
+[scheduler](#scheduler) into [jobs](#job).
+
+### TestRun
+
+One row per queued/in-flight/finished job — the unit of work. Records
+the full coordinate (project, version, test_type, mode, os, compiler,
+isolation, toolchain, git_ref, commit_sha, resolved_deps), the
+[TestRunStatus](#testrunstatus), the [Worker](#worker-model) that ran
+it, the [Trigger](#trigger) source, and any GitHub linkage fields
+(`github_owner`, `github_repo`, `github_commit_sha`,
+`github_pr_number`, `github_status_url`). Holds zero or more
+[TestResults](#testresult).
+
+### TestResult
+
+Per-individual-test outcome attached to a [TestRun](#testrun). Carries
+`result_code` (PASS/FAIL/…), raw `stdout`/`stderr` (with ANSI codes
+preserved), and a `details` JSON blob produced by opp_repl. A
+fingerprint run, for example, can yield 48 TestResult rows under a
+single TestRun.
+
+### TestRunStatus
+
+Enum on TestRun: `queued`, `running`, `PASS`, `FAIL`, `ERROR`. `queued`
+and `running` are lifecycle states; the latter three are terminal
+outcomes. `ERROR` distinguishes infrastructure failure from test
+failure.
+
+### Worker (model)
+
+Persistent registration record (separate from the running
+[Worker process](#worker)): `name`, auto-generated `token`, `tags` JSON,
+`concurrency`, `status` (`online`/`offline`/`busy`), `last_heartbeat`,
+`current_job_count`. The coordinator updates `status` based on
+heartbeat freshness.
+
+### ApiToken
+
+A bearer token created via `opp_ci token create`. Carries a
+[Role](#role). Authenticates REST API calls. Separate from worker
+tokens, but checked through the same auth path
+([opp_ci/auth.py](../opp_ci/auth.py)).
+
+### AutoTestRule
+
+A "if this kind of event matching this pattern hits this project, run
+this matrix" record. Fields: `project_id`, `rule_type`
+(`branch`/`pr`/`tag`), `pattern` (fnmatch glob), `matrix_id`
+(nullable — null means smoke-only). Evaluated by the
+[webhook receiver](#webhook-receiver).
+
+---
 
 ## Supported projects
 
@@ -31,36 +176,20 @@ artery_allinone, core4inet, nesting, …) are imported on demand by
 | simu5g | 1.3, 1.2, git | inet, omnetpp |
 | veins | 5.3, 5.2, 5.1, git | omnetpp |
 
-How heavily a project is tested is determined by the `TestMatrix`
-entries attached to it and any `AutoTestRule` triggers — see
-[Test Matrices](#test-matrices) and
+How heavily a project is tested is determined by the
+[TestMatrix](#testmatrix) entries attached to it and any
+[AutoTestRule](#autotestrule) triggers — see
 [GitHub Integration](github_integration.md). Newly imported projects
-get a default `build + smoke` matrix on the reference platform, which
-you can extend or replace without any code change.
+get a default `build + smoke` matrix on the
+[reference platform](#reference-platform), which you can extend or
+replace without any code change.
 
-The reference platform used for the default matrix is configurable via
-the `OPP_CI_REFERENCE_PLATFORM` env var (default: `Ubuntu 24.04/gcc-13`).
+---
 
-## How opp_env drives the matrix
+## Test-matrix concepts
 
-When configuring a test run, opp_ci queries the opp_env catalog (via
-the `opp_env_adapter` module) to:
-
-1. **Resolve dependencies** — testing `simu5g-1.3.0` automatically
-   includes compatible `inet` and `omnetpp` versions.
-2. **Validate version combos** — incompatible combinations are rejected
-   based on opp_env's `required_projects` constraints.
-3. **Generate smoke tests** — the project's built-in
-   `smoke_test_commands` are used as the baseline test.
-4. **Discover available versions** — `opp_env list` populates the
-   version selectors in the web UI and matrix configs.
-
-`opp_ci sync-catalog` upserts the discovered projects and versions into
-opp_ci's database and generates default matrices for new entries.
-
-## Test matrices
-
-A matrix is a named cross-product over independent axes:
+A matrix is a named cross-product over independent axes. The standard
+axes:
 
 | Axis | Examples |
 |---|---|
@@ -78,7 +207,304 @@ A matrix is a named cross-product over independent axes:
 | Tests | build, fingerprint, statistical, chart, feature, module, unit, packet, queueing, protocol, validation, smoke, sanitizer, speed |
 
 Not every combination is tested — the matrix config defines which axes
-to cross. Matrix expansion happens in `opp_ci/scheduler.py:expand_matrix`.
+to cross. Matrix expansion happens in
+[scheduler.expand_matrix()](../opp_ci/scheduler.py).
+
+### Axis
+
+One dimension of a [TestMatrix](#testmatrix). Each present axis
+multiplies the job count; an axis omitted from the config contributes a
+single implicit value.
+
+### Job
+
+A single expanded matrix entry — i.e. a [TestRun](#testrun) row with
+status `queued`. The two terms are used interchangeably in the docs.
+
+### Matrix expansion
+
+The act of cross-producting a [TestMatrix](#testmatrix)'s axes into a
+list of jobs. Performed by
+[scheduler.expand_matrix()](../opp_ci/scheduler.py).
+
+### Cross-product / Cartesian indicator
+
+When the [rollup](#rollup) merges runs into summary rows, it checks
+whether the varying dimensions form a complete cross-product. The
+indicator (`●`/`○`) tells the reader at a glance whether the merged
+group is dense or sparse.
+
+### Test type
+
+The kind of test the job runs (`smoke`, `fingerprint`, `statistical`,
+`feature`, `chart`, `release`, `build`, `speed`, `sanitizer`, …).
+Determines what opp_repl is told to do. Each test type can produce one
+or many [TestResult](#testresult) rows.
+
+### Mode
+
+Build mode — typically `release` or `debug`. Crossed independently of
+other axes.
+
+### Reference platform
+
+The platform spec used for auto-generated default matrices, configured
+via `OPP_CI_REFERENCE_PLATFORM` (default `Ubuntu 24.04/gcc-13`). Newly
+imported projects get a `build + smoke` matrix on this platform.
+
+### How opp_env drives the matrix
+
+When configuring a test run, opp_ci queries the opp_env catalog (via
+the `opp_env_adapter` module) to:
+
+1. **Resolve dependencies** — testing `simu5g-1.3.0` automatically
+   includes compatible `inet` and `omnetpp` versions.
+2. **Validate version combos** — incompatible combinations are rejected
+   based on opp_env's `required_projects` constraints.
+3. **Generate smoke tests** — the project's built-in
+   `smoke_test_commands` are used as the baseline test.
+4. **Discover available versions** — `opp_env list` populates the
+   version selectors in the web UI and matrix configs.
+
+`opp_ci sync-catalog` upserts the discovered projects and versions into
+opp_ci's database and generates default matrices for new entries.
+
+---
+
+## Execution environment
+
+### Isolation
+
+How the job's filesystem and OS are isolated from the host. `none` =
+direct subprocess on the worker; `docker` = inside a Docker image
+chosen from the (os, os_version, compiler) coordinates. Image building
+is driven by `opp_ci image build` / `image build-matrix`.
+
+### Toolchain
+
+Where the C++ toolchain comes from. `none` = the worker's installed
+compilers and opp_repl; `nix` = `opp_env install` then `opp_env run`,
+giving a fully reproducible build environment. Orthogonal to
+[Isolation](#isolation): the four combinations are all valid.
+
+### Capability tag
+
+A free-form string on a [Worker](#worker-model) declaring what it can do
+(`linux`, `arm64`, `gcc-13`, `clang-18`, `perf-counters`, `docker`,
+`nix`). The [scheduler](#scheduler) matches each job's required tags
+against worker tags before dispatch. Set at registration time
+(`--tags` or `--auto-tags`).
+
+### Reproducible build (Nix environment)
+
+A build performed under `Toolchain=nix`, i.e. inside an opp_env-managed
+Nix store. Guarantees the same compiler, libraries, and dependency
+versions for every CI run that selects that environment.
+
+---
+
+## Dependency model
+
+### required_projects
+
+opp_env's name for a project version's hard dependencies. Read by
+[opp_ci/dependency.py](../opp_ci/dependency.py) via `opp_env info`.
+
+### Resolved dependencies
+
+The fully pinned dep-name → dep-version map associated with a
+[Version](#version) or a [TestRun](#testrun) (column
+`resolved_dependencies` / `resolved_deps`). Either taken from the
+Version, computed by `dependency.resolve()` against opp_env, or
+overridden by a [Pin](#pin).
+
+### Pin
+
+A `--pin <dep>=<ver>` override that forces a specific dependency
+version for the duration of a run or matrix. Overlays
+`resolved_dependencies`. Repeatable.
+
+---
+
+## Trigger and lifecycle
+
+### Trigger
+
+Why a [TestRun](#testrun) exists. Recorded on the row as one of:
+
+- `manual` — created via `opp_ci run` / `run-matrix` locally.
+- `remote` — created via `--remote` (REST submitter).
+- `webhook` — created by the [webhook receiver](#webhook-receiver).
+- `schedule` — created by a periodic scheduler (reserved).
+
+### Heartbeat
+
+Periodic ping from a worker to the coordinator
+(`POST /api/workers/heartbeat`). Updates `last_heartbeat`. If no
+heartbeat arrives within `OPP_CI_WORKER_HEARTBEAT_TIMEOUT` seconds, the
+worker is marked `offline` and any in-flight jobs are reclaimed for
+re-dispatch.
+
+### Poll loop
+
+Worker side: periodic `POST /api/workers/poll` to ask for the next
+queued job (interval `OPP_CI_WORKER_POLL_INTERVAL`). On finish the
+worker posts the outcome to `POST /api/workers/result`.
+
+---
+
+## Authentication
+
+### Role
+
+The privilege level carried by an [ApiToken](#apitoken) or worker
+token. Four levels, monotonically increasing:
+
+| Role | Includes |
+|---|---|
+| `readonly` | View runs, results, workers |
+| `submitter` | + Submit runs |
+| `worker` | + Poll, heartbeat, report results |
+| `admin` | + Register workers, manage tokens, manage rules |
+
+Implementation in [opp_ci/auth.py](../opp_ci/auth.py).
+
+### Remote mode
+
+The CLI flag `--remote` switches commands from in-process operation to
+REST calls against the coordinator. Uses `OPP_CI_COORDINATOR_URL` and
+`OPP_CI_API_TOKEN`. The same Click command tree serves both modes.
+
+---
+
+## GitHub integration
+
+### Webhook receiver
+
+`POST /api/github/webhook`
+([opp_ci/github/webhook.py](../opp_ci/github/webhook.py)). Verifies
+`X-Hub-Signature-256` against `OPP_CI_GITHUB_WEBHOOK_SECRET`, dispatches
+`push`/`pull_request`/`ping`, matches the event against the project's
+[AutoTestRules](#autotestrule), and queues runs.
+
+### Commit status
+
+A pending/success/failure/error indicator that opp_ci posts to GitHub
+for the head SHA of each run. Set to `pending` on enqueue and updated
+to the final state when the worker reports results. Identified by the
+configurable context string `OPP_CI_GITHUB_STATUS_CONTEXT` (default
+`opp_ci`).
+
+### PR comment
+
+A markdown comment posted to the PR by opp_ci, refreshed in place via a
+hidden HTML marker so successive runs update one comment instead of
+spamming new ones.
+
+### Git note
+
+A summary of CI results attached to the tested commit under
+`refs/notes/ci`. Delivered indirectly: opp_ci writes the payload, then
+triggers the target repo's `ci-notes.yml` workflow which pushes the
+note. Visible to developers via `git log --notes=ci` after fetching the
+notes ref. See [git_notes.md](git_notes.md).
+
+### ci-notes.yml workflow
+
+A GitHub Action installed in target repos. Fetches pending notes from
+`GET /api/notes/{owner}/{repo}` and pushes them under `refs/notes/ci`
+using the built-in `GITHUB_TOKEN`. Lets opp_ci stay free of any
+`Contents: Write` permission on target repos.
+
+### Webhook secret
+
+The HMAC-SHA256 key configured both in the GitHub webhook setting and
+as `OPP_CI_GITHUB_WEBHOOK_SECRET` on the coordinator. The receiver
+rejects events whose signature doesn't match.
+
+### Token model (two-token)
+
+opp_ci uses two separate GitHub tokens:
+
+- `OPP_CI_GITHUB_TOKEN` — for posting commit statuses and PR comments
+  (classic `repo` scope or fine-grained equivalent).
+- `OPP_CI_GITHUB_ACTIONS_TOKEN` — for `workflow_dispatch` only
+  (`Actions: Write`). opp_ci never holds `Contents: Write` itself.
+
+---
+
+## Catalog and seeding
+
+### opp_env catalog
+
+The full list of projects and versions known to opp_env. opp_ci mirrors
+it into its own DB.
+
+### Core seed catalog
+
+The actively developed projects (`omnetpp`, `inet`, `simu5g`, `veins`)
+populated by `opp_ci seed-projects` from
+[opp_ci/catalog.py](../opp_ci/catalog.py).
+
+### sync-catalog
+
+Command (`opp_ci sync-catalog`) that walks the opp_env catalog and
+upserts every project + version it finds, then generates a default
+`build + smoke` matrix on the [reference platform](#reference-platform)
+for any newly imported project.
+
+### smoke_test_commands
+
+opp_env-supplied minimal "did it build and run" command list for each
+project. Used as the baseline test in the auto-generated default
+matrix.
+
+---
+
+## Result presentation
+
+### Rollup
+
+The aggregation algorithm in
+[opp_ci/web/rollup.py](../opp_ci/web/rollup.py) that merges TestRuns
+sharing the same status into summary rows, marking each dimension as
+constant or varying and indicating whether the varying dimensions form
+a full cross-product (see
+[Cartesian indicator](#cross-product--cartesian-indicator)).
+
+### Primary / extra dimensions
+
+A rollup distinction: **primary dimensions** (project, test_type, mode,
+os, os_version, compiler, compiler_version, git_ref) are always
+considered; **extra dimensions** (isolation, toolchain, commit_sha,
+version) participate in classification but only show as columns when
+they actually vary on the page.
+
+### ANSI-preserving storage
+
+opp_ci stores raw stdout/stderr (including ANSI escape codes) in the
+database. A Jinja filter converts them to colored HTML at render time.
+This keeps the DB representation lossless and human-replayable.
+
+---
+
+## How the concepts connect
+
+A **Project** has many **Versions** and many **TestMatrices**.
+**AutoTestRules** bind a Project + GitHub event pattern to a
+TestMatrix. The **scheduler** expands a TestMatrix's **axes** into
+**TestRuns** (each a **job**). **Workers** poll the **coordinator** for
+queued TestRuns, run them via the **executor** (under chosen
+**Isolation** × **Toolchain**), and post back **TestResults**. Each
+TestRun carries a **trigger** explaining why it exists (manual /
+remote / webhook / schedule). When a webhook triggered the run, the
+**GitHub integration** posts a **commit status** and a **PR comment**;
+when the batch finishes, the `ci-notes.yml` **workflow** is dispatched
+to deliver a **git note** to the developer. **ApiTokens** and worker
+tokens, gated by **role**, control who can do which of these things.
+The **rollup** then summarises many TestRuns into the page-level grid.
+
+---
 
 ## What opp_ci improves over per-project GitHub Actions
 
@@ -114,6 +540,8 @@ opp_ci addresses all of these:
 - **Self-hosted workers** — speed tests with perf counters become
   possible.
 
+---
+
 ## Design decisions
 
 - **opp_env for reproducible builds** — Nix-based isolation guarantees
@@ -128,4 +556,5 @@ opp_ci addresses all of these:
   results, easy aggregation for dashboards. SQLite is supported for
   local development.
 - **GitHub-native** — webhooks for automation, status checks for
-  feedback, fine-grained PATs for least privilege (see [git_notes.md](git_notes.md)).
+  feedback, fine-grained PATs for least privilege (see
+  [git_notes.md](git_notes.md)).
