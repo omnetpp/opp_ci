@@ -3,12 +3,13 @@
 # Add the mm1k project, its build matrices, and auto-test rules to the database.
 #
 # Creates two matrices:
-#   mm1k-master          build+smoke on master
-#   mm1k-master-to-topic build for each commit in master..topic
+#   mm1k-master-native          build+smoke on master
+#   mm1k-master-to-topic-native build for each commit in master..topic
+#   mm1k-master-ubuntu26.04-clang22-docker build+smoke on master with Ubuntu 26.04, clang-22, docker, no toolchain
 #
 # Creates auto-test rules:
-#   push to master -> mm1k-master
-#   push to topic  -> mm1k-master-to-topic
+#   push to master -> mm1k-master-native
+#   push to topic  -> mm1k-master-to-topic-native
 #
 
 set -e
@@ -17,8 +18,15 @@ COMMON=(--project mm1k --os "Ubuntu 24.04" --compiler gcc-13 --opp-file /home/le
 
 opp_ci add-project --name mm1k --github levy/mm1k --git-url https://github.com/levy/mm1k.git --deps omnetpp || true
 opp_ci add-version --project mm1k --label master --deps '{"omnetpp": ["6.0.0","6.0.1","6.0.2","6.0.3","6.1.0","6.2.0","6.3.0","6.4.0"]}'
-opp_ci create-matrix --name mm1k-master          "${COMMON[@]}" --tests build,smoke,opp --refs master --deps 'omnetpp=6.4.0'
-opp_ci create-matrix --name mm1k-master-to-topic  "${COMMON[@]}" --tests build,smoke,opp --ref-range master..topic
+opp_ci create-matrix --name mm1k-master-native          "${COMMON[@]}" --tests build,smoke,opp --refs master --deps 'omnetpp=6.4.0'
+
+opp_ci create-matrix --name mm1k-master-ubuntu26.04-clang22-docker \
+    --project mm1k --opp-file /home/levy/workspace/mm1k/mm1k.opp --replace \
+    --os "Ubuntu 26.04" --compiler clang-22 --isolation docker --toolchain none \
+    --tests build,smoke,opp --refs master \
+    --deps 'omnetpp=6.0.0,6.0.1,6.0.2,6.0.3,6.1.0,6.2.0,6.3.0,6.4.0'
+
+opp_ci create-matrix --name mm1k-master-to-topic-native  "${COMMON[@]}" --tests build,smoke,opp --ref-range master..topic
 
 opp_ci rule create --project mm1k --type branch --pattern master --matrix mm1k-master --replace
 opp_ci rule create --project mm1k --type branch --pattern topic  --matrix mm1k-master-to-topic --replace
