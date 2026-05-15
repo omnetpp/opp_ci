@@ -4,7 +4,11 @@
 #    to either repo is picked up without rebuilding this image.
 # 2. pip install -e them into the venv (idempotent — fast no-op when nothing
 #    changed, since the egg-link is already present).
-# 3. Exec via 'opp_env run' so OMNETPP_ROOT / PATH / etc. are set up.
+# 3. (Optional) opp_env-install extra catalog projects named in
+#    OPP_CI_INSTALL_PROJECTS (comma-separated). These get bind-mounted in
+#    the same opp_env workspace as omnetpp so their setenv (PATH, etc.)
+#    is active during the test.
+# 4. Exec via 'opp_env run' so OMNETPP_ROOT / PATH / etc. are set up.
 set -e
 
 sync_repo() {
@@ -24,4 +28,38 @@ sync_repo opp_repl https://github.com/omnetpp/opp_repl.git
 
 pip install -q -e /opt/opp_ci_src /opt/opp_repl_src
 
-exec opp_env -l ERROR run -w /opt/opp_env_workspace omnetpp-{{ omnetpp_version }} -c "opp_ci $*"
+# Install extra opp_env catalog projects into the workspace, remember them
+# so we can pass them to `opp_env run` below, and cd into the first one's
+# install dir — opp_repl's project auto-discovery looks at cwd.
+EXTRA_PROJECTS=""
+FIRST_PROJECT=""
+if [ -n "$OPP_CI_INSTALL_PROJECTS" ]; then
+    IFS=','
+    for p in $OPP_CI_INSTALL_PROJECTS; do
+        p=$(echo "$p" | tr -d ' ')
+        [ -z "$p" ] && continue
+        [ -z "$FIRST_PROJECT" ] && FIRST_PROJECT="$p"
+        # The workspace was created with --init --nixless-workspace at
+        # image build time; subsequent installs into it are nixless by
+        # inheritance and reject --nixless-workspace again.
+        opp_env -l ERROR install -w /opt/opp_env_workspace "$p"
+        EXTRA_PROJECTS="$EXTRA_PROJECTS $p"
+    done
+    unset IFS
+    if [ -n "$FIRST_PROJECT" ]; then
+        # opp_env's install dir is named "<project>-<version>" (e.g.
+        # opp_env_testproject-0.1). FIRST_PROJECT is the versioned name
+        # the matrix passed in (e.g. opp_env_testproject-0.1 or
+        # opp_env_testproject-latest); take an exact match if it exists,
+        # else glob in case the user passed `…-latest` and the install
+        # dir is the resolved version.
+        if [ -d "/opt/opp_env_workspace/$FIRST_PROJECT" ]; then
+            cd "/opt/opp_env_workspace/$FIRST_PROJECT"
+        else
+            workdir=$(ls -d /opt/opp_env_workspace/${FIRST_PROJECT}*/ 2>/dev/null | head -1)
+            [ -n "$workdir" ] && cd "$workdir"
+        fi
+    fi
+fi
+
+exec opp_env -l ERROR run -w /opt/opp_env_workspace omnetpp-{{ omnetpp_version }}$EXTRA_PROJECTS -c "opp_ci $*"

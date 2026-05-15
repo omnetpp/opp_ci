@@ -583,10 +583,16 @@ def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler
 def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
     """Run a test inside a Docker container.
 
-    The container's source tree is bind-mounted at /work. When *git_ref* is
-    set, a detached worktree is created on the host first and that worktree
-    is mounted instead, so the container always sees a clean checkout at
-    the requested commit. The worktree is removed after the container exits.
+    Two flavours, distinguished by whether the matrix has an opp_file:
+
+    * **SimulationProject** (opp_file set) — bind-mount the project source
+      tree to ``/work``. When *git_ref* is set, a detached worktree is
+      created on the host first so the container always sees a clean
+      checkout at the requested commit. The worktree is removed after.
+    * **opp_env catalog** (opp_file absent) — no bind-mount; the entrypoint
+      runs ``opp_env install`` for the project inside the container (env
+      var ``OPP_CI_INSTALL_PROJECTS``) and ``cd``s into its install dir.
+      A scratch tmpdir is still mounted at ``/work`` so WORKDIR resolves.
 
     For toolchain=nix, the host's Nix store is shared via a named volume to
     avoid re-downloading deps per run.
@@ -610,19 +616,32 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
         omnetpp_version=omnetpp_version,
     )
 
-    project_dir = _resolve_project_dir(project, opp_file)
+    is_catalog = not opp_file
     worktree_path = None
-    if git_ref:
-        worktree_path = _create_git_worktree(project_dir, git_ref)
-        mount_path = worktree_path
+    scratch_dir = None
+    if is_catalog:
+        # Source comes from `opp_env install` inside the container. We still
+        # mount *something* at /work so the image's WORKDIR resolves; an
+        # empty tmpdir is fine because the entrypoint cd's away from it.
+        scratch_dir = tempfile.mkdtemp(prefix="opp-ci-catalog-")
+        mount_path = scratch_dir
     else:
-        mount_path = project_dir
+        project_dir = _resolve_project_dir(project, opp_file)
+        if git_ref:
+            worktree_path = _create_git_worktree(project_dir, git_ref)
+            mount_path = worktree_path
+        else:
+            mount_path = project_dir
 
     docker_cmd = [
         "docker", "run", "--rm",
         "-v", f"{os.path.abspath(mount_path)}:/work",
         "-w", "/work",
     ]
+    if is_catalog:
+        # The entrypoint reads this, opp_env-installs each project, and cd's
+        # into the first one's install dir.
+        docker_cmd += ["-e", f"OPP_CI_INSTALL_PROJECTS={project}"]
     # The image's ENTRYPOINT is the runner binary (opp_env / opp_ci), so we
     # only need to pass its arguments here — repeating the binary name would
     # produce `opp_ci opp_ci ...` and "No such command" from click.
@@ -644,6 +663,9 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
             container_args += ["--mode", mode]
         if opp_file:
             container_args += ["--opp-file", "/work/" + os.path.basename(opp_file)]
+        # Catalog runs deliberately omit --opp-file: opp_repl's _load_workspace
+        # auto-discovers any .opp in cwd (the install dir, set by entrypoint),
+        # else falls back to a default SimulationProject rooted there.
 
     docker_cmd.append(image)
     docker_cmd += container_args
@@ -655,6 +677,9 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
     finally:
         if worktree_path:
             _remove_git_worktree(worktree_path)
+        if scratch_dir:
+            import shutil
+            shutil.rmtree(scratch_dir, ignore_errors=True)
 
     result_code = "PASS" if result.returncode == 0 else "FAIL"
     return {
