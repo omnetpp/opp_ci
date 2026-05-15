@@ -17,6 +17,13 @@ os_versions:
   macOS: ["13", "14", "15"]
   Windows: ["10", "11", "Server 2019", "Server 2022"]
 
+# CPU architectures supported by omnetpp. The matrix "arch" axis accepts any
+# string — these are the canonical names workers advertise via the
+# "arch:<name>" capability tag.
+architectures:
+  - amd64
+  - aarch64
+
 compilers:
   - gcc
   - clang

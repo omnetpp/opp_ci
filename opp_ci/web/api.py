@@ -52,6 +52,7 @@ class SubmitRunRequest(BaseModel):
     git_ref: str | None = None
     os: str | None = None
     os_version: str | None = None
+    arch: str | None = None         # "amd64", "aarch64", ...
     compiler: str | None = None
     compiler_version: str | None = None
     isolation: str | None = None    # "none" | "docker"
@@ -129,6 +130,7 @@ async def submit_run(
                 git_ref=req.git_ref,
                 os=req.os,
                 os_version=req.os_version,
+                arch=req.arch,
                 compiler=req.compiler,
                 compiler_version=req.compiler_version,
                 isolation=req.isolation,
@@ -138,7 +140,7 @@ async def submit_run(
                 return {"id": existing.id, "status": existing.status.value, "skipped": True}
 
         from opp_ci.scheduler import _build_platform_desc
-        platform_desc = _build_platform_desc(req.os, req.os_version, req.compiler, req.compiler_version)
+        platform_desc = _build_platform_desc(req.os, req.os_version, req.arch, req.compiler, req.compiler_version)
 
         run = TestRun(
             project=req.project,
@@ -147,6 +149,7 @@ async def submit_run(
             git_ref=req.git_ref,
             os=req.os,
             os_version=req.os_version,
+            arch=req.arch,
             compiler=req.compiler,
             compiler_version=req.compiler_version,
             isolation=req.isolation,
@@ -192,6 +195,7 @@ async def submit_matrix_run(
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
                 os_version=job.get("os_version"),
+                arch=job.get("arch"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
                 isolation=job.get("isolation"),
@@ -209,6 +213,7 @@ async def submit_matrix_run(
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
                 os_version=job.get("os_version"),
+                arch=job.get("arch"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
                 isolation=job.get("isolation"),
@@ -428,6 +433,7 @@ async def worker_poll(
                 "git_ref": run.git_ref,
                 "os": run.os,
                 "os_version": run.os_version,
+                "arch": run.arch,
                 "compiler": run.compiler,
                 "compiler_version": run.compiler_version,
                 "isolation": run.isolation,
@@ -448,6 +454,10 @@ def _worker_can_run(worker_tags, run):
       - isolation=none, toolchain=nix → {"nix", "os:<os>-<ver>", "compiler:<c>-<cv>"}
       - isolation=none, toolchain=none → {"os:<os>-<ver>", "compiler:<c>-<cv>"}
 
+    When ``run.arch`` is set, the worker must additionally advertise
+    ``arch:<arch>`` regardless of isolation — the host kernel architecture
+    matters for both bare-metal and docker runs.
+
     Tags derived from run fields that aren't set (e.g. os=None) are skipped.
     """
     isolation = run.isolation or "none"
@@ -462,6 +472,8 @@ def _worker_can_run(worker_tags, run):
             required.add(f"os:{run.os.lower()}-{run.os_version}")
         if run.compiler and run.compiler_version:
             required.add(f"compiler:{run.compiler.lower()}-{run.compiler_version}")
+    if run.arch:
+        required.add(f"arch:{run.arch.lower()}")
     return required.issubset(worker_tags)
 
 
@@ -868,6 +880,7 @@ def _run_to_dict(run):
         "git_ref": run.git_ref,
         "os": run.os,
         "os_version": run.os_version,
+        "arch": run.arch,
         "compiler": run.compiler,
         "compiler_version": run.compiler_version,
         "platform_desc": run.platform_desc,

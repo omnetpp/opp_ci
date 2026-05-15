@@ -22,6 +22,22 @@ _ANSI_COLORS = {
 }
 
 
+# Suggested values for the arch axis. omnetpp itself supports amd64 and
+# aarch64; the OS table may register additional/alternative names (e.g.
+# x86_64). _arch_suggestions() merges both so users see what is configured
+# in their own deployment too.
+_DEFAULT_ARCH_SUGGESTIONS = ("amd64", "aarch64")
+
+
+def _arch_suggestions(os_entries):
+    """Return a sorted, de-duplicated list of arch values for datalist hints."""
+    values = set(_DEFAULT_ARCH_SUGGESTIONS)
+    for entry in os_entries or ():
+        if entry.arch:
+            values.add(entry.arch)
+    return sorted(values)
+
+
 def _ansi_to_html(text):
     """Convert ANSI escape codes in text to HTML spans."""
     if not text:
@@ -397,6 +413,7 @@ def run_new_form(request: Request, message: str = Query(default=None), message_t
 
         os_suggestions = sorted({o.name for o in os_entries if o.name})
         os_version_suggestions = sorted({o.version for o in os_entries if o.version})
+        arch_suggestions = _arch_suggestions(os_entries)
         compiler_suggestions = sorted({c.name for c in compilers if c.name})
         compiler_version_suggestions = sorted({c.version for c in compilers if c.version})
 
@@ -435,6 +452,7 @@ def run_new_form(request: Request, message: str = Query(default=None), message_t
             "compilers": compilers,
             "os_suggestions": os_suggestions,
             "os_version_suggestions": os_version_suggestions,
+            "arch_suggestions": arch_suggestions,
             "compiler_suggestions": compiler_suggestions,
             "compiler_version_suggestions": compiler_version_suggestions,
             "versions_by_project": versions_by_project,
@@ -457,6 +475,7 @@ def run_new_submit(
     omnetpp_version: str = Form(default=""),
     os: str = Form(default="", alias="os"),
     os_version: str = Form(default=""),
+    arch: str = Form(default=""),
     compiler: str = Form(default=""),
     compiler_version: str = Form(default=""),
     isolation: str = Form(default="none"),
@@ -477,6 +496,7 @@ def run_new_submit(
             resolved_deps=resolved_deps,
             os=os or None,
             os_version=os_version or None,
+            arch=arch or None,
             compiler=compiler or None,
             compiler_version=compiler_version or None,
             isolation=isolation or None,
@@ -530,6 +550,7 @@ def run_new_matrix(request: Request, matrix_name: str = Form(...)):
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
                 os_version=job.get("os_version"),
+                arch=job.get("arch"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
                 isolation=job.get("isolation"),
@@ -547,6 +568,7 @@ def run_new_matrix(request: Request, matrix_name: str = Form(...)):
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
                 os_version=job.get("os_version"),
+                arch=job.get("arch"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
                 isolation=job.get("isolation"),
@@ -593,6 +615,7 @@ def run_rerun(run_id: int):
             git_ref=original.git_ref,
             os=original.os,
             os_version=original.os_version,
+            arch=original.arch,
             compiler=original.compiler,
             compiler_version=original.compiler_version,
             platform_desc=original.platform_desc,
@@ -875,6 +898,7 @@ def matrix_new_form(request: Request, error: str = Query(default=None)):
 
         os_suggestions = sorted({o.name for o in os_entries if o.name})
         os_version_suggestions = sorted({o.version for o in os_entries if o.version})
+        arch_suggestions = _arch_suggestions(os_entries)
         compiler_suggestions = sorted({c.name for c in compilers if c.name})
         compiler_version_suggestions = sorted({c.version for c in compilers if c.version})
 
@@ -901,6 +925,7 @@ def matrix_new_form(request: Request, error: str = Query(default=None)):
             "projects": projects,
             "os_suggestions": os_suggestions,
             "os_version_suggestions": os_version_suggestions,
+            "arch_suggestions": arch_suggestions,
             "compiler_suggestions": compiler_suggestions,
             "compiler_version_suggestions": compiler_version_suggestions,
             "versions_by_project": versions_by_project,
@@ -956,6 +981,7 @@ def matrix_create(
     refs: str = Form(default=""),
     os: str = Form(default=""),
     os_version: str = Form(default=""),
+    arch: str = Form(default=""),
     compiler: str = Form(default=""),
     compiler_version: str = Form(default=""),
     isolation: str = Form(default=""),
@@ -982,6 +1008,7 @@ def matrix_create(
             "refs": _split_csv(refs),
             "os": _split_csv(os),
             "os_version": _split_csv(os_version),
+            "arch": _split_csv(arch),
             "compiler": _split_csv(compiler),
             "compiler_version": _split_csv(compiler_version),
             "isolation": _split_csv(isolation),

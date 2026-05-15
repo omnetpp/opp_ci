@@ -34,7 +34,8 @@ class OppCiClient:
         self._session.headers["Authorization"] = f"Bearer {token}"
 
     def submit_run(self, project, test_type, mode=None, git_ref=None,
-                   os=None, os_version=None, compiler=None, compiler_version=None):
+                   os=None, os_version=None, arch=None,
+                   compiler=None, compiler_version=None):
         """Submit a single test run. Returns {"id": ..., "status": "queued"}."""
         payload = {"project": project, "test_type": test_type}
         if mode:
@@ -45,6 +46,8 @@ class OppCiClient:
             payload["os"] = os
         if os_version:
             payload["os_version"] = os_version
+        if arch:
+            payload["arch"] = arch
         if compiler:
             payload["compiler"] = compiler
         if compiler_version:

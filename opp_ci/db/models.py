@@ -152,6 +152,7 @@ class TestRun(Base):
     mode = Column(String, nullable=True)
     os = Column(String, nullable=True)
     os_version = Column(String, nullable=True)
+    arch = Column(String, nullable=True)        # CPU architecture, e.g. "amd64", "aarch64"
     compiler = Column(String, nullable=True)
     compiler_version = Column(String, nullable=True)
     isolation = Column(String, nullable=True)   # "none" | "docker"; None == "none"

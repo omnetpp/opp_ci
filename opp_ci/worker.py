@@ -134,6 +134,7 @@ class WorkerAgent:
             "toolchain": toolchain,
             "os": job.get("os"),
             "os_version": job.get("os_version"),
+            "arch": job.get("arch"),
             "compiler": job.get("compiler"),
             "compiler_version": job.get("compiler_version"),
             "resolved_deps": job.get("resolved_deps"),

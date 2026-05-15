@@ -28,6 +28,7 @@
         </td></tr>
         <tr><th>OSes</th><td>{{ matrix.config.get("os", ["-"])|join(", ") }}</td></tr>
         <tr><th>OS Versions</th><td>{{ matrix.config.get("os_version", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Architectures</th><td>{{ matrix.config.get("arch", ["-"])|join(", ") }}</td></tr>
         <tr><th>Compilers</th><td>{{ matrix.config.get("compiler", ["-"])|join(", ") }}</td></tr>
         <tr><th>Compiler Versions</th><td>{{ matrix.config.get("compiler_version", ["-"])|join(", ") }}</td></tr>
         <tr><th>Isolations</th><td>{{ matrix.config.get("isolation", ["none"])|join(", ") }}</td></tr>

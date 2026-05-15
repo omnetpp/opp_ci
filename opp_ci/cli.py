@@ -87,6 +87,7 @@ def reset_db(yes, preserve_tokens):
 @click.option("--toolchain", default="none", type=click.Choice(["none", "nix"]), help="Use the host's installed toolchain (none) or opp_env/Nix")
 @click.option("--os", "os_name", default=None, help="OS name for the run (required for isolation=docker, e.g. 'Ubuntu')")
 @click.option("--os-version", default=None, help="OS version (e.g. '26.04'); required for isolation=docker")
+@click.option("--arch", default=None, help="CPU architecture (e.g. 'amd64', 'aarch64'); omit to leave unconstrained")
 @click.option("--compiler", default=None, help="Compiler name (e.g. 'clang'); required for isolation=docker + toolchain=none")
 @click.option("--compiler-version", default=None, help="Compiler version (e.g. '22')")
 @click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
@@ -94,7 +95,7 @@ def reset_db(yes, preserve_tokens):
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
 @click.pass_context
 def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
-            os_name, os_version, compiler, compiler_version, pins, force, skip_install):
+            os_name, os_version, arch, compiler, compiler_version, pins, force, skip_install):
     """Run test(s) for a project and store the results."""
     if ctx.obj.get("remote"):
         _run_remote(project, test_types, git_ref)
@@ -134,7 +135,7 @@ def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
             if not force:
                 existing = find_existing_run(
                     session, project=project, test_type=test_type, mode=mode, git_ref=git_ref,
-                    os=os_name, os_version=os_version,
+                    os=os_name, os_version=os_version, arch=arch,
                     compiler=compiler, compiler_version=compiler_version,
                     isolation=isolation, toolchain=toolchain,
                 )
@@ -149,6 +150,7 @@ def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
                 git_ref=git_ref,
                 os=os_name,
                 os_version=os_version,
+                arch=arch,
                 compiler=compiler,
                 compiler_version=compiler_version,
                 isolation=isolation,
@@ -166,7 +168,7 @@ def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
                 outcome = run_test(
                     project, test_type, git_ref=git_ref, mode=mode,
                     isolation=isolation, toolchain=toolchain,
-                    os=os_name, os_version=os_version,
+                    os=os_name, os_version=os_version, arch=arch,
                     compiler=compiler, compiler_version=compiler_version,
                 )
             except Exception as e:
@@ -585,6 +587,7 @@ def _parse_ref_range(ref_range_str):
 @click.option("--os-version", "os_versions", default=None, help="Comma-separated OS versions for cross-product (e.g. '24.04,41')")
 @click.option("--compiler", "compilers", default=None, help="Comma-separated compilers (e.g. 'gcc-14,clang-18' or 'gcc,clang' with --compiler-version)")
 @click.option("--compiler-version", "compiler_versions", default=None, help="Comma-separated compiler versions for cross-product (e.g. '14,18')")
+@click.option("--arch", "arches", default=None, help="Comma-separated CPU architectures (e.g. 'amd64,aarch64')")
 @click.option("--tests", "test_types", required=True, help="Comma-separated test types")
 @click.option("--refs", default=None, help="Comma-separated git refs to test (e.g. 'master,topic/my-feature')")
 @click.option("--ref-range", "ref_range", default=None, help="Git ref range (base..head) — enumerate commits via GitHub API")
@@ -593,7 +596,7 @@ def _parse_ref_range(ref_range_str):
 @click.option("--toolchain", default=None, help="Comma-separated toolchain values: 'none' and/or 'nix' (cross-product axis)")
 @click.option("--opp-file", "opp_file", default=None, help="Path to the project's .opp file (for opp_repl project discovery)")
 @click.option("--replace", is_flag=True, help="Replace existing matrix with the same name")
-def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, versions, refs, ref_range, deps, isolation, toolchain, opp_file, replace):
+def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, arches, versions, refs, ref_range, deps, isolation, toolchain, opp_file, replace):
     """Create a test matrix configuration.
 
     Platform axes support two styles:
@@ -628,6 +631,8 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
             config["compiler"] = [c.strip() for c in compilers.split(",")]
         if compiler_versions:
             config["compiler_version"] = [c.strip() for c in compiler_versions.split(",")]
+        if arches:
+            config["arch"] = [a.strip() for a in arches.split(",")]
         if deps:
             config["deps"] = _parse_deps_axis(deps)
         if isolation:
@@ -747,6 +752,7 @@ def run_matrix(matrix_name, force, skip_install):
                     git_ref=job.get("git_ref"),
                     os=job.get("os"),
                     os_version=job.get("os_version"),
+                    arch=job.get("arch"),
                     compiler=job.get("compiler"),
                     compiler_version=job.get("compiler_version"),
                     isolation=job.get("isolation"),
@@ -764,6 +770,7 @@ def run_matrix(matrix_name, force, skip_install):
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
                 os_version=job.get("os_version"),
+                arch=job.get("arch"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
                 isolation=job.get("isolation"),
@@ -791,6 +798,7 @@ def run_matrix(matrix_name, force, skip_install):
                     mode=job.get("mode"),
                     isolation=job.get("isolation"), toolchain=job.get("toolchain"),
                     os=job.get("os"), os_version=job.get("os_version"),
+                    arch=job.get("arch"),
                     compiler=job.get("compiler"), compiler_version=job.get("compiler_version"),
                 )
             except Exception as e:

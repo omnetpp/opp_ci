@@ -37,6 +37,11 @@ Platform axes support two styles:
 Detection rule: if the _version key is present → structured mode (cross-product).
 If absent → combined mode (parse the strings).
 
+The ``arch`` axis names the CPU architecture (e.g. ``"amd64"``, ``"aarch64"``).
+omnetpp supports both; matrices that omit ``arch`` leave it unset on the
+resulting jobs, and workers without an ``arch:<arch>`` tag may pick them up.
+When ``arch`` is set, a worker must advertise ``arch:<arch>`` to claim the job.
+
 The optional 'deps' axis maps dependency names to lists of versions.
 The cross-product produces one job per combination of dep versions,
 each with a ``resolved_deps`` dict pinning each dep to one version.
@@ -108,6 +113,19 @@ def _resolve_compiler_axis(config):
         return [_parse_compiler(c) for c in compiler_list]
 
 
+def _resolve_arch_axis(config):
+    """Return the list of arch values; defaults to [None] (no constraint).
+
+    A single string is auto-promoted to a list, matching the isolation/toolchain
+    axes. omnetpp's supported arches are ``"amd64"`` and ``"aarch64"`` —
+    but the axis is a free-form string and accepts any value.
+    """
+    value = config.get("arch", [None])
+    if isinstance(value, str):
+        value = [value]
+    return list(value)
+
+
 def _resolve_isolation_axis(config):
     """Return the list of isolation values; defaults to ["none"]."""
     value = config.get("isolation", ["none"])
@@ -159,11 +177,16 @@ def _validate_nix_compiler(compiler, compiler_version):
     )
 
 
-def _build_platform_desc(os_name, os_version, compiler_name, compiler_version):
+def _build_platform_desc(os_name, os_version, arch, compiler_name, compiler_version):
     """Build a human-readable platform description from components."""
     parts = []
     if os_name:
-        parts.append(f"{os_name} {os_version}" if os_version else os_name)
+        os_part = f"{os_name} {os_version}" if os_version else os_name
+        if arch:
+            os_part = f"{os_part} ({arch})"
+        parts.append(os_part)
+    elif arch:
+        parts.append(arch)
     if compiler_name:
         parts.append(f"{compiler_name}-{compiler_version}" if compiler_version else compiler_name)
     return " / ".join(parts) if parts else None
@@ -237,11 +260,12 @@ def expand_matrix(project, config):
             "git_ref": "master",
             "os": "Ubuntu",
             "os_version": "24.04",
+            "arch": "amd64",
             "compiler": "gcc",
             "compiler_version": "14",
             "isolation": "docker",
             "toolchain": "none",
-            "platform_desc": "Ubuntu 24.04 / gcc-14",
+            "platform_desc": "Ubuntu 24.04 (amd64) / gcc-14",
         }
 
     ``project`` is the matrix's project name (constant across the expansion).
@@ -262,11 +286,12 @@ def expand_matrix(project, config):
     dep_combos = _resolve_deps_axis(config)
     isolations = _resolve_isolation_axis(config)
     toolchains = _resolve_toolchain_axis(config)
+    arches = _resolve_arch_axis(config)
 
     jobs = []
-    for (version, ref, test_type, mode, (os_name, os_ver),
+    for (version, ref, test_type, mode, (os_name, os_ver), arch,
          (comp_name, comp_ver), dep_pins, isolation, toolchain) in itertools.product(
-            versions, refs, test_types, modes, os_tuples, compiler_tuples,
+            versions, refs, test_types, modes, os_tuples, arches, compiler_tuples,
             dep_combos, isolations, toolchains):
         if toolchain == "nix":
             _validate_nix_compiler(comp_name, comp_ver)
@@ -278,11 +303,12 @@ def expand_matrix(project, config):
             "git_ref": ref,
             "os": os_name,
             "os_version": os_ver,
+            "arch": arch,
             "compiler": comp_name,
             "compiler_version": comp_ver,
             "isolation": isolation,
             "toolchain": toolchain,
-            "platform_desc": _build_platform_desc(os_name, os_ver, comp_name, comp_ver),
+            "platform_desc": _build_platform_desc(os_name, os_ver, arch, comp_name, comp_ver),
             "resolved_deps": dep_pins or None,
         })
 
@@ -306,6 +332,7 @@ DEFAULT_MATRICES = {
             "test_types": ["smoke", "build"],
             "modes": ["release", "debug"],
             "os": ["Ubuntu 24.04"],
+            "arch": ["amd64", "aarch64"],
             "compiler": ["gcc-14", "clang-18"],
         },
     },

@@ -66,14 +66,16 @@ def run_external(args, *, label, timeout=None, env=None, cwd=None):
 
 
 def find_existing_run(session, *, project, test_type, version=None, mode=None, git_ref=None,
-                      os=None, os_version=None, compiler=None, compiler_version=None,
+                      os=None, os_version=None, arch=None,
+                      compiler=None, compiler_version=None,
                       isolation=None, toolchain=None):
     """Return an existing TestRun with matching params and terminal status, or None.
 
     Matches on the full (project, version, test_type, mode, git_ref, os,
-    os_version, compiler, compiler_version, isolation, toolchain) tuple. Two
-    runs with different isolation or toolchain are considered different runs
-    even if every other field matches — they test different execution paths.
+    os_version, arch, compiler, compiler_version, isolation, toolchain) tuple.
+    Two runs with different arch, isolation, or toolchain are considered
+    different runs even if every other field matches — they test different
+    execution paths.
 
     Only runs that have completed (PASS, FAIL, or ERROR) are considered —
     queued/running runs do not block a new submission.
@@ -88,6 +90,7 @@ def find_existing_run(session, *, project, test_type, version=None, mode=None, g
             TestRun.git_ref == git_ref,
             TestRun.os == os,
             TestRun.os_version == os_version,
+            TestRun.arch == arch,
             TestRun.compiler == compiler,
             TestRun.compiler_version == compiler_version,
             TestRun.isolation == isolation,
