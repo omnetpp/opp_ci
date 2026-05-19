@@ -39,7 +39,7 @@ coordinator):
 | `arch:amd64` / `arch:aarch64` | CPU architecture — required when a run names an `arch` |
 | `compiler:gcc-14`, `compiler:clang-22`, … | Compiler+version capability |
 | `perf-counters` | Hardware perf counters available (enables speed tests) |
-| `docker` | Docker daemon present (enables `--isolation docker` jobs) |
+| `podman` | Podman installed (enables `--isolation podman` jobs) |
 | `nix` | Nix installed (enables `--toolchain nix` / opp_env jobs) |
 
 The scheduler matches each queued job's requirements against worker
@@ -111,7 +111,7 @@ Or via the web UI at `/admin`.
 
 ## Operational notes
 
-- Run workers under a process supervisor (systemd, Docker, k8s) so they
+- Run workers under a process supervisor (systemd, Podman, k8s) so they
   restart on crash. The worker has no built-in supervision.
 - For speed tests, pick a worker host with stable, low-noise CPU (no
   shared cloud tenants, frequency scaling off). Add a `perf-counters`

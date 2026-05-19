@@ -31,7 +31,7 @@ value (typically `None` or a hard-coded default).
   "deps": {"omnetpp": ["6.1", "6.0"]},
   "os": ["Ubuntu 24.04", "Fedora 41"],
   "compiler": ["gcc-14", "clang-18"],
-  "isolation": ["none", "docker"],
+  "isolation": ["none", "podman"],
   "toolchain": ["none", "nix"]
 }
 ```
@@ -258,7 +258,7 @@ e.g. `os:ubuntu-24.04`. Workers can register either by hand
 (`--tags os:ubuntu-24.04`) or via `--auto-tags`, which detects the
 host OS automatically.
 
-Under `isolation == "docker"`, the OS instead selects the container
+Under `isolation == "podman"`, the OS instead selects the container
 image: `opp_ci image build` produces images tagged
 `opp-ci-runner:host-ubuntu-24.04-gcc-14` etc., and the executor picks
 the image by exact match on `(os, os_version, compiler,
@@ -308,12 +308,12 @@ falling back to opp_env's default compiler would make the recorded
 `compiler` column lie about what was actually tested.
 
 If you need a compiler opp_env does not expose, switch the relevant
-sub-matrix to `toolchain=none` (host or docker).
+sub-matrix to `toolchain=none` (host or podman).
 
 ### Worker dispatch
 
 Under `isolation=none`, the job requires `compiler:<name>-<version>`
-on the worker. Under `isolation=docker`, the compiler is part of the
+on the worker. Under `isolation=podman`, the compiler is part of the
 image-tag key — `opp_ci image build` must already have produced a
 matching image.
 
@@ -326,21 +326,21 @@ matching image.
 | JSON key | `isolation` |
 | CLI flag | `--isolation` |
 | Default | `["none"]` |
-| Allowed | `none`, `docker` |
+| Allowed | `none`, `podman` |
 | Cross-product | yes |
 
 How the job's filesystem and OS are isolated from the host:
 
 - `none` — the executor spawns a direct subprocess on the worker. Uses
   the host's installed compilers, libraries, and opp_repl.
-- `docker` — the executor runs inside a Docker image selected by the
-  `(os, os_version, compiler, compiler_version)` coordinates. Image
+- `podman` — the executor runs inside a Podman container image selected by
+  the `(os, os_version, compiler, compiler_version)` coordinates. Image
   building is driven by `opp_ci image build` /
   `image build-matrix`.
 
 A bare string is auto-promoted to a single-element list
 ([scheduler.py:113](../opp_ci/scheduler.py#L113)), so
-`"isolation": "docker"` and `"isolation": ["docker"]` behave
+`"isolation": "podman"` and `"isolation": ["podman"]` behave
 identically.
 
 Isolation is orthogonal to [toolchain](#axis-toolchain). The four
@@ -357,9 +357,9 @@ Each isolation value implies different worker
 | isolation | Required worker tags |
 |---|---|
 | `none` | `os:<name>-<ver>`, `compiler:<name>-<ver>` (if specified) |
-| `docker` | `docker` |
+| `podman` | `podman` |
 
-A matrix that cross-products `isolation: ["none", "docker"]` therefore
+A matrix that cross-products `isolation: ["none", "podman"]` therefore
 needs workers covering *both* tag sets, otherwise half the queue
 stalls.
 
@@ -378,7 +378,7 @@ stalls.
 Where the C++ toolchain comes from:
 
 - `none` — use whatever compiler is installed on the host (or inside
-  the container, when isolation is `docker`).
+  the container, when isolation is `podman`).
 - `nix` — `opp_env install <project-version>` first, then
   `opp_env run <project-version> -c <cmd>`. Gives a fully reproducible
   build environment.

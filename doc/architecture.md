@@ -73,7 +73,7 @@ opp_ci/
 | **ApiToken** | token, name, role (readonly/submitter/worker/admin), enabled, created_at |
 | **AutoTestRule** | project FK, rule_type (branch/pr/tag), pattern (glob), matrix FK, enabled |
 | **TestRun** | matrix entry, worker FK, git_ref, version, timestamp, status (queued/running/PASS/FAIL/ERROR), trigger (manual/webhook/schedule/remote), `github_*` fields |
-| **TestResult** | run FK, test_type, test_name, result_code, duration, stdout/stderr (raw with ANSI), `details` JSON (per-test breakdown from opp_repl) |
+| **TestResult** | run FK, result_code, stdout/stderr (raw with ANSI), `details` JSON (per-test breakdown from opp_repl). Per-test name/duration live inside `details`, not as columns. |
 
 Connection pool and engine factory in `opp_ci/db/connection.py`;
 configured by `OPP_CI_DATABASE_URL`.
