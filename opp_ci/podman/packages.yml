@@ -1,5 +1,5 @@
 # Maps (os + "+" + compiler + "-" + version) → the package name to install via
-# the base OS's package manager. Used by Dockerfile.host.j2.
+# the base OS's package manager. Used by Containerfile.host.j2.
 #
 # When a key is missing, the build falls back to the literal "<compiler>-<version>"
 # string. Add an entry here only when that fallback doesn't match the distro's

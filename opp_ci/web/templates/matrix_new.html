@@ -115,16 +115,16 @@
             </div>
         </div>
         <p style="font-size:0.85rem; color:var(--muted); margin-top:-0.25rem;">
-            OS/Compiler suggestions come from <code>opp_ci/docker/platforms.yml</code> plus the OS/Compiler tables.
+            OS/Compiler suggestions come from <code>opp_ci/podman/platforms.yml</code> plus the OS/Compiler tables.
             Type any value — these are hints, not a whitelist.
         </p>
         <div class="form-row">
             <div class="form-group">
                 <label for="isolation">Isolations</label>
-                <input type="text" name="isolation" id="isolation" list="isolation-options" placeholder="none, docker">
+                <input type="text" name="isolation" id="isolation" list="isolation-options" placeholder="none, podman">
                 <datalist id="isolation-options">
                     <option value="none">
-                    <option value="docker">
+                    <option value="podman">
                 </datalist>
             </div>
             <div class="form-group">

@@ -56,7 +56,7 @@ class SubmitRunRequest(BaseModel):
     arch: str | None = None         # "amd64", "aarch64", ...
     compiler: str | None = None
     compiler_version: str | None = None
-    isolation: str | None = None    # "none" | "docker"
+    isolation: str | None = None    # "none" | "podman"
     toolchain: str | None = None    # "none" | "nix"
     force: bool = False
 
@@ -451,21 +451,21 @@ def _worker_can_run(worker_tags, run):
     """Return True if a worker with *worker_tags* may claim *run*.
 
     Required tags by execution environment:
-      - isolation=docker             →  {"docker"}
+      - isolation=podman             →  {"podman"}
       - isolation=none, toolchain=nix → {"nix", "os:<os>-<ver>", "compiler:<c>-<cv>"}
       - isolation=none, toolchain=none → {"os:<os>-<ver>", "compiler:<c>-<cv>"}
 
     When ``run.arch`` is set, the worker must additionally advertise
     ``arch:<arch>`` regardless of isolation — the host kernel architecture
-    matters for both bare-metal and docker runs.
+    matters for both bare-metal and podman runs.
 
     Tags derived from run fields that aren't set (e.g. os=None) are skipped.
     """
     isolation = run.isolation or "none"
     toolchain = run.toolchain or "none"
     required = set()
-    if isolation == "docker":
-        required.add("docker")
+    if isolation == "podman":
+        required.add("podman")
     else:
         if toolchain == "nix":
             required.add("nix")

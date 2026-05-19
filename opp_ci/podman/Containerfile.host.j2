@@ -8,7 +8,7 @@
 # are *not* — the entrypoint clones them at container start and pip-installs
 # them in editable mode, so a push to either repo does not invalidate this
 # image's layers. The clone path is /opt/opp_ci_src and /opt/opp_repl_src;
-# mount a docker named volume there to persist the clones across runs.
+# mount a podman named volume there to persist the clones across runs.
 FROM {{ os }}:{{ os_version }}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -52,7 +52,7 @@ RUN dnf -y install \
       {{ compiler_package }} \
  && dnf clean all
 {%- else -%}
-# Unknown base OS '{{ os }}'. Extend Dockerfile.host.j2 with package-manager
+# Unknown base OS '{{ os }}'. Extend Containerfile.host.j2 with package-manager
 # commands for this distro before building images from it.
 RUN false
 {%- endif %}
@@ -78,7 +78,7 @@ RUN mkdir -p /opt/opp_env_workspace \
 # opp_ci + opp_repl on each run and pip-installs them in editable mode
 # before exec'ing `opp_env run`. See opp_ci_entry.sh.j2 for details. The
 # script is rendered separately and shipped into the build context — the
-# legacy docker builder doesn't process shell heredocs inside RUN, so an
+# legacy builder doesn't process shell heredocs inside RUN, so an
 # inline `cat > … <<'EOF'` would produce a 0-byte file.
 COPY opp_ci_entry.sh /opt/opp_ci_entry.sh
 RUN chmod +x /opt/opp_ci_entry.sh

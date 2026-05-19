@@ -83,12 +83,12 @@ def reset_db(yes, preserve_tokens):
 @click.option("--test", "test_types", required=True, help="Test type(s), comma-separated (e.g. smoke,fingerprint)")
 @click.option("--ref", "git_ref", default=None, help="Git branch, tag, or commit to test (e.g. master, topic/my-feature)")
 @click.option("--mode", default=None, type=click.Choice(["debug", "release"]), help="Build mode (debug or release)")
-@click.option("--isolation", default="none", type=click.Choice(["none", "docker"]), help="Run on the host (none) or inside a Docker container")
+@click.option("--isolation", default="none", type=click.Choice(["none", "podman"]), help="Run on the host (none) or inside a Podman container")
 @click.option("--toolchain", default="none", type=click.Choice(["none", "nix"]), help="Use the host's installed toolchain (none) or opp_env/Nix")
-@click.option("--os", "os_name", default=None, help="OS name for the run (required for isolation=docker, e.g. 'Ubuntu')")
-@click.option("--os-version", default=None, help="OS version (e.g. '26.04'); required for isolation=docker")
+@click.option("--os", "os_name", default=None, help="OS name for the run (required for isolation=podman, e.g. 'Ubuntu')")
+@click.option("--os-version", default=None, help="OS version (e.g. '26.04'); required for isolation=podman")
 @click.option("--arch", default=None, help="CPU architecture (e.g. 'amd64', 'aarch64'); omit to leave unconstrained")
-@click.option("--compiler", default=None, help="Compiler name (e.g. 'clang'); required for isolation=docker + toolchain=none")
+@click.option("--compiler", default=None, help="Compiler name (e.g. 'clang'); required for isolation=podman + toolchain=none")
 @click.option("--compiler-version", default=None, help="Compiler version (e.g. '22')")
 @click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
 @click.option("--force", is_flag=True, help="Re-run even if an identical run already exists")
@@ -460,7 +460,7 @@ def seed_projects_cmd():
 
 @main.command("seed-platforms")
 def seed_platforms_cmd():
-    """Seed the OS and Compiler tables from opp_ci/docker/platforms.yml.
+    """Seed the OS and Compiler tables from opp_ci/podman/platforms.yml.
 
     Idempotent — existing (name, version) rows are left alone, so editing
     platforms.yml and re-running only inserts new entries. After running,
@@ -616,7 +616,7 @@ def _parse_ref_range(ref_range_str):
 @click.option("--refs", default=None, help="Comma-separated git refs to test (e.g. 'master,topic/my-feature')")
 @click.option("--ref-range", "ref_range", default=None, help="Git ref range (base..head) — enumerate commits via GitHub API")
 @click.option("--deps", default=None, help="Dependency versions axis (e.g. 'omnetpp=6.3.0,6.2.0;inet=4.5')")
-@click.option("--isolation", default=None, help="Comma-separated isolation values: 'none' and/or 'docker' (cross-product axis)")
+@click.option("--isolation", default=None, help="Comma-separated isolation values: 'none' and/or 'podman' (cross-product axis)")
 @click.option("--toolchain", default=None, help="Comma-separated toolchain values: 'none' and/or 'nix' (cross-product axis)")
 @click.option("--opp-file", "opp_file", default=None, help="Path to the project's .opp file (for opp_repl project discovery)")
 @click.option("--replace", is_flag=True, help="Replace existing matrix with the same name")
@@ -1012,7 +1012,7 @@ def _detect_capability_tags():
     Returns a list of opp_ci worker tags reflecting what this host can run:
       - os:<id>-<version>          from /etc/os-release
       - compiler:<name>-<major>    for each of gcc, clang found on PATH
-      - docker                     if "docker version" succeeds (daemon reachable)
+      - podman                     if "podman --version" succeeds
       - nix                        if both nix and opp_env are on PATH
     """
     import re
@@ -1048,11 +1048,11 @@ def _detect_capability_tags():
         if m:
             tags.append(f"compiler:{compiler}-{m.group(1)}")
 
-    if shutil.which("docker"):
+    if shutil.which("podman"):
         try:
-            out = sp.run(["docker", "--version"], capture_output=True, timeout=5)
+            out = sp.run(["podman", "--version"], capture_output=True, timeout=5)
             if out.returncode == 0:
-                tags.append("docker")
+                tags.append("podman")
         except (OSError, sp.SubprocessError):
             pass
 
@@ -1098,7 +1098,7 @@ def worker_start(coordinator, token, poll_interval, heartbeat_interval):
 @click.option("--name", required=True, help="Worker name (unique)")
 @click.option("--tags", default="", help="Comma-separated capability tags")
 @click.option("--auto-tags/--no-auto-tags", default=False,
-              help="Detect os:/compiler:/docker/nix tags from this host and union them with --tags")
+              help="Detect os:/compiler:/podman/nix tags from this host and union them with --tags")
 @click.option("--concurrency", default=1, help="Max concurrent jobs")
 def worker_register(name, tags, auto_tags, concurrency):
     """Register a new worker in the local database and print its token."""
@@ -1425,12 +1425,12 @@ def internal_run_direct(project, test_type, mode, opp_file, git_ref):
 
 
 # ---------------------------------------------------------------------------
-# Image management — build the opp-ci-runner Docker images for a matrix.
+# Image management — build the opp-ci-runner container images for a matrix.
 # ---------------------------------------------------------------------------
 
 @main.group("image")
 def image_group():
-    """Build and manage the opp-ci-runner Docker images."""
+    """Build and manage the opp-ci-runner container images."""
 
 
 @image_group.command("build")
@@ -1477,7 +1477,7 @@ def image_build_matrix(ctx, matrix_name, push):
     """Build every opp-ci-runner image referenced by a matrix's expansion.
 
     Walks the expanded job list, derives the unique image tags for jobs
-    with isolation=docker, and invokes 'opp_ci image build' for each one.
+    with isolation=podman, and invokes 'opp_ci image build' for each one.
     """
     from opp_ci.scheduler import expand_matrix
 
@@ -1493,7 +1493,7 @@ def image_build_matrix(ctx, matrix_name, push):
 
         seen = set()
         for job in jobs:
-            if (job.get("isolation") or "none") != "docker":
+            if (job.get("isolation") or "none") != "podman":
                 continue
             deps = job.get("resolved_deps") or {}
             omnetpp_version = deps.get("omnetpp") if isinstance(deps, dict) else None

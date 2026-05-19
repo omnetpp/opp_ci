@@ -48,12 +48,12 @@ each with a ``resolved_deps`` dict pinning each dep to one version.
 
 Execution-environment axes (optional):
 
-    "isolation": ["none", "docker"]   # how to isolate the run
+    "isolation": ["none", "podman"]   # how to isolate the run
     "toolchain": ["none", "nix"]      # where the C++ toolchain comes from
 
 Both are also cross-product axes; a single string is auto-promoted to a list.
 When omitted, both default to "none" — direct on the worker's host with whatever
-compiler is installed (matches the bare-metal "no Nix, no Docker" setup).
+compiler is installed (matches the bare-metal "no Nix, no Podman" setup).
 
 When ``toolchain == "nix"``, the (compiler, compiler_version) pair must map to
 an option opp_env understands; otherwise expansion raises ValueError.
@@ -173,7 +173,7 @@ def _validate_nix_compiler(compiler, compiler_version):
         f"toolchain=nix does not support compiler {compiler!r}"
         f" version {compiler_version!r}; opp_env only exposes "
         f"gcc-7 and clang (unversioned). "
-        f"Either set toolchain=none (host or docker) or pick a supported compiler."
+        f"Either set toolchain=none (host or podman) or pick a supported compiler."
     )
 
 
@@ -263,7 +263,7 @@ def expand_matrix(project, config):
             "arch": "amd64",
             "compiler": "gcc",
             "compiler_version": "14",
-            "isolation": "docker",
+            "isolation": "podman",
             "toolchain": "none",
             "platform_desc": "Ubuntu 24.04 (amd64) / gcc-14",
         }
@@ -345,7 +345,7 @@ DEFAULT_MATRICES = {
             "modes": ["release"],
             "os": ["Ubuntu 26.04", "Fedora 42"],
             "compiler": ["clang-22"],
-            "isolation": ["docker"],
+            "isolation": ["podman"],
             "toolchain": ["none"],
         },
     },

@@ -7,11 +7,11 @@
 # downloads the project from its catalog source.
 #
 # Persistent state:
-#   /nix  — Nix store; mount the docker named volume 'opp-ci-nix-store' here
+#   /nix  — Nix store; mount the podman named volume 'opp-ci-nix-store' here
 #           so downloaded deps survive across container instances.
 #
 # The entrypoint clones opp_ci/opp_repl on each start (same pattern as
-# Dockerfile.host.j2) so a push to either repo does not invalidate this
+# Containerfile.host.j2) so a push to either repo does not invalidate this
 # image's layers; only changes to opp_env's pinned SHA do.
 FROM {{ os }}:{{ os_version }}
 
@@ -35,7 +35,7 @@ RUN false
 # users required) — the upstream nix.org installer fails in this image
 # because it expects a 'nixbld' build-users-group even in --no-daemon mode.
 #
-# /nix is a mount point — the actual store comes from a docker named
+# /nix is a mount point — the actual store comes from a podman named
 # volume so deps survive across container instances.
 RUN curl --proto '=https' --tlsv1.2 -sSf -L \
         https://install.determinate.systems/nix \

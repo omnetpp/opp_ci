@@ -109,15 +109,15 @@
             </div>
         </div>
         <p style="font-size:0.85rem; color:var(--muted); margin-top:-0.25rem;">
-            Suggestions come from <code>opp_ci/docker/platforms.yml</code> plus the OS/Compiler tables.
-            Type any value — these are hints, not a whitelist. Required for <code>isolation=docker</code>.
+            Suggestions come from <code>opp_ci/podman/platforms.yml</code> plus the OS/Compiler tables.
+            Type any value — these are hints, not a whitelist. Required for <code>isolation=podman</code>.
         </p>
         <div class="form-row">
             <div class="form-group">
                 <label for="isolation">Isolation</label>
                 <select name="isolation" id="isolation">
                     <option value="none">none (run on host)</option>
-                    <option value="docker">docker (run in container)</option>
+                    <option value="podman">podman (run in container)</option>
                 </select>
             </div>
             <div class="form-group">

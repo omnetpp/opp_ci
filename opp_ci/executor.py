@@ -39,7 +39,7 @@ def run_external(args, *, label, timeout=None, env=None, cwd=None):
 
     Always logs the command at INFO and the exit code + elapsed time. On a
     non-zero exit also logs a tail of stdout/stderr at WARNING — so when an
-    'opp_env install' or 'docker run' returns FAIL in 0.0s the worker's
+    'opp_env install' or 'podman run' returns FAIL in 0.0s the worker's
     log shows *why* without having to fish through the coordinator.
 
     With DEBUG logging enabled (e.g. `opp_ci -v worker start ...`), the
@@ -272,7 +272,7 @@ def install_project(project, git_ref=None, *, isolation="none", toolchain="none"
     """Install a project via opp_env on the worker's host.
 
     Only meaningful when ``isolation=none`` and ``toolchain=nix``:
-      - isolation=docker → install happens inside the container's entrypoint
+      - isolation=podman → install happens inside the container's entrypoint
       - toolchain=none   → project is expected to be pre-built on the host
     """
     if isolation != "none" or toolchain != "nix":
@@ -293,7 +293,7 @@ def run_test(project, test_type, *, isolation=None, toolchain=None, **kwargs):
     """
     Run a test for the given project, dispatching on isolation × toolchain.
 
-      isolation=docker          → _run_test_in_docker (wraps the inner path)
+      isolation=podman          → _run_test_in_podman (wraps the inner path)
       isolation=none, tc=nix    → _run_test_via_opp_env  (opp_env on host)
       isolation=none, tc=none   → _run_test_direct       (opp_repl in-process)
 
@@ -305,8 +305,8 @@ def run_test(project, test_type, *, isolation=None, toolchain=None, **kwargs):
     """
     isolation = isolation or "none"
     toolchain = toolchain or "none"
-    if isolation == "docker":
-        return _run_test_in_docker(project, test_type, toolchain=toolchain, **kwargs)
+    if isolation == "podman":
+        return _run_test_in_podman(project, test_type, toolchain=toolchain, **kwargs)
     if toolchain == "nix":
         return _run_test_via_opp_env(project, test_type, **kwargs)
     return _run_test_direct(project, test_type, **kwargs)
@@ -420,7 +420,7 @@ def _create_git_worktree(project_dir, git_ref):
     return target
 
 
-def _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version,
+def _podman_image_tag(toolchain, os_name, os_version, compiler, compiler_version,
                       omnetpp_version=None):
     """Compute the runner image tag for a given combination.
 
@@ -433,17 +433,17 @@ def _docker_image_tag(toolchain, os_name, os_version, compiler, compiler_version
     different omnetpp version means a different image.
     """
     if not os_name or not os_version:
-        raise ValueError("isolation=docker requires both 'os' and 'os_version' to be set on the run")
+        raise ValueError("isolation=podman requires both 'os' and 'os_version' to be set on the run")
     os_slug = f"{os_name.lower()}-{os_version}"
     if toolchain == "nix":
         return f"opp-ci-runner:nix-{os_slug}"
     if not compiler or not compiler_version:
         raise ValueError(
-            "isolation=docker with toolchain=none requires both 'compiler' and 'compiler_version'"
+            "isolation=podman with toolchain=none requires both 'compiler' and 'compiler_version'"
         )
     if not omnetpp_version:
         raise ValueError(
-            "isolation=docker with toolchain=none requires an omnetpp version "
+            "isolation=podman with toolchain=none requires an omnetpp version "
             "(set resolved_deps['omnetpp'] on the run, or pick one in the New Run form)"
         )
     return f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}-omnetpp-{omnetpp_version}"
@@ -471,13 +471,13 @@ _OPP_REPL_REPO = "https://github.com/omnetpp/opp_repl.git"
 _OPP_ENV_REPO = "https://github.com/omnetpp/opp_env.git"
 
 
-def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version,
-                      omnetpp_version=None):
-    """Render the Dockerfile (and, for host toolchain, the entrypoint script)
+def render_containerfile(toolchain, os_name, os_version, compiler, compiler_version,
+                         omnetpp_version=None):
+    """Render the Containerfile (and, for host toolchain, the entrypoint script)
     for one runner-image combination.
 
     Returns a dict ``{filename: rendered_content}`` — at minimum
-    ``{"Dockerfile": "..."}``, plus ``{"opp_ci_entry.sh": "..."}`` for the
+    ``{"Containerfile": "..."}``, plus ``{"opp_ci_entry.sh": "..."}`` for the
     host toolchain. The caller writes each file into the build context.
 
     For the host template:
@@ -502,8 +502,8 @@ def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version
 
     template_name = "host" if toolchain == "none" else toolchain
 
-    docker_dir = importlib.resources.files("opp_ci").joinpath("docker")
-    jenv = Environment(loader=FileSystemLoader(str(docker_dir)),
+    podman_dir = importlib.resources.files("opp_ci").joinpath("podman")
+    jenv = Environment(loader=FileSystemLoader(str(podman_dir)),
                        keep_trailing_newline=True)
     ctx = {
         "os": os_name.lower(),
@@ -515,7 +515,7 @@ def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version
         if not omnetpp_version:
             raise ValueError("host-toolchain image requires omnetpp_version")
         ctx["omnetpp_version"] = omnetpp_version
-        pkgs_path = docker_dir.joinpath("packages.yml")
+        pkgs_path = podman_dir.joinpath("packages.yml")
         with open(pkgs_path) as f:
             pkg_map = yaml.safe_load(f) or {}
         key = f"{ctx['os']}+{ctx['compiler']}-{ctx['compiler_version']}"
@@ -524,7 +524,7 @@ def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version
     elif template_name == "nix":
         ctx["opp_env_ref"] = _resolve_remote_head(_OPP_ENV_REPO) or "HEAD"
 
-    files = {"Dockerfile": jenv.get_template(f"Dockerfile.{template_name}.j2").render(**ctx)}
+    files = {"Containerfile": jenv.get_template(f"Containerfile.{template_name}.j2").render(**ctx)}
     if template_name == "host":
         files["opp_ci_entry.sh"] = jenv.get_template("opp_ci_entry.sh.j2").render(**ctx)
     elif template_name == "nix":
@@ -533,16 +533,16 @@ def render_dockerfile(toolchain, os_name, os_version, compiler, compiler_version
 
 
 def _image_exists_locally(tag):
-    """True iff 'docker image inspect <tag>' succeeds (image is in the local store)."""
+    """True iff 'podman image inspect <tag>' succeeds (image is in the local store)."""
     try:
         result = subprocess.run(
-            ["docker", "image", "inspect", tag],
+            ["podman", "image", "inspect", tag],
             capture_output=True, text=True,
         )
     except FileNotFoundError:
         raise RuntimeError(
-            "docker binary not found on PATH — install Docker on this worker, "
-            "or untag the worker as docker-capable."
+            "podman binary not found on PATH — install Podman on this worker, "
+            "or untag the worker as podman-capable."
         )
     return result.returncode == 0
 
@@ -551,12 +551,12 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
                        *, omnetpp_version=None, push=False):
     """Build (and optionally push) one opp-ci-runner image.
 
-    For host toolchain, *omnetpp_version* is required — the Dockerfile uses
+    For host toolchain, *omnetpp_version* is required — the Containerfile uses
     'opp_env install --nixless-workspace' at build time to bake that specific
     OMNeT++ into the image so the container can run opp_repl tests without
     needing OMNeT++ at run time.
     """
-    files = render_dockerfile(
+    files = render_containerfile(
         toolchain, os_name, os_version, compiler, compiler_version,
         omnetpp_version=omnetpp_version,
     )
@@ -564,24 +564,24 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
         for name, content in files.items():
             with open(os.path.join(tmp, name), "w") as f:
                 f.write(content)
-        dockerfile_path = os.path.join(tmp, "Dockerfile")
+        containerfile_path = os.path.join(tmp, "Containerfile")
         result = run_external(
-            ["docker", "build", "-t", tag, "-f", dockerfile_path, tmp],
-            label=f"docker build {tag}",
+            ["podman", "build", "-t", tag, "-f", containerfile_path, tmp],
+            label=f"podman build {tag}",
         )
         if result.returncode != 0:
-            raise RuntimeError(f"docker build {tag} failed (exit {result.returncode})")
+            raise RuntimeError(f"podman build {tag} failed (exit {result.returncode})")
     if push:
-        result = run_external(["docker", "push", tag], label=f"docker push {tag}")
+        result = run_external(["podman", "push", tag], label=f"podman push {tag}")
         if result.returncode != 0:
-            raise RuntimeError(f"docker push {tag} failed (exit {result.returncode})")
+            raise RuntimeError(f"podman push {tag} failed (exit {result.returncode})")
 
 
 def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version,
                          *, omnetpp_version=None):
-    """Invoke 'docker build' for the image so docker's layer cache picks up
+    """Invoke 'podman build' for the image so podman's layer cache picks up
     any changes — new pinned SHAs from an upstream push, edits to the
-    Dockerfile template, a different compiler package, a different OMNeT++
+    Containerfile template, a different compiler package, a different OMNeT++
     version, etc.
 
     When nothing relevant has changed, every layer hits the cache and the
@@ -595,8 +595,8 @@ def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler
     )
 
 
-def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
-    """Run a test inside a Docker container.
+def _run_test_in_podman(project, test_type, *, toolchain="none", **kwargs):
+    """Run a test inside a Podman container.
 
     Two flavours, distinguished by whether the matrix has an opp_file:
 
@@ -622,7 +622,7 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
     resolved_deps = kwargs.get("resolved_deps") or {}
     omnetpp_version = resolved_deps.get("omnetpp") if isinstance(resolved_deps, dict) else None
 
-    image = _docker_image_tag(
+    image = _podman_image_tag(
         toolchain, os_name, os_version, compiler, compiler_version,
         omnetpp_version=omnetpp_version,
     )
@@ -648,22 +648,24 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
         else:
             mount_path = project_dir
 
-    docker_cmd = [
-        "docker", "run", "--rm",
-        "-v", f"{os.path.abspath(mount_path)}:/work",
+    # `:Z` relabels the host bind mount for SELinux-enforcing hosts (Fedora);
+    # it's a no-op on Ubuntu/Debian. Required for rootless podman to read /work.
+    podman_cmd = [
+        "podman", "run", "--rm",
+        "-v", f"{os.path.abspath(mount_path)}:/work:Z",
         "-w", "/work",
     ]
     if is_catalog:
         # The entrypoint reads this, opp_env-installs each project, and cd's
         # into the first one's install dir.
-        docker_cmd += ["-e", f"OPP_CI_INSTALL_PROJECTS={project}"]
+        podman_cmd += ["-e", f"OPP_CI_INSTALL_PROJECTS={project}"]
     # The image's ENTRYPOINT is the runner binary (opp_env / opp_ci), so we
     # only need to pass its arguments here — repeating the binary name would
     # produce `opp_ci opp_ci ...` and "No such command" from click.
     if toolchain == "nix":
-        docker_cmd += ["-v", "opp-ci-nix-store:/nix"]
+        podman_cmd += ["-v", "opp-ci-nix-store:/nix"]
         if git_ref:
-            docker_cmd += ["-e", f"OPP_ENV_GIT_REF={git_ref}"]
+            podman_cmd += ["-e", f"OPP_ENV_GIT_REF={git_ref}"]
         effective_project, _ = resolve_git_project(project, git_ref, toolchain="nix")
         inner_cmd = COMMAND_MAP.get(test_type)
         if inner_cmd is None:
@@ -703,12 +705,12 @@ def _run_test_in_docker(project, test_type, *, toolchain="none", **kwargs):
         # auto-discovers any .opp in cwd (the install dir, set by entrypoint),
         # else falls back to a default SimulationProject rooted there.
 
-    docker_cmd.append(image)
-    docker_cmd += container_args
+    podman_cmd.append(image)
+    podman_cmd += container_args
 
     start = time.time()
     try:
-        result = run_external(docker_cmd, label=f"docker:{image}")
+        result = run_external(podman_cmd, label=f"podman:{image}")
         duration = time.time() - start
     finally:
         if worktree_path:

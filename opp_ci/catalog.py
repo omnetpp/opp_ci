@@ -53,7 +53,7 @@ def seed_projects(session):
 
 
 def load_platforms_catalog():
-    """Read opp_ci/docker/platforms.yml. Returns {} if the file is missing.
+    """Read opp_ci/podman/platforms.yml. Returns {} if the file is missing.
 
     Kept here so both seed_platforms() and any future caller (e.g. a one-shot
     web "seed from catalog" button) read the same source.
@@ -61,7 +61,7 @@ def load_platforms_catalog():
     try:
         import importlib.resources
         import yaml
-        path = importlib.resources.files("opp_ci").joinpath("docker/platforms.yml")
+        path = importlib.resources.files("opp_ci").joinpath("podman/platforms.yml")
         with open(path) as f:
             return yaml.safe_load(f) or {}
     except (ImportError, OSError, ValueError):

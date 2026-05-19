@@ -1208,18 +1208,18 @@ def workers_list(request: Request):
             tags = w.tags or []
             os_tags = [t for t in tags if t.startswith("os:")]
             compiler_tags = [t for t in tags if t.startswith("compiler:")]
-            has_docker = "docker" in tags
+            has_podman = "podman" in tags
             has_nix = "nix" in tags
             other_tags = [t for t in tags
                           if not (t.startswith("os:") or t.startswith("compiler:")
-                                  or t in ("docker", "nix"))]
+                                  or t in ("podman", "nix"))]
             rows.append({
                 "worker": w,
                 "connected": connected,
                 "heartbeat_age_seconds": age,
                 "os_tags": os_tags,
                 "compiler_tags": compiler_tags,
-                "has_docker": has_docker,
+                "has_podman": has_podman,
                 "has_nix": has_nix,
                 "other_tags": other_tags,
             })

@@ -155,7 +155,7 @@ class TestRun(Base):
     arch = Column(String, nullable=True)        # CPU architecture, e.g. "amd64", "aarch64"
     compiler = Column(String, nullable=True)
     compiler_version = Column(String, nullable=True)
-    isolation = Column(String, nullable=True)   # "none" | "docker"; None == "none"
+    isolation = Column(String, nullable=True)   # "none" | "podman"; None == "none"
     toolchain = Column(String, nullable=True)   # "none" | "nix";    None == "none"
     platform_desc = Column(String, nullable=True)
     git_ref = Column(String, nullable=True)

@@ -42,7 +42,7 @@
                 {% else %}<span class="badge badge-queued">{{ w.status }}</span>{% endif %}
             </td>
             <td>
-                {% if row.has_docker %}<span class="badge badge-passed">docker</span>{% endif %}
+                {% if row.has_podman %}<span class="badge badge-passed">podman</span>{% endif %}
                 {% if row.has_nix %}<span class="badge badge-passed">nix</span>{% endif %}
                 {% if row.os_tags or row.compiler_tags %}
                 <div style="margin-top:0.25rem; font-size:0.85rem; color:var(--muted);">
@@ -51,7 +51,7 @@
                     {% for t in row.compiler_tags %}<code>{{ t }}</code>{% if not loop.last %} {% endif %}{% endfor %}
                 </div>
                 {% endif %}
-                {% if not (row.has_docker or row.has_nix or row.os_tags or row.compiler_tags) %}
+                {% if not (row.has_podman or row.has_nix or row.os_tags or row.compiler_tags) %}
                 <span style="color:var(--muted);">-</span>
                 {% endif %}
             </td>

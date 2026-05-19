@@ -39,7 +39,7 @@ web = [
 client = [
     "requests",
 ]
-docker = [
+podman = [
     "jinja2",
     "pyyaml",
 ]
@@ -55,7 +55,7 @@ opp_ci = "opp_ci.cli:main"
 include = ["opp_ci*"]
 
 [tool.setuptools.package-data]
-opp_ci = ["docker/*.j2", "docker/*.yml"]
+opp_ci = ["podman/*.j2", "podman/*.yml"]
 
 [tool.setuptools_scm]
 write_to = "opp_ci/_version.py"
