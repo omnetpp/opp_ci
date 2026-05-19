@@ -41,7 +41,7 @@ opp_ci/
 ├── dependency.py       — resolve and pin dependency versions
 ├── compatibility.py    — pass/fail aggregation across version pairs
 ├── notes.py            — formatter for git note payloads
-├── docker/             — Docker images for isolated builds
+├── podman/            — Container images for isolated builds (Podman)
 ├── db/
 │   ├── models.py       — SQLAlchemy models
 │   ├── connection.py   — engine + session factory
@@ -87,17 +87,20 @@ isolation × toolchain combinations:
 |---|---|---|
 | `none` | `none` | Direct subprocess on the host using the host's installed compilers and opp_repl. |
 | `none` | `nix` | `opp_env install <pkg-version>` then `opp_env run <pkg-version> -c <cmd>`. Reproducible Nix env. |
-| `docker` | `none` | Run inside a Docker image with the host's project tree mounted. Image picked by `--os` / `--os-version` / `--compiler`. |
-| `docker` | `nix` | Run inside Docker, with opp_env/Nix inside the container. |
+| `podman` | `none` | Run inside a Podman container with the host's project tree mounted. Image picked by `--os` / `--os-version` / `--compiler`. |
+| `podman` | `nix` | Run inside Podman, with opp_env/Nix inside the container. |
 
 Regardless of mode, the executor:
 
-1. Asks opp_repl for structured per-test results via
-   `--result-file <tmp>` (or parses the last JSON line when running
-   with `--output-format json`).
+1. Obtains structured per-test results from opp_repl. The direct path
+   (`isolation=none, toolchain=none`) imports `opp_repl.test.*` and calls
+   the test function in-process, then inspects the returned object via
+   `is_all_results_expected()` / `to_dict()` for the PASS/FAIL verdict
+   and per-test details. The subprocess paths (opp_env or podman) treat
+   the wrapper's exit code as the verdict — no JSON file is read back.
 2. Captures the human-readable stdout/stderr with ANSI codes intact.
 3. Returns `(result_code, stdout, stderr, details_json)` to the caller
-   (worker or CLI).
+   (worker or CLI). `details_json` is populated only on the direct path.
 
 ## Scheduler
 

@@ -25,7 +25,7 @@ with `opp_ci serve` (default `127.0.0.1:8000`).
 | `/os` | Known OS / OS-version combinations seen in runs |
 | `/compilers` | Known compiler / compiler-version combinations seen in runs |
 | `/admin` | Workers, API tokens, project registration, system health |
-| `/commit/{sha}` | Per-commit summary (used by git notes) |
+| `/commits/{project}/{sha}` | Per-commit summary for a project (linked from git notes) |
 
 ## Results page filter and display modes
 

@@ -16,7 +16,7 @@ how it relates to the others. For the layered architecture see
 | Tool | Role |
 |---|---|
 | **opp_env** | Installs and manages versions of supported simulation projects in isolated Nix environments. Provides the project catalog, version list, dependency graph (`required_projects`), smoke test commands, and build commands. Invoked as `opp_env install <pkg-version>` and `opp_env run <pkg-version> -c <cmd>`. |
-| **opp_repl** | Runs the tests (smoke, fingerprint, statistical, feature, chart, …) inside the environment set up by `opp_env`. Always prints human-readable text to stdout; structured per-test results go to a JSON file passed via `--result-file` or to the last line of stdout when `--output-format json` is used. |
+| **opp_repl** | Runs the tests (smoke, fingerprint, statistical, feature, chart, …) inside the environment set up by `opp_env`. Always prints human-readable text to stdout. opp_ci's executor talks to opp_repl two ways: by importing `opp_repl.test.*` and calling the test functions in-process (the direct path; reads per-test details from the returned object's `to_dict()`), or as a subprocess where the wrapper script's exit code is the verdict. |
 | **opp_ci** | The orchestrator: expands test matrices, schedules jobs, invokes `opp_env` and `opp_repl`, stores results in the database, integrates with GitHub. No test logic of its own. |
 
 The boundary is strict: opp_ci never duplicates test logic, and opp_repl
@@ -48,7 +48,7 @@ The in-process component ([opp_ci/executor.py](../opp_ci/executor.py))
 that actually invokes test commands. Lives both inside workers and
 inside the CLI for local runs. Selects one of four combinations of
 [Isolation](#isolation) × [Toolchain](#toolchain): direct host,
-opp_env-on-host, Docker, and Docker-with-opp_env. Always returns
+opp_env-on-host, Podman, and Podman-with-opp_env. Always returns
 `(result_code, stdout, stderr, details_json)` to its caller.
 
 ### Scheduler
@@ -205,7 +205,7 @@ axes:
 | OS version | per OS |
 | Compiler type | gcc, clang |
 | Compiler version | per compiler |
-| Isolation | none, docker |
+| Isolation | none, podman |
 | Toolchain | none, nix |
 | Features | INET feature flags |
 | Tests | build, fingerprint, statistical, chart, feature, module, unit, packet, queueing, protocol, validation, smoke, sanitizer, speed |
@@ -270,8 +270,9 @@ the `opp_env_adapter` module) to:
    based on opp_env's `required_projects` constraints.
 3. **Generate smoke tests** — the project's built-in
    `smoke_test_commands` are used as the baseline test.
-4. **Discover available versions** — `opp_env list` populates the
-   version selectors in the web UI and matrix configs.
+4. **Discover available versions** — `opp_env info --raw` is parsed by
+   `opp_env_adapter` to populate the version selectors in the web UI and
+   matrix configs.
 
 `opp_ci sync-catalog` upserts the discovered projects and versions into
 opp_ci's database and generates default matrices for new entries.
@@ -283,7 +284,7 @@ opp_ci's database and generates default matrices for new entries.
 ### Isolation
 
 How the job's filesystem and OS are isolated from the host. `none` =
-direct subprocess on the worker; `docker` = inside a Docker image
+direct subprocess on the worker; `podman` = inside a Podman container image
 chosen from the (os, os_version, compiler) coordinates. Image building
 is driven by `opp_ci image build` / `image build-matrix`.
 
@@ -297,7 +298,7 @@ giving a fully reproducible build environment. Orthogonal to
 ### Capability tag
 
 A free-form string on a [Worker](#worker-model) declaring what it can do
-(`linux`, `arm64`, `gcc-13`, `clang-18`, `perf-counters`, `docker`,
+(`linux`, `arm64`, `gcc-13`, `clang-18`, `perf-counters`, `podman`,
 `nix`). The [scheduler](#scheduler) matches each job's required tags
 against worker tags before dispatch. Set at registration time
 (`--tags` or `--auto-tags`).
@@ -555,10 +556,12 @@ opp_ci addresses all of these:
   every CI job gets the exact same dependencies.
 - **opp_repl is the test engine** — opp_ci orchestrates; opp_repl
   builds and runs tests. No test logic is duplicated.
-- **Structured results via opp_repl `--result-file`** — human-readable
-  text stays in stdout; opp_ci reads JSON from the result file for
-  per-test breakdowns. ANSI codes are stored raw in the DB and
-  converted to colored HTML at render time.
+- **Structured results from opp_repl in-process** — human-readable text
+  goes to stdout; on the direct path (isolation=none, toolchain=none)
+  opp_ci imports the test function and reads per-test details from the
+  returned object's `to_dict()`. Subprocess paths use the wrapper's exit
+  code as the verdict. ANSI codes are stored raw in the DB and converted
+  to colored HTML at render time.
 - **Postgres for persistence** — structured querying of historical
   results, easy aggregation for dashboards. SQLite is supported for
   local development.

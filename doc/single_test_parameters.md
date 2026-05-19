@@ -192,7 +192,7 @@ The target operating system, recorded as two columns.
 | TestRun columns | `os`, `os_version` |
 | Default | `None` (let the worker decide) |
 
-Under `isolation=docker`, both fields are required — the executor
+Under `isolation=podman`, both fields are required — the executor
 picks the runner image by exact match on
 `(os, os_version, compiler, compiler_version)`. Under
 `isolation=none`, they constrain dispatch to workers tagged
@@ -213,7 +213,7 @@ CPU architecture. Free-form string; common values are `amd64` and
 When omitted, the run is unconstrained on architecture — any worker
 matching the other tags can pick it up. When set, only workers
 tagged `arch:<value>` are eligible (under `isolation=none`); under
-`isolation=docker` the value selects an arch-specific image variant.
+`isolation=podman` the value selects an arch-specific image variant.
 
 ### `compiler` and `compiler_version`
 
@@ -226,7 +226,7 @@ The C++ compiler.
 | TestRun columns | `compiler`, `compiler_version` |
 | Default | `None` |
 
-Under `isolation=docker`, both are required and form part of the
+Under `isolation=podman`, both are required and form part of the
 image-tag key. Under `isolation=none, toolchain=none`, they constrain
 worker dispatch via the `compiler:<name>-<version>` tag.
 
@@ -266,13 +266,13 @@ How the job's filesystem and OS are isolated from the host.
 
 | Aspect | Value |
 |---|---|
-| CLI flag | `--isolation {none\|docker}` |
+| CLI flag | `--isolation {none\|podman}` |
 | REST field | `isolation` |
 | TestRun column | `isolation` |
 | Default | `none` (CLI); `None` → treated as `none` (REST) |
 
 - `none` — direct subprocess on the worker, host packages.
-- `docker` — run inside a runner image keyed by
+- `podman` — run inside a Podman runner image keyed by
   `(os, os_version, compiler, compiler_version)`. Image building is
   driven by `opp_ci image build` / `image build-matrix`.
 
@@ -465,7 +465,7 @@ single-test row knows it came from a GitHub event.
 
 ## Required vs. optional summary
 
-| Field | Required for `opp_ci run` | Required for `POST /api/runs` | Required under `isolation=docker` |
+| Field | Required for `opp_ci run` | Required for `POST /api/runs` | Required under `isolation=podman` |
 |---|---|---|---|
 | `project` | yes | yes | yes |
 | `test_type` | yes | yes | yes |
@@ -476,7 +476,7 @@ single-test row knows it came from a GitHub event.
 | `arch` | no | no | no |
 | `compiler` | no | no | **yes** |
 | `compiler_version` | no | no | **yes** |
-| `isolation` | no (defaults `none`) | no | yes (to select `docker`) |
+| `isolation` | no (defaults `none`) | no | yes (to select `podman`) |
 | `toolchain` | no (defaults `none`) | no | no |
 | `pin` | no | n/a | no |
 | `force` | no | no | no |
@@ -497,7 +497,7 @@ opp_ci run \
     --os Ubuntu --os-version 26.04 \
     --arch amd64 \
     --compiler clang --compiler-version 22 \
-    --isolation docker --toolchain none \
+    --isolation podman --toolchain none \
     --pin omnetpp=6.1 \
     --skip-install
 ```
@@ -514,7 +514,7 @@ os_version       26.04
 arch             amd64
 compiler         clang
 compiler_version 22
-isolation        docker
+isolation        podman
 toolchain        none
 platform_desc    Ubuntu 26.04 / amd64 / clang-22
 resolved_deps    {"omnetpp": "6.1"}
@@ -537,8 +537,11 @@ ci.submit_run(
     git_ref="topic/my-feature",
     os="Ubuntu", os_version="26.04", arch="amd64",
     compiler="clang", compiler_version="22",
+    isolation="podman", toolchain="none",
+    force=False,
 )
-# isolation/toolchain default to None → treated as "none" by the executor
+# `--pin` is currently CLI-only (resolves dependencies locally before
+# submission); pass already-resolved pins via the matrix path instead.
 ```
 
 See [python_client.md](python_client.md) for the full client API.

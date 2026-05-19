@@ -11,6 +11,11 @@ from opp_ci.client import OppCiClient
 ci = OppCiClient(url="https://ci.omnetpp.org/api", token="<submitter-token>")
 ```
 
+Note the `/api` suffix on the URL — `OppCiClient` does not prepend it.
+The `--remote` CLI mode, by contrast, takes the bare coordinator URL
+(`https://ci.omnetpp.org`) in `OPP_CI_COORDINATOR_URL` and appends `/api`
+on your behalf.
+
 Token roles are described in [rest_api.md](rest_api.md#authentication).
 Use a `submitter` token for run submission and a `readonly` token for
 read-only scripts.
@@ -21,6 +26,16 @@ read-only scripts.
 # Single run
 run = ci.submit_run(project="inet", test_type="smoke", git_ref="topic/my-feature")
 print(run)  # {"id": 42, "status": "queued"}
+
+# Fully-specified run on a podman/host-toolchain worker
+ci.submit_run(
+    project="inet-4.5", test_type="fingerprint",
+    mode="release", git_ref="master",
+    os="Ubuntu", os_version="26.04", arch="amd64",
+    compiler="clang", compiler_version="22",
+    isolation="podman", toolchain="none",
+    force=True,
+)
 
 # All jobs in a named matrix
 ci.submit_matrix(matrix_name="inet-full")

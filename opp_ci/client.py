@@ -35,7 +35,8 @@ class OppCiClient:
 
     def submit_run(self, project, test_type, mode=None, git_ref=None,
                    os=None, os_version=None, arch=None,
-                   compiler=None, compiler_version=None):
+                   compiler=None, compiler_version=None,
+                   isolation=None, toolchain=None, force=False):
         """Submit a single test run. Returns {"id": ..., "status": "queued"}."""
         payload = {"project": project, "test_type": test_type}
         if mode:
@@ -52,6 +53,12 @@ class OppCiClient:
             payload["compiler"] = compiler
         if compiler_version:
             payload["compiler_version"] = compiler_version
+        if isolation:
+            payload["isolation"] = isolation
+        if toolchain:
+            payload["toolchain"] = toolchain
+        if force:
+            payload["force"] = True
         return self._post("/runs", payload)
 
     def submit_matrix(self, matrix_name):

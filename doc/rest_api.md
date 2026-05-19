@@ -63,7 +63,7 @@ Implementation: `opp_ci/auth.py`.
 | Endpoint | Method | Role | Purpose |
 |---|---|---|---|
 | `/api/notes/{owner}/{repo}` | GET | readonly | Pending notes for a repo (consumed by `ci-notes.yml`) |
-| `/api/notes/{owner}/{repo}/ack` | POST | readonly | Acknowledge synced notes |
+| `/api/notes/{owner}/{repo}/ack` | POST | readonly | Acknowledge synced commit SHAs (body: `{"shas": [...]}`). Currently a no-op log line. |
 
 ## Example: submit a run remotely
 

@@ -31,11 +31,15 @@ After this, every `git fetch` or `git pull` will update the local CI notes.
 git log --notes=ci
 ```
 
-Each tested commit will show a one-line summary like:
+Each tested commit will show a multi-line summary like:
 
 ```
 Notes (ci):
-    ✅ smoke PASS | ❌ fingerprint 46 PASS, 2 FAIL | https://ci.omnetpp.org/runs/42
+    ✅ PASS 2/2
+      ✅ build/release  PASS  1.2s  #5
+      ✅ smoke/release  PASS  4.3s  #6
+
+    https://ci.omnetpp.org/commits/inet/44fad47c
 ```
 
 ### lazygit
@@ -68,16 +72,42 @@ To enable notes delivery for a repository:
 
 ## Note format
 
-Each note is a single line with pipe-separated sections:
+Each note is a multi-line block produced by
+[`format_note()`](../opp_ci/notes.py): a one-line summary header, an
+indented detail line per run, a blank line, then the URL to the commit
+page in the coordinator's web UI.
 
 ```
-<icon> <test_type> <summary> | <icon> <test_type> <summary> | <url>
+<summary>
+  <icon> <test_type>[/<mode>]  <STATUS>  <duration>  #<run_id>
+  <icon> <test_type>[/<mode>]  <STATUS>  <duration>  #<run_id>
+  ...
+
+<url>
 ```
+
+The summary header is one of:
+- `✅ PASS N/N`             — every run passed
+- `❌ FAIL 0/N`             — every run failed or errored
+- `❌ a PASS, b FAIL[, c ERROR] (N total)` — mixed outcome
 
 Examples:
-- `✅ smoke PASS | https://ci.omnetpp.org/runs/42`
-- `✅ smoke PASS | ❌ fingerprint 46 PASS, 2 FAIL | https://ci.omnetpp.org/runs/42`
-- `✅ smoke PASS | ✅ fingerprint 48/48 PASS | https://ci.omnetpp.org/runs/42`
+
+```
+✅ PASS 1/1
+  ✅ smoke/release  PASS  4.3s  #42
+
+https://ci.omnetpp.org/commits/inet/44fad47c
+```
+
+```
+❌ 46 PASS, 2 FAIL (48 total)
+  ✅ smoke/release        PASS  4.3s  #41
+  ❌ fingerprint/release  FAIL  62.1s  #42
+  ...
+
+https://ci.omnetpp.org/commits/inet/44fad47c
+```
 
 ## Configuration
 

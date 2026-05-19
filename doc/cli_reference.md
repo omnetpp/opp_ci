@@ -24,7 +24,7 @@ For full per-command flags, run `opp_ci <command> --help`.
 
 | Command | Purpose |
 |---|---|
-| `opp_ci run` | Run a single test for a project. Required: `--project`, `--test`. Common: `--ref`, `--mode`, `--isolation {none\|docker}`, `--toolchain {none\|nix}`, `--os`, `--os-version`, `--compiler`, `--compiler-version`, `--pin <dep>=<ver>` (repeatable), `--force`, `--skip-install`. |
+| `opp_ci run` | Run a single test for a project. Required: `--project`, `--test`. Common: `--ref`, `--mode`, `--isolation {none\|podman}`, `--toolchain {none\|nix}`, `--os`, `--os-version`, `--compiler`, `--compiler-version`, `--pin <dep>=<ver>` (repeatable), `--force`, `--skip-install`. |
 | `opp_ci run-matrix --matrix NAME` | Expand a named matrix and run all jobs. Options: `--force`, `--skip-install`. |
 
 Supported tests (comma-separated for `--test`): `smoke`,
@@ -103,11 +103,11 @@ See [github_integration.md](github_integration.md).
 
 See [web_ui.md](web_ui.md).
 
-## Docker images (`opp_ci image ...`)
+## Container images (`opp_ci image ...`)
 
 | Command | Purpose |
 |---|---|
-| `image build` | Build one of the bundled Docker images used for `--isolation docker` runs. |
+| `image build` | Build one of the bundled Podman images used for `--isolation podman` runs. |
 | `image build-matrix` | Build all images required by a matrix. |
 
 ## Environment
@@ -139,6 +139,19 @@ opp_ci run-matrix --matrix fifo-default --skip-install
 export OPP_CI_COORDINATOR_URL=https://ci.omnetpp.org
 export OPP_CI_API_TOKEN=<submitter-token>
 
-opp_ci --remote run --project inet-4.5 --test smoke,fingerprint --ref master
+opp_ci --remote run --project inet-4.5 --test smoke,fingerprint --ref master \
+    --mode release --isolation podman --toolchain none \
+    --os Ubuntu --os-version 26.04 --arch amd64 \
+    --compiler clang --compiler-version 22 --force
 opp_ci --remote list-runs --project inet --status FAIL
 ```
+
+`OPP_CI_COORDINATOR_URL` is the coordinator's host URL **without** the
+`/api` suffix — the CLI appends it when calling the REST router. (Using
+`OppCiClient` directly from Python takes the full `/api` URL; see
+[python_client.md](python_client.md).)
+
+`--remote run` forwards all the run-shaping flags (`--mode`, `--isolation`,
+`--toolchain`, `--os`/`--os-version`/`--arch`, `--compiler`/`--compiler-version`,
+`--force`). `--pin` is the exception: dependency resolution happens locally
+before submission, so pins are not currently forwarded over `--remote`.
