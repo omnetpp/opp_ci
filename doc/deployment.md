@@ -47,7 +47,7 @@ individual runs or matrices, or set it as the matrix default.
 ### Web server
 
 ```bash
-opp_ci serve --host 0.0.0.0 --port 8000
+opp_ci serve --host 0.0.0.0 --port 8080
 ```
 
 Always place behind a reverse proxy with HTTPS (Caddy or nginx + Let's
@@ -131,7 +131,7 @@ gh webhook forward \
 ### Using ngrok / cloudflared
 
 ```bash
-ngrok http 8000
+ngrok http 8080
 # Register the printed URL in the repo's webhook settings.
 ```
 
