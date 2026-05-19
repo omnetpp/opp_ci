@@ -85,7 +85,7 @@ opp_env catalog, register one with `opp_ci add-project` (see
 ### `test_type`
 
 What kind of test to run. The executor uses this to dispatch into
-opp_repl via [COMMAND_MAP](../opp_ci/executor.py#L105).
+opp_repl via [COMMAND_MAP](../opp_ci/executor.py).
 
 | Aspect | Value |
 |---|---|
@@ -109,7 +109,7 @@ API accepts one value per call.
 
 These together determine whether the run is considered a duplicate of
 an earlier one — `find_existing_run()` in
-[executor.py:68](../opp_ci/executor.py#L68) keys on the full tuple.
+[executor.py](../opp_ci/executor.py) keys on the full tuple.
 Use `--force` to bypass the duplicate check. The full tuple is
 `(project, version, test_type, mode, git_ref, os, os_version, arch,
 compiler, compiler_version, isolation, toolchain)`.
@@ -145,12 +145,12 @@ that into `commit_sha`.
 When `git_ref` is given, the executor clones (or fetches into) the
 project's GitHub repo in the worker cache and creates a worktree at
 that ref. See
-[_ensure_github_clone()](../opp_ci/executor.py#L346) and
-[_resolve_project_dir()](../opp_ci/executor.py#L371).
+[_ensure_github_clone()](../opp_ci/executor.py) and
+[_resolve_project_dir()](../opp_ci/executor.py).
 
 Under `toolchain=nix`, a non-trivial `git_ref` triggers the `-git`
 variant switch in
-[resolve_git_project()](../opp_ci/executor.py#L190): the project name
+[resolve_git_project()](../opp_ci/executor.py): the project name
 is replaced with its `-git` form (e.g. `inet-git`), and the commit is
 pinned via the `OPP_ENV_GIT_REF` environment variable. Under other
 toolchains, the ref is checked out conventionally.
@@ -237,7 +237,7 @@ Under `toolchain=nix`, opp_env only exposes a small allow-list:
 | `gcc` | `7` |
 | `clang` | unspecified |
 
-See [_NIX_SUPPORTED_COMPILERS](../opp_ci/scheduler.py#L150). The
+See [_NIX_SUPPORTED_COMPILERS](../opp_ci/scheduler.py). The
 validator runs at matrix-expansion time; the single-test path
 delegates to opp_env, so an unsupported pair under `toolchain=nix`
 will fail at install/run time rather than at submit time.
@@ -246,7 +246,7 @@ will fail at install/run time rather than at submit time.
 
 A human-readable summary, e.g. `Ubuntu 24.04 / amd64 / clang-22`,
 built by
-[_build_platform_desc()](../opp_ci/scheduler.py#L180) from the four
+[_build_platform_desc()](../opp_ci/scheduler.py) from the four
 platform columns. Not settable directly; recomputed on every
 submission.
 
@@ -351,7 +351,7 @@ Used by the executor to locate the source tree, set
 Set today only via the matrix (the matrix's `opp_file` field is
 copied onto each expanded run). For ad-hoc runs, the executor
 auto-discovers `*.opp` files in the current directory; see
-[_load_workspace()](../opp_ci/executor.py#L154) for the resolution
+[_load_workspace()](../opp_ci/executor.py) for the resolution
 order.
 
 ---
@@ -371,7 +371,7 @@ Bypass the duplicate-run check.
 | REST field | `force` (default `false`) |
 
 Without `--force`, the submitter asks
-[find_existing_run()](../opp_ci/executor.py#L68) whether a run with
+[find_existing_run()](../opp_ci/executor.py) whether a run with
 the same `(project, version, test_type, mode, git_ref, os, os_version,
 arch, compiler, compiler_version, isolation, toolchain)` already
 exists. If it does, the new submission is skipped (CLI prints a
@@ -404,7 +404,7 @@ single test."
 
 Lifecycle state: `queued` → `running` → terminal
 (`PASS` / `FAIL` / `ERROR`). Enum in
-[TestRunStatus](../opp_ci/db/models.py#L138). `ERROR` distinguishes
+[TestRunStatus](../opp_ci/db/models.py). `ERROR` distinguishes
 infrastructure failure (executor crash, install failure) from
 genuine test failure.
 

@@ -72,7 +72,7 @@ opp_ci/
 | **Worker** | name (unique), token, tags JSON, concurrency, status, last_heartbeat, current_job_count |
 | **ApiToken** | token, name, role (readonly/submitter/worker/admin), enabled, created_at |
 | **AutoTestRule** | project FK, rule_type (branch/pr/tag), pattern (glob), matrix FK, enabled |
-| **TestRun** | matrix entry, worker FK, git_ref, version, timestamp, status (queued/running/PASS/FAIL/ERROR), trigger (manual/webhook/schedule/remote), `github_*` fields |
+| **TestRun** | matrix FK, worker FK, git_ref, version, plus plain `project` / `os` / `os_version` / `arch` / `compiler` / `compiler_version` string columns (no FK to Project / OS / Compiler — denormalised by design, so a run record survives catalog edits). Also: timestamp, status (queued/running/PASS/FAIL/ERROR), trigger (manual/webhook/schedule/remote), `github_*` fields. |
 | **TestResult** | run FK, result_code, stdout/stderr (raw with ANSI), `details` JSON (per-test breakdown from opp_repl). Per-test name/duration live inside `details`, not as columns. |
 
 Connection pool and engine factory in `opp_ci/db/connection.py`;

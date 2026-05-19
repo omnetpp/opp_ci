@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 # Recreate the opp_ci database from scratch:
-# - Seed Tier 1 projects and default matrices
-# - Import Tier 2 projects from opp_env catalog
+# - Seed the core projects, platforms, and default matrices.
+# - Import the remaining projects + versions from the opp_env catalog.
 #
 
 set -e

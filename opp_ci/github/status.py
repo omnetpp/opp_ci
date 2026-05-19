@@ -14,9 +14,46 @@ from opp_ci.config import COORDINATOR_URL
 from opp_ci.db.connection import SessionLocal
 from opp_ci.db.models import TestRun
 from opp_ci.github.client import GitHubClient
-from opp_ci.github.webhook import format_results_comment
 
 _logger = logging.getLogger(__name__)
+
+
+def format_results_comment(runs):
+    """
+    Format a Markdown PR comment body summarizing a set of test runs.
+
+    Args:
+        runs: list of TestRun objects (with results loaded)
+
+    Returns:
+        Markdown string
+    """
+    if not runs:
+        return "**opp_ci**: No test results yet."
+
+    total = len(runs)
+    passed = sum(1 for r in runs if r.status.value == "PASS")
+    failed = sum(1 for r in runs if r.status.value == "FAIL")
+    errors = sum(1 for r in runs if r.status.value == "ERROR")
+    running = sum(1 for r in runs if r.status.value in ("running", "queued"))
+
+    if failed == 0 and errors == 0 and running == 0:
+        header = f"✅ **opp_ci**: All {total} tests passed"
+    elif running > 0:
+        header = f"⏳ **opp_ci**: {passed}/{total} passed, {running} still running"
+    else:
+        header = f"❌ **opp_ci**: {passed}/{total} passed, {failed} failed, {errors} errors"
+
+    lines = [header, "", "| Test | Project | Status | Duration |", "|---|---|---|---|"]
+    for run in runs:
+        status_emoji = {
+            "PASS": "✅", "FAIL": "❌", "ERROR": "⚠️",
+            "running": "🔄", "queued": "⏳",
+        }.get(run.status.value, "❓")
+        dur = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
+        lines.append(f"| {run.test_type} | {run.project} | {status_emoji} {run.status.value} | {dur} |")
+
+    return "\n".join(lines)
 
 
 def update_github_status(run_id):

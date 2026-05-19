@@ -37,7 +37,7 @@ value (typically `None` or a hard-coded default).
 ```
 
 Expansion is a straight `itertools.product` over the resolved axis
-lists ([scheduler.py:267](../opp_ci/scheduler.py#L267)). A 2 × 2 × 2 ×
+lists ([scheduler.py](../opp_ci/scheduler.py)). A 2 × 2 × 2 ×
 2 × 2 × 2 config produces 64 jobs; one axis with 10 values turns that
 into 640. There is no implicit pruning — every combination becomes a
 queued `TestRun`.
@@ -138,7 +138,7 @@ depends on GitHub state and requires the project to have
 `github_owner` and `github_repo` set.
 
 If both keys are present, `refs` wins; `ref_range` is ignored. The CLI
-enforces this as a hard error ([cli.py:607](../opp_ci/cli.py#L607)).
+enforces this as a hard error ([cli.py](../opp_ci/cli.py)).
 
 ### Interaction with toolchain
 
@@ -146,7 +146,7 @@ When [`toolchain == "nix"`](#axis-toolchain), the executor cannot
 check out an arbitrary ref against a released opp_env package — it
 switches the project to its `-git` variant (e.g. `inet-git`) and pins
 the commit via the `OPP_ENV_GIT_REF` env var. See
-[resolve_git_project()](../opp_ci/executor.py#L187). Under other
+[resolve_git_project()](../opp_ci/executor.py). Under other
 toolchains, the ref is fed straight to git.
 
 ---
@@ -162,7 +162,7 @@ toolchains, the ref is fed straight to git.
 
 What kind of test each job runs. Recorded on the `TestRun` as
 `test_type`; the executor uses it to pick the opp_repl entry point via
-[COMMAND_MAP](../opp_ci/executor.py#L102).
+[COMMAND_MAP](../opp_ci/executor.py).
 
 | Value | What it runs | opp_repl entry point |
 |---|---|---|
@@ -231,7 +231,7 @@ The OS dimension supports two input styles, detected by whether the
 ```
 
 Each string is split on the last space into `(name, version)` by
-[_parse_os()](../opp_ci/scheduler.py#L65). The values are taken as a
+[_parse_os()](../opp_ci/scheduler.py). The values are taken as a
 list — no further cross-product. Use this when the OS/version pairs
 you want are known, finite, and irregular.
 
@@ -301,7 +301,7 @@ never receive arch-pinned jobs.
 
 Same two styles as the [OS axis](#axis-operating-system), with the
 combined string split on the last hyphen by
-[_parse_compiler()](../opp_ci/scheduler.py#L75):
+[_parse_compiler()](../opp_ci/scheduler.py):
 
 ```json
 { "compiler": ["gcc-14", "clang-18"] }
@@ -325,7 +325,7 @@ exposes only:
 | `clang` | unspecified (`None`) — opp_env's `llvmPackages.stdenv` |
 
 This allow-list lives in
-[_NIX_SUPPORTED_COMPILERS](../opp_ci/scheduler.py#L132). Naming any
+[_NIX_SUPPORTED_COMPILERS](../opp_ci/scheduler.py). Naming any
 other pair under `toolchain=nix` causes expansion to raise
 `ValueError`. The intent is to keep the matrix honest: silently
 falling back to opp_env's default compiler would make the recorded
@@ -363,7 +363,7 @@ How the job's filesystem and OS are isolated from the host:
   `image build-matrix`.
 
 A bare string is auto-promoted to a single-element list
-([scheduler.py:113](../opp_ci/scheduler.py#L113)), so
+([scheduler.py](../opp_ci/scheduler.py)), so
 `"isolation": "podman"` and `"isolation": ["podman"]` behave
 identically.
 
@@ -443,7 +443,7 @@ name to a list of versions to test against:
 { "deps": { "omnetpp": ["6.1", "6.0"], "inet": ["4.5"] } }
 ```
 
-[_resolve_deps_axis()](../opp_ci/scheduler.py#L172) cross-products the
+[_resolve_deps_axis()](../opp_ci/scheduler.py) cross-products the
 *per-dep* version lists into a list of dicts, one dict per
 combination:
 
@@ -501,7 +501,7 @@ axis names them, because they are derived from the others:
 
 | Field | Source |
 |---|---|
-| `platform_desc` | `"<os> <os_version> / <compiler>-<compiler_version>"` — built by [_build_platform_desc()](../opp_ci/scheduler.py#L162). |
+| `platform_desc` | `"<os> <os_version> / <compiler>-<compiler_version>"` — built by [_build_platform_desc()](../opp_ci/scheduler.py). |
 | `commit_sha` | Filled in at worker time once `git_ref` resolves to a concrete SHA. |
 | `resolved_deps` | Either the `deps` axis pin or, if absent, the Version's stored `resolved_dependencies`. |
 | `trigger` | Set by the caller — `manual`, `remote`, `webhook`, or `schedule`. Not part of the matrix. |

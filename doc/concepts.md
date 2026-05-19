@@ -207,7 +207,7 @@ axes:
 | Compiler version | per compiler |
 | Isolation | none, podman |
 | Toolchain | none, nix |
-| Features | INET feature flags |
+| Features | INET feature flags — *reserved; not yet implemented by `expand_matrix()`* |
 | Tests | the [test types](#test-type) defined in `COMMAND_MAP` — see [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test-types) for the canonical list |
 
 Not every combination is tested — the matrix config defines which axes

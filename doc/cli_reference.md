@@ -110,7 +110,7 @@ See [web_ui.md](web_ui.md).
 
 | Command | Purpose |
 |---|---|
-| `image build` | Build one of the bundled Podman images used for `--isolation podman` runs. |
+| `image build` | Build one of the bundled Podman images used for `--isolation podman` runs. `--toolchain {host\|nix}` (note: `host` here, not `none` as on `run` / `create-matrix`), `--os`, `--os-version`, `--compiler`, `--compiler-version`. |
 | `image build-matrix` | Build all images required by a matrix. |
 
 ## Environment
