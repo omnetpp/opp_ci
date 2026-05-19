@@ -98,7 +98,13 @@ def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
             os_name, os_version, arch, compiler, compiler_version, pins, force, skip_install):
     """Run test(s) for a project and store the results."""
     if ctx.obj.get("remote"):
-        _run_remote(project, test_types, git_ref)
+        _run_remote(
+            project, test_types, git_ref,
+            mode=mode, isolation=isolation, toolchain=toolchain,
+            os_name=os_name, os_version=os_version, arch=arch,
+            compiler=compiler, compiler_version=compiler_version,
+            pins=pins, force=force,
+        )
         return
 
     from opp_ci.dependency import resolve_dependencies, parse_pins, format_resolved_deps
@@ -201,7 +207,10 @@ def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
         session.close()
 
 
-def _run_remote(project, test_types, git_ref):
+def _run_remote(project, test_types, git_ref, *, mode=None,
+                isolation=None, toolchain=None, os_name=None, os_version=None,
+                arch=None, compiler=None, compiler_version=None,
+                pins=None, force=False):
     """Submit test run(s) to the remote coordinator."""
     from opp_ci.config import COORDINATOR_URL, API_TOKEN
     from opp_ci.client import OppCiClient
@@ -210,13 +219,28 @@ def _run_remote(project, test_types, git_ref):
         click.echo("ERROR: Set OPP_CI_API_TOKEN env var for remote submission.")
         return
 
-    client = OppCiClient(url=COORDINATOR_URL, token=API_TOKEN)
+    if pins:
+        click.echo("WARNING: --pin is not yet supported over --remote; ignoring.")
+
+    # COORDINATOR_URL points at the host (e.g. http://ci:8080); the REST
+    # router is mounted under /api. Append it here so callers don't have
+    # to know about the prefix.
+    base = COORDINATOR_URL.rstrip("/")
+    api_url = base if base.endswith("/api") else base + "/api"
+
+    client = OppCiClient(url=api_url, token=API_TOKEN)
     for test_type in test_types.split(","):
         test_type = test_type.strip()
         if not test_type:
             continue
         try:
-            result = client.submit_run(project=project, test_type=test_type, git_ref=git_ref)
+            result = client.submit_run(
+                project=project, test_type=test_type, git_ref=git_ref,
+                mode=mode, isolation=isolation, toolchain=toolchain,
+                os=os_name, os_version=os_version, arch=arch,
+                compiler=compiler, compiler_version=compiler_version,
+                force=force,
+            )
             click.echo(f"Submitted run #{result['id']}: {project} / {test_type} → {result['status']}")
         except Exception as e:
             click.echo(f"ERROR submitting {project}/{test_type}: {e}")

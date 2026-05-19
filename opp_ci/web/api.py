@@ -21,7 +21,8 @@ Endpoints:
     GET  /api/github/rules      — list auto-test rules (readonly+)
     POST /api/github/rules      — create auto-test rule (admin)
 
-    GET  /api/notes/{owner}/{repo} — git notes per commit (readonly+)
+    GET  /api/notes/{owner}/{repo}     — git notes per commit (readonly+)
+    POST /api/notes/{owner}/{repo}/ack — acknowledge synced commit SHAs (readonly+)
 """
 
 import datetime
@@ -867,6 +868,27 @@ async def get_notes(
         return get_notes_for_repo(session, owner, repo)
     finally:
         session.close()
+
+
+class AckNotesRequest(BaseModel):
+    shas: list[str] = Field(default_factory=list)
+
+
+@router.post("/notes/{owner}/{repo}/ack", status_code=204)
+async def ack_notes(
+    owner: str,
+    repo: str,
+    req: AckNotesRequest,
+    _identity: dict = Depends(require_role("readonly")),
+):
+    """
+    Acknowledge that the ci-notes.yml workflow has written git notes for
+    the listed commit SHAs. Currently a no-op (logged only): the GET
+    endpoint always re-emits all finished commits, and the workflow is
+    expected to de-dupe idempotently before pushing.
+    """
+    _logger.info("Notes ack from %s/%s: %d sha(s)", owner, repo, len(req.shas))
+    return None
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
