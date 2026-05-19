@@ -1,9 +1,18 @@
 # Getting Started
 
+If you hit a snag, the [troubleshooting guide](troubleshooting.md) covers the
+common first-run problems.
+
 ## Prerequisites
 
 - Python 3.10+
 - `opp_repl` installed and on PATH (for test commands like `opp_run_smoke_tests`)
+
+opp_env is **only** required when:
+- you use `--toolchain nix` on a run (reproducible Nix environment), or
+- you run `opp_ci sync-catalog` to import the full project catalog.
+
+For the direct host-mode runs shown below, opp_repl alone is enough.
 
 For cloud deployment, you'll also need:
 - PostgreSQL
@@ -18,12 +27,22 @@ source setenv
 pip install -e .
 ```
 
+`source setenv` activates the local `.venv` (if present), exports
+`OPP_CI_ROOT`, prepends the repo's `bin/` to `PATH`, and adds the repo to
+`PYTHONPATH`. Re-source it in new shells.
+
 For PostgreSQL support:
 ```bash
 pip install -e ".[postgres]"
 ```
 
 ## Running Your First Test
+
+The example uses **fifo** — a small tutorial simulation bundled with
+`opp_repl`. It builds and runs without Nix/opp_env, so it's the fastest
+way to verify your installation. (For real projects like `inet`, see
+[Pointing opp_ci at a real project](#pointing-opp_ci-at-a-real-project)
+below.)
 
 ```bash
 opp_ci init-db
@@ -35,6 +54,33 @@ This will:
 2. Import `opp_repl.test.smoke.run_smoke_tests` and call it in-process (no Nix/opp_env needed)
 3. Read structured per-test details from the returned result's `to_dict()`
 4. Store the result (pass/fail, stdout, stderr, per-test details) in the database
+
+The full list of test types (`smoke`, `fingerprint`, `statistical`, `feature`,
+`speed`, `sanitizer`, `chart`, `release`, `build`, `opp`, `all`) and what each
+one does is in
+[test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test-types).
+
+### Pointing opp_ci at a real project
+
+For projects other than `fifo`, opp_ci's executor needs to know where each
+project's working tree lives on the host. By default it looks under
+`$OPP_CI_PROJECT_DIR/<project>` (default `OPP_CI_PROJECT_DIR=.`).
+
+The typical local-dev layout is one workspace directory with sibling
+checkouts:
+
+```
+~/workspace/
+├── opp_ci/
+├── opp_repl/
+├── inet/
+├── omnetpp/
+└── …
+```
+
+then `export OPP_CI_PROJECT_DIR=~/workspace`. Per-project overrides
+(`OPP_CI_PROJECT_DIR_INET_4_5=…`) are also available — see
+[configuration.md](configuration.md#executor-project-source-location).
 
 ## Viewing Results
 
