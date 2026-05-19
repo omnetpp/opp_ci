@@ -23,7 +23,7 @@ opp_ci serve
 ```
 
 `opp_ci.db` lands in the working directory; the web UI listens on
-`http://localhost:8000`.
+`http://localhost:8080`.
 
 ## Cloud (PostgreSQL)
 
@@ -125,7 +125,7 @@ You can receive webhooks against a local coordinator using a tunnel.
 gh webhook forward \
   --repo=owner/repo \
   --events=push,pull_request \
-  --url=http://localhost:8000/api/github/webhook
+  --url=http://localhost:8080/api/github/webhook
 ```
 
 ### Using ngrok / cloudflared

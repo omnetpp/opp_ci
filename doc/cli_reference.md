@@ -18,24 +18,25 @@ For full per-command flags, run `opp_ci <command> --help`.
 | Command | Purpose |
 |---|---|
 | `opp_ci init-db` | Create tables. Auto-runs on first `run`, so usually optional. |
-| `opp_ci reset-db --yes` | Drop and recreate all tables. Destructive. |
+| `opp_ci reset-db --yes` | Drop and recreate all tables. Destructive. Add `--preserve-tokens` to snapshot and restore the `api_tokens` and `workers` rows so external systems keep working. |
 
 ## Running tests
 
 | Command | Purpose |
 |---|---|
-| `opp_ci run` | Run a single test for a project. Required: `--project`, `--test`. Common: `--ref`, `--mode`, `--isolation {none\|podman}`, `--toolchain {none\|nix}`, `--os`, `--os-version`, `--compiler`, `--compiler-version`, `--pin <dep>=<ver>` (repeatable), `--force`, `--skip-install`. |
+| `opp_ci run` | Run a single test for a project. Required: `--project`, `--test`. Common: `--ref`, `--mode`, `--isolation {none\|podman}`, `--toolchain {none\|nix}`, `--os`, `--os-version`, `--arch`, `--compiler`, `--compiler-version`, `--pin <dep>=<ver>` (repeatable), `--force`, `--skip-install`. |
 | `opp_ci run-matrix --matrix NAME` | Expand a named matrix and run all jobs. Options: `--force`, `--skip-install`. |
 
-Supported tests (comma-separated for `--test`): `smoke`,
-`fingerprint`, `statistical`, `feature`, `speed`, `sanitizer`, `chart`,
-`release`, `build`, `all`.
+Supported tests (comma-separated for `--test`) — see the canonical list
+in [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test-types):
+`smoke`, `fingerprint`, `statistical`, `feature`, `speed`, `sanitizer`,
+`chart`, `release`, `build`, `opp`, `all`.
 
 ## Matrices
 
 | Command | Purpose |
 |---|---|
-| `opp_ci create-matrix` | Create a named matrix. Required: `--name`, `--project`, `--tests`. Axes: `--project-versions`, `--builds`, `--os` [`--os-version`], `--compiler` [`--compiler-version`], `--refs`, `--ref-range`, `--deps`, `--isolation`, `--toolchain`, `--opp-file`. `--replace` overwrites an existing matrix of the same name. |
+| `opp_ci create-matrix` | Create a named matrix. Required: `--name`, `--project`, `--tests`. Axes: `--project-versions`, `--builds`, `--os` [`--os-version`], `--arch`, `--compiler` [`--compiler-version`], `--refs`, `--ref-range`, `--deps`, `--isolation`, `--toolchain`, `--opp-file`. `--replace` overwrites an existing matrix of the same name. |
 | `opp_ci list-matrices` | List matrices with expanded job count. |
 | `opp_ci seed-matrices` | Seed default matrices for the core projects. |
 
@@ -59,6 +60,7 @@ Platform axes accept two styles:
 | Command | Purpose |
 |---|---|
 | `opp_ci seed-projects` | Seed the core projects from the static catalog. |
+| `opp_ci seed-platforms` | Seed the `OS` and `Compiler` tables from `opp_ci/podman/platforms.yml`. Idempotent — only new (name, version) rows are inserted. |
 | `opp_ci sync-catalog` | Import all opp_env projects + versions. New projects get a default matrix. |
 | `opp_ci add-project --name NAME` | Manually register a project not in opp_env. Options: `--github owner/repo`, `--git-url`, `--opp-env-name`, `--deps`. |
 | `opp_ci list-projects` | Show project catalog (deps, GitHub). |
@@ -72,6 +74,7 @@ Platform axes accept two styles:
 |---|---|
 | `worker register --name N` | Register a worker, prints its token. Options: `--tags`, `--auto-tags`, `--concurrency`. |
 | `worker list` | List registered workers, status, tags. |
+| `worker detect-tags` | Print the capability tags this host would self-advertise (the same set used by `--auto-tags`). Useful for previewing before `worker register`. |
 | `worker start --coordinator URL --token T` | Run the worker agent. Tags and concurrency are fetched from the coordinator (set at register time). Options: `--poll-interval`, `--heartbeat-interval`. |
 
 See [workers.md](workers.md).
@@ -99,7 +102,7 @@ See [github_integration.md](github_integration.md).
 
 | Command | Purpose |
 |---|---|
-| `opp_ci serve` | Start the FastAPI server. Options: `--host` (default `127.0.0.1`), `--port` (default `8000`). |
+| `opp_ci serve` | Start the FastAPI server. Options: `--host` (default `127.0.0.1`), `--port` (default `8080` — matches the default `OPP_CI_COORDINATOR_URL`). |
 
 See [web_ui.md](web_ui.md).
 
@@ -122,7 +125,7 @@ The CLI reads its configuration from environment variables. See
 ```bash
 opp_ci init-db
 opp_ci run --project fifo --test smoke --skip-install
-opp_ci serve  # browse at http://localhost:8000
+opp_ci serve  # browse at http://localhost:8080
 ```
 
 ### Local matrix

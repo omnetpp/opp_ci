@@ -28,22 +28,25 @@ The worker handles `SIGINT` / `SIGTERM` for clean shutdown.
 
 ## Capability tags
 
-Workers advertise their capabilities with a free-form list of tags
-(set via `--tags` / `--auto-tags` on `worker register`, stored on the
-coordinator):
+Workers advertise their capabilities with a list of tags (set via
+`--tags` / `--auto-tags` on `worker register`, stored on the
+coordinator). The dispatcher
+([`_worker_can_run` in api.py](../opp_ci/web/api.py)) treats tags in
+this exact form:
 
-| Tag | Meaning |
+| Tag | Gates dispatch when… |
 |---|---|
-| `linux` / `macos` / `windows` | OS family (informational) |
-| `os:ubuntu-24.04`, `os:fedora-42`, … | OS+version capability — required when a run names them |
-| `arch:amd64` / `arch:aarch64` | CPU architecture — required when a run names an `arch` |
-| `compiler:gcc-14`, `compiler:clang-22`, … | Compiler+version capability |
-| `perf-counters` | Hardware perf counters available (enables speed tests) |
-| `podman` | Podman installed (enables `--isolation podman` jobs) |
-| `nix` | Nix installed (enables `--toolchain nix` / opp_env jobs) |
+| `podman` | run has `--isolation podman` |
+| `nix` | run has `--toolchain nix` |
+| `os:<lc-name>-<version>` (e.g. `os:ubuntu-24.04`) | run names an `os` + `os_version` |
+| `compiler:<lc-name>-<version>` (e.g. `compiler:gcc-14`) | run names a `compiler` + `compiler_version` |
+| `arch:<lc-arch>` (e.g. `arch:amd64`) | run names an `arch` |
 
-The scheduler matches each queued job's requirements against worker
-tags before dispatching.
+Name/value parts are lowercased. Tags outside this scheme (for example
+`linux`, `gcc-13`, `perf-counters`) are accepted by the API but never
+gate dispatch — treat them as documentation. The scheduler matches each
+queued job's required subset against the worker's advertised tags
+before dispatching.
 
 ## Register a worker (admin)
 

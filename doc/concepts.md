@@ -208,7 +208,7 @@ axes:
 | Isolation | none, podman |
 | Toolchain | none, nix |
 | Features | INET feature flags |
-| Tests | build, fingerprint, statistical, chart, feature, module, unit, packet, queueing, protocol, validation, smoke, sanitizer, speed |
+| Tests | the [test types](#test-type) defined in `COMMAND_MAP` — see [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test-types) for the canonical list |
 
 Not every combination is tested — the matrix config defines which axes
 to cross. Matrix expansion happens in
@@ -243,10 +243,10 @@ group is dense or sparse.
 
 ### Test type
 
-The kind of test the job runs (`smoke`, `fingerprint`, `statistical`,
-`feature`, `chart`, `release`, `build`, `speed`, `sanitizer`, …).
-Determines what opp_repl is told to do. Each test type can produce one
-or many [TestResult](#testresult) rows.
+The kind of test the job runs — the canonical list is in
+[test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test-types) and
+mirrors `executor.COMMAND_MAP`. Determines what opp_repl is told to do.
+Each test type can produce one or many [TestResult](#testresult) rows.
 
 ### Mode
 
@@ -297,11 +297,12 @@ giving a fully reproducible build environment. Orthogonal to
 
 ### Capability tag
 
-A free-form string on a [Worker](#worker-model) declaring what it can do
-(`linux`, `arm64`, `gcc-13`, `clang-18`, `perf-counters`, `podman`,
-`nix`). The [scheduler](#scheduler) matches each job's required tags
-against worker tags before dispatch. Set at registration time
-(`--tags` or `--auto-tags`).
+A string on a [Worker](#worker-model) declaring what it can do. The
+dispatcher only honours a specific scheme — `podman`, `nix`,
+`os:<lc>-<ver>`, `compiler:<lc>-<ver>`, `arch:<lc>` — anything else is
+documentation. See
+[workers.md](workers.md#capability-tags) for the full table and
+dispatch rules. Set at registration time (`--tags` or `--auto-tags`).
 
 ### Reproducible build (Nix environment)
 

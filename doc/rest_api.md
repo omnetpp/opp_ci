@@ -38,6 +38,7 @@ Implementation: `opp_ci/auth.py`.
 | Endpoint | Method | Role | Purpose |
 |---|---|---|---|
 | `/api/workers/register` | POST | admin | Register a new worker, returns its token |
+| `/api/workers/me` | GET | worker | Worker fetches its own registered name, tags, and concurrency at startup |
 | `/api/workers/heartbeat` | POST | worker | Keepalive — updates `last_heartbeat` |
 | `/api/workers/poll` | POST | worker | Poll for the next queued job |
 | `/api/workers/result` | POST | worker | Report job completion with results |
@@ -55,7 +56,8 @@ Implementation: `opp_ci/auth.py`.
 | Endpoint | Method | Role | Purpose |
 |---|---|---|---|
 | `/api/github/webhook` | POST | *(HMAC)* | Webhook receiver. Auth via `X-Hub-Signature-256`, not Bearer. |
-| `/api/github/rules` | GET / POST | admin | List or create AutoTestRule |
+| `/api/github/rules` | GET | readonly | List AutoTestRule entries |
+| `/api/github/rules` | POST | admin | Create an AutoTestRule |
 | `/api/github/rules/{id}` | DELETE | admin | Delete a rule |
 
 ### Git notes

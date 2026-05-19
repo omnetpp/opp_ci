@@ -248,7 +248,7 @@ def _run_remote(project, test_types, git_ref, *, mode=None,
 
 @main.command("serve")
 @click.option("--host", default="127.0.0.1", help="Bind host")
-@click.option("--port", default=8000, help="Bind port")
+@click.option("--port", default=8080, help="Bind port (matches the default OPP_CI_COORDINATOR_URL)")
 def serve(host, port):
     """Start the web UI server."""
     import uvicorn
@@ -415,16 +415,19 @@ def delete_runs(project, git_ref, test_type, status, before_date, yes):
 
 @main.command("show-results")
 @click.option("--project", default=None, help="Filter by project")
+@click.option("--ref", "git_ref", default=None, help="Filter by git ref")
 @click.option("--test", "test_type", default=None, help="Filter by test type")
 @click.option("--status", default=None, help="Filter by status (PASS/FAIL/ERROR)")
 @click.option("--limit", default=20, help="Max rows to show")
-def show_results(project, test_type, status, limit):
+def show_results(project, git_ref, test_type, status, limit):
     """Show test run results (alias for list-runs)."""
     session = SessionLocal()
     try:
         query = select(TestRun).order_by(TestRun.id.desc()).limit(limit)
         if project:
             query = query.where(TestRun.project == project)
+        if git_ref:
+            query = query.where(TestRun.git_ref == git_ref)
         if test_type:
             query = query.where(TestRun.test_type == test_type)
         if status:

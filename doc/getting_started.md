@@ -50,7 +50,7 @@ opp_ci show-run 1
 
 ```bash
 opp_ci serve
-# Open http://localhost:8000
+# Open http://localhost:8080
 ```
 
 The web UI shows:
@@ -144,23 +144,18 @@ opp_ci create-matrix --name inet-platforms --project inet \
 
 ## Worker Tags and Job Dispatch
 
-Workers advertise their capabilities as a list of tags; the coordinator only
-hands a queued run to a worker whose tags cover the run's requirements.
+Workers advertise their capabilities as a list of tags; the coordinator
+only hands a queued run to a worker whose tags cover the run's
+requirements. The full tag vocabulary and dispatch rules live in
+[workers.md](workers.md#capability-tags) — in short:
 
-Recognised tag conventions:
+- `podman` / `nix` — required when the run uses `--isolation podman` or
+  `--toolchain nix` respectively.
+- `os:<lc-name>-<version>`, `compiler:<lc-name>-<version>`,
+  `arch:<lc-arch>` — required when the run names that field.
 
-| Tag | Meaning |
-|---|---|
-| `podman` | Podman installed; can pull/run `opp-ci-runner:*` images |
-| `nix` | Nix + opp_env installed on the host |
-| `os:<name>-<ver>` | Host OS, lowercased — e.g. `os:ubuntu-24.04`, `os:fedora-42` |
-| `compiler:<name>-<ver>` | Host compiler, lowercased — e.g. `compiler:gcc-14` |
-
-A run requires a subset of these tags depending on its execution environment:
-
-- `isolation=podman` → `{podman}`
-- `isolation=none, toolchain=nix` → `{nix, os:…, compiler:…}` (os/compiler tags only required if the run names them)
-- `isolation=none, toolchain=none` → `{os:…, compiler:…}`
+Anything outside this scheme (e.g. `linux`, `gcc-13`, `perf-counters`)
+is accepted but never gates dispatch.
 
 Register a worker with the appropriate tags:
 

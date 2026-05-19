@@ -266,6 +266,30 @@ compiler_version)`.
 
 ---
 
+## Axis: architecture
+
+| Aspect | Value |
+|---|---|
+| JSON key | `arch` |
+| CLI flag | `--arch` |
+| Default | `[None]` — unconstrained, any worker arch accepted |
+| Cross-product | yes |
+
+CPU architecture of the host kernel (e.g. `amd64`, `aarch64`). Stored
+on the `TestRun.arch` column and folded into `platform_desc`. See
+[single_test_parameters.md](single_test_parameters.md#arch) for the
+single-run reference.
+
+### Worker dispatch
+
+When a run names an `arch`, the dispatcher requires the worker to
+advertise the matching `arch:<lc-arch>` capability tag — kernel
+architecture matters for both bare-metal and `--isolation podman` runs
+(podman doesn't cross-emulate by default). Workers without that tag
+never receive arch-pinned jobs.
+
+---
+
 ## Axis: compiler
 
 | Aspect | Value |

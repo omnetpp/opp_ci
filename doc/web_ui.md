@@ -1,7 +1,15 @@
 # Web UI
 
 Server-rendered FastAPI + Jinja2 application in `opp_ci/web/`. Started
-with `opp_ci serve` (default `127.0.0.1:8000`).
+with `opp_ci serve` (default `127.0.0.1:8080`).
+
+> **Authentication:** the HTML routes listed below carry no auth
+> dependency — anyone who can reach the bind address can browse and
+> trigger actions exposed by the form pages. Bind to `127.0.0.1` for
+> single-user installs, or put a reverse proxy in front (nginx,
+> Cloudflare Access, basic-auth, …) before exposing the UI publicly.
+> Only the `/api/*` JSON endpoints use the bearer-token roles
+> documented in [rest_api.md](rest_api.md#authentication).
 
 ## Page map
 

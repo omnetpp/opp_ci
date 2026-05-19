@@ -12,6 +12,29 @@ All configuration is via environment variables, read by
 | `OPP_CI_API_TOKEN` | *(empty)* | API token used by `--remote` CLI submissions. |
 | `OPP_CI_REFERENCE_PLATFORM` | `Ubuntu 24.04/gcc-13` | Default platform spec for auto-generated default matrices. |
 
+## Executor: project source location
+
+The executor uses these to resolve where each project's working tree
+lives on the worker. Relevant under `--isolation none` (direct host)
+and `--isolation podman` with a host-mounted tree.
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPP_CI_PROJECT_DIR` | `.` | Parent directory: each project's tree is expected at `$OPP_CI_PROJECT_DIR/<project>`. |
+| `OPP_CI_PROJECT_DIR_<PROJECT>` | *(empty)* | Per-project override, takes precedence over `OPP_CI_PROJECT_DIR/<project>`. The suffix is the project name upper-cased with `-` replaced by `_` (e.g. `OPP_CI_PROJECT_DIR_INET_4_5`). |
+| `OPP_CI_CACHE_DIR` | `~/.cache/opp_ci/clones` | Where the executor caches GitHub clones (for `.opp` files that declare `github_owner`/`github_repository`). |
+
+## Container-runtime contract
+
+These are set by the executor and read inside containers — usually no
+need to set them by hand. Documented here so the docker entrypoint
+contract is explicit.
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPP_CI_INSTALL_PROJECTS` | *(empty)* | Comma-separated list of opp_env projects the entrypoint should `opp_env install` before running the test command. |
+| `OPP_ENV_GIT_REF` | *(empty)* | Specific git ref to pin a `*-git` opp_env project to, when one is named. |
+
 ## Workers
 
 | Variable | Default | Description |
