@@ -135,6 +135,11 @@ if [[ "$WITH_POSTGRES" -eq 1 ]]; then
         sudo -u postgres createdb -O "${OPP_CI_USER}" "${OPP_CI_DB}"
         echo "    created database '${OPP_CI_DB}' owned by '${OPP_CI_USER}'"
     fi
+    # Postgres 15+ revokes CREATE on schema public from PUBLIC, so the
+    # database owner alone can't add tables there. Grant it explicitly.
+    sudo -u postgres psql -d "${OPP_CI_DB}" -c \
+        "GRANT ALL ON SCHEMA public TO \"${OPP_CI_USER}\"" >/dev/null
+    echo "    granted ALL on schema public to '${OPP_CI_USER}'"
     # Ask the running cluster which port it's on, rather than assuming 5432.
     PG_PORT="$(sudo -u postgres psql -tAc 'SHOW port' 2>/dev/null | tr -d ' ')"
     if [[ -z "$PG_PORT" ]]; then
