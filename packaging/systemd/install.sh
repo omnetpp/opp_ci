@@ -6,6 +6,11 @@
 # (without overwriting existing ones), and ensures /opt/opp_ci has a
 # Python venv with opp_ci installed editably.
 #
+# Defaults to provisioning a local PostgreSQL: installs the package if
+# missing, creates an `opp_ci` role and database, and points the env
+# file at the Unix socket with peer authentication (no password).
+# Pass --no-postgres to skip (e.g., when using a remote database).
+#
 # Run as root:    sudo packaging/systemd/install.sh
 #
 # After install, enable the units you actually want on this host:
@@ -14,6 +19,22 @@
 #   sudo systemctl enable opp_ci.target
 
 set -euo pipefail
+
+WITH_POSTGRES=1
+for arg in "$@"; do
+    case "$arg" in
+        --no-postgres) WITH_POSTGRES=0 ;;
+        --with-postgres) WITH_POSTGRES=1 ;;
+        -h|--help)
+            sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $arg" >&2
+            exit 2
+            ;;
+    esac
+done
 
 if [[ $EUID -ne 0 ]]; then
     echo "install.sh must be run as root (try: sudo $0)" >&2
@@ -26,11 +47,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 OPP_CI_USER="opp_ci"
 OPP_CI_GROUP="opp_ci"
+OPP_CI_DB="opp_ci"
 INSTALL_DIR="/opt/opp_ci"
 STATE_DIR="/var/lib/opp_ci"
 CONFIG_DIR="/etc/opp_ci"
 WORKER_CONFIG_DIR="$CONFIG_DIR/workers"
 SYSTEMD_DIR="/etc/systemd/system"
+POSTGRES_SOCKET_URL="postgresql:///${OPP_CI_DB}?host=/var/run/postgresql"
 
 echo "==> Creating system user '$OPP_CI_USER' (if missing)"
 if ! getent group "$OPP_CI_GROUP" >/dev/null; then
@@ -74,11 +97,41 @@ if [[ ! -x "$INSTALL_DIR/.venv/bin/python" ]]; then
     python3 -m venv "$INSTALL_DIR/.venv"
 fi
 "$INSTALL_DIR/.venv/bin/pip" install --upgrade pip >/dev/null
-"$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR"
+if [[ "$WITH_POSTGRES" -eq 1 ]]; then
+    "$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR[postgres]"
+else
+    "$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR"
+fi
 
 # The venv needs to be readable & executable by the opp_ci user, but the
 # rest of /opt/opp_ci can stay root-owned.
 chown -R "$OPP_CI_USER:$OPP_CI_GROUP" "$INSTALL_DIR/.venv"
+
+if [[ "$WITH_POSTGRES" -eq 1 ]]; then
+    echo "==> Provisioning local PostgreSQL"
+    if ! command -v psql >/dev/null 2>&1; then
+        echo "    postgresql not installed; running apt-get install -y postgresql"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql
+    fi
+    systemctl enable --now postgresql.service >/dev/null
+    # Create role (peer auth via Unix socket, no password) and database.
+    if sudo -u postgres psql -tAc \
+            "SELECT 1 FROM pg_roles WHERE rolname='${OPP_CI_USER}'" \
+            2>/dev/null | grep -q 1; then
+        echo "    role '${OPP_CI_USER}' already exists"
+    else
+        sudo -u postgres createuser "${OPP_CI_USER}"
+        echo "    created role '${OPP_CI_USER}'"
+    fi
+    if sudo -u postgres psql -tAc \
+            "SELECT 1 FROM pg_database WHERE datname='${OPP_CI_DB}'" \
+            2>/dev/null | grep -q 1; then
+        echo "    database '${OPP_CI_DB}' already exists"
+    else
+        sudo -u postgres createdb -O "${OPP_CI_USER}" "${OPP_CI_DB}"
+        echo "    created database '${OPP_CI_DB}' owned by '${OPP_CI_USER}'"
+    fi
+fi
 
 echo "==> Installing unit files into $SYSTEMD_DIR"
 install -m 0644 "$SCRIPT_DIR/opp_ci.target"            "$SYSTEMD_DIR/opp_ci.target"
@@ -99,6 +152,19 @@ install_example "$SCRIPT_DIR/opp_ci.env.example"  "$CONFIG_DIR/opp_ci.env"      
 install_example "$SCRIPT_DIR/serve.env.example"   "$CONFIG_DIR/serve.env"       root        0640
 install_example "$SCRIPT_DIR/worker.env.example"  "$WORKER_CONFIG_DIR/default.env" \
                                                                  "$OPP_CI_USER" 0600
+
+if [[ "$WITH_POSTGRES" -eq 1 ]]; then
+    # If OPP_CI_DATABASE_URL is missing (commented or absent), append the
+    # local-socket URL. Don't touch existing active settings — the user
+    # may have pointed at a remote DB on purpose.
+    if grep -Eq '^OPP_CI_DATABASE_URL=' "$CONFIG_DIR/opp_ci.env"; then
+        echo "    OPP_CI_DATABASE_URL already set, not changing"
+    else
+        printf '\nOPP_CI_DATABASE_URL=%s\n' "$POSTGRES_SOCKET_URL" \
+            >> "$CONFIG_DIR/opp_ci.env"
+        echo "    appended OPP_CI_DATABASE_URL=$POSTGRES_SOCKET_URL"
+    fi
+fi
 
 echo "==> Reloading systemd"
 systemctl daemon-reload

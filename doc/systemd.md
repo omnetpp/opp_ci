@@ -28,16 +28,23 @@ and `rsync` (optional but recommended). The project uses
 From a checkout of the repo:
 
 ```bash
-sudo packaging/systemd/install.sh
+sudo packaging/systemd/install.sh                  # provisions local PostgreSQL
+sudo packaging/systemd/install.sh --no-postgres    # skip; e.g. for a remote DB
 ```
 
 The installer is idempotent. It:
 
 - creates the `opp_ci` system user/group (home `/var/lib/opp_ci`,
   shell `/usr/sbin/nologin`),
-- copies the source tree to `/opt/opp_ci` (excluding `.venv`, `.git`,
-  caches, and any local SQLite DB),
+- copies the source tree to `/opt/opp_ci` (excluding `.venv`, caches,
+  and any local SQLite DB; `.git/` is kept so setuptools-scm can
+  resolve the version),
 - creates `/opt/opp_ci/.venv` and `pip install -e`s opp_ci into it,
+  with the `[postgres]` extra unless `--no-postgres` was passed,
+- by default installs PostgreSQL if missing, creates an `opp_ci` role
+  and database with peer-auth via the Unix socket, and appends
+  `OPP_CI_DATABASE_URL=postgresql:///opp_ci?host=/var/run/postgresql`
+  to `/etc/opp_ci/opp_ci.env` if no DB URL is already set there,
 - installs the three unit files into `/etc/systemd/system/`,
 - seeds `/etc/opp_ci/` with `opp_ci.env`, `serve.env`, and
   `workers/default.env` from the `.example` files (only if missing —
@@ -45,6 +52,21 @@ The installer is idempotent. It:
 - runs `systemctl daemon-reload`.
 
 It does **not** enable or start any unit. That is the next step.
+
+### Using a remote PostgreSQL instead
+
+Pass `--no-postgres` to skip the local provisioning, then point the
+env file at your remote DB:
+
+```bash
+sudo packaging/systemd/install.sh --no-postgres
+sudoedit /etc/opp_ci/opp_ci.env
+# OPP_CI_DATABASE_URL=postgresql://opp_ci:secret@db.example.com/opp_ci
+```
+
+You will need `psycopg2-binary` in the venv — re-run the installer
+without `--no-postgres` once to get it, or install it manually:
+`sudo /opt/opp_ci/.venv/bin/pip install psycopg2-binary`.
 
 ## Role selection
 
