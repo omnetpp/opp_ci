@@ -20,6 +20,11 @@ you enable.
 
 ## Install
 
+Prerequisites on the target host: `python3-venv`, `python3-pip`, `git`,
+and `rsync` (optional but recommended). The project uses
+`setuptools-scm` to derive its version from git tags, so a working
+`.git/` directory must be present in the source you install from.
+
 From a checkout of the repo:
 
 ```bash

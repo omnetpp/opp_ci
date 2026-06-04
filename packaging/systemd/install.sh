@@ -53,11 +53,12 @@ install -d -o "$OPP_CI_USER" -g "$OPP_CI_GROUP" -m 0750 "$STATE_DIR"
 
 echo "==> Syncing source tree to $INSTALL_DIR"
 # Use rsync if available, otherwise cp -a. Excludes the venv (rebuilt below)
-# and any local sqlite DB the developer may have in their checkout.
+# and any local sqlite DB the developer may have in their checkout. Keeps
+# .git/ so setuptools-scm can derive the version, and so operators can
+# `cd /opt/opp_ci && sudo git pull` to upgrade.
 if command -v rsync >/dev/null 2>&1; then
     rsync -a --delete \
         --exclude='.venv/' \
-        --exclude='.git/' \
         --exclude='__pycache__/' \
         --exclude='*.pyc' \
         --exclude='opp_ci.db' \
