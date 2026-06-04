@@ -53,7 +53,10 @@ STATE_DIR="/var/lib/opp_ci"
 CONFIG_DIR="/etc/opp_ci"
 WORKER_CONFIG_DIR="$CONFIG_DIR/workers"
 SYSTEMD_DIR="/etc/systemd/system"
-POSTGRES_SOCKET_URL="postgresql:///${OPP_CI_DB}?host=/var/run/postgresql"
+# Filled in below after Postgres is up (some Ubuntu hosts allocate the
+# cluster on 5433 rather than the canonical 5432, e.g. when another
+# cluster already occupied 5432 at install time).
+POSTGRES_SOCKET_URL=""
 
 echo "==> Creating system user '$OPP_CI_USER' (if missing)"
 if ! getent group "$OPP_CI_GROUP" >/dev/null; then
@@ -132,6 +135,13 @@ if [[ "$WITH_POSTGRES" -eq 1 ]]; then
         sudo -u postgres createdb -O "${OPP_CI_USER}" "${OPP_CI_DB}"
         echo "    created database '${OPP_CI_DB}' owned by '${OPP_CI_USER}'"
     fi
+    # Ask the running cluster which port it's on, rather than assuming 5432.
+    PG_PORT="$(sudo -u postgres psql -tAc 'SHOW port' 2>/dev/null | tr -d ' ')"
+    if [[ -z "$PG_PORT" ]]; then
+        PG_PORT=5432
+    fi
+    POSTGRES_SOCKET_URL="postgresql:///${OPP_CI_DB}?host=/var/run/postgresql&port=${PG_PORT}"
+    echo "    cluster on port ${PG_PORT}"
 fi
 
 echo "==> Installing unit files into $SYSTEMD_DIR"
