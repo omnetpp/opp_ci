@@ -1008,6 +1008,112 @@ def resolve_deps_cmd(project_version, pins):
         click.echo(f"\nResolved: {format_resolved_deps(resolved)}")
 
 
+# ── User commands ──────────────────────────────────────────────────────
+
+@main.group("user")
+def user_group():
+    """Web UI user management."""
+    pass
+
+
+_USER_ROLES = ("readonly", "submitter", "admin")
+
+
+@user_group.command("create")
+@click.option("--username", required=True, help="Local login username")
+@click.option("--role", default="admin", type=click.Choice(_USER_ROLES))
+@click.option("--password", default=None, help="Password (prompted if omitted)")
+@click.option("--update-password", is_flag=True,
+              help="If the user already exists, update their password and role")
+def user_create(username, role, password, update_password):
+    """Create (or update) a local web UI user.
+
+    Use this once after install to bootstrap the first admin before
+    GitHub OAuth is configured.
+    """
+    from opp_ci.db.models import User
+    from opp_ci.passwords import hash_password
+
+    if password is None:
+        password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
+
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        existing = session.execute(
+            select(User).where(User.username == username)
+        ).scalar_one_or_none()
+        if existing is not None:
+            if not update_password:
+                click.echo(f"User '{username}' already exists. "
+                           f"Pass --update-password to reset their password and role.")
+                return
+            existing.password_hash = hash_password(password)
+            existing.role = role
+            existing.role_locked = True
+            existing.enabled = True
+            session.commit()
+            click.echo(f"User '{username}' updated (role={role}).")
+            return
+
+        user = User(
+            username=username,
+            password_hash=hash_password(password),
+            role=role,
+            role_locked=True,
+            enabled=True,
+        )
+        session.add(user)
+        session.commit()
+        click.echo(f"User '{username}' created (role={role}).")
+    finally:
+        session.close()
+
+
+@user_group.command("list")
+def user_list():
+    """List web UI users."""
+    from opp_ci.db.models import User
+
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        users = session.execute(select(User).order_by(User.id)).scalars().all()
+        if not users:
+            click.echo("No users. Run 'opp_ci user create' to bootstrap an admin.")
+            return
+        click.echo(f"{'ID':<4} {'Login':<24} {'Role':<10} {'Locked':<7} {'Enabled':<8} {'Last Login'}")
+        click.echo("-" * 80)
+        for u in users:
+            login = u.username or (f"@{u.github_username}" if u.github_username else "-")
+            last = u.last_login_at.strftime("%Y-%m-%d %H:%M") if u.last_login_at else "-"
+            click.echo(f"{u.id:<4} {login:<24} {u.role:<10} "
+                       f"{('yes' if u.role_locked else 'no'):<7} "
+                       f"{('yes' if u.enabled else 'no'):<8} {last}")
+    finally:
+        session.close()
+
+
+@user_group.command("disable")
+@click.argument("username")
+def user_disable(username):
+    """Disable a user (logs them out and blocks future logins)."""
+    from opp_ci.db.models import User
+    session = SessionLocal()
+    try:
+        user = session.execute(
+            select(User).where(User.username == username)
+        ).scalar_one_or_none()
+        if user is None:
+            click.echo(f"User '{username}' not found.")
+            return
+        user.enabled = False
+        session.commit()
+        click.echo(f"User '{username}' disabled.")
+    finally:
+        session.close()
+
+
 # ── Worker commands ────────────────────────────────────────────────────
 
 @main.group("worker")
