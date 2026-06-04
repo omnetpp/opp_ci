@@ -76,6 +76,7 @@ Reference (deep dive):
 For developers:
 
 - [Architecture](doc/architecture.md) — components, schema, execution flow
+- [Data Model](doc/data_model.md) — every database table and column
 - [REST API](doc/rest_api.md) — endpoints and authentication
 
 ## License

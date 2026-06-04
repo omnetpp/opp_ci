@@ -60,7 +60,8 @@ opp_ci/
 ## Database schema
 
 `opp_ci/db/models.py` — SQLAlchemy. Migrations live in
-`opp_ci/db/migrations/` (Alembic, config in `alembic.ini`).
+`opp_ci/db/migrations/` (Alembic, config in `alembic.ini`). For a
+field-by-field reference see [data_model.md](data_model.md).
 
 | Model | Purpose |
 |---|---|

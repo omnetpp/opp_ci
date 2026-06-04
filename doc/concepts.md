@@ -71,7 +71,9 @@ used by `--remote` CLI calls and by other tools. Authenticates with an
 
 The objects below are the SQLAlchemy models in
 [opp_ci/db/models.py](../opp_ci/db/models.py). They are the persistent
-shape of every other concept on this page.
+shape of every other concept on this page. For a field-level
+reference (every column, type, default, and relationship) see
+[data_model.md](data_model.md).
 
 ### Project
 
