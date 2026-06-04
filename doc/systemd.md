@@ -240,23 +240,23 @@ the corresponding capability tag — there is no error at startup.
 
 ## Hardening
 
-The serve unit ships with this hardening:
+The serve unit ships with strict hardening:
 
 ```
 NoNewPrivileges=true
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/var/lib/opp_ci
 ```
 
-`ProtectSystem=full` (rather than `strict`) is deliberate: `strict`
-mounts the entire filesystem read-only inside the unit's namespace and,
-in combination with `PrivateTmp=true`, hides `/var/run/postgresql` so
-the local Unix-socket connection to PostgreSQL fails with `ENOENT`.
-`full` keeps `/usr`, `/boot`, `/efi`, `/etc` read-only while leaving
-`/var` and `/run` reachable. If your DB is remote (TCP), you can step
-back up to `strict` via `systemctl edit opp_ci-serve.service`.
+`ProtectSystem=strict` makes the entire filesystem read-only inside
+the unit's namespace, with writes allowed only under
+`ReadWritePaths=/var/lib/opp_ci`. It still permits read access and
+`connect()` to Unix sockets under `/var/run`, so the local
+PostgreSQL connection over `/var/run/postgresql` works fine. If serve
+ever needs to write outside `/var/lib/opp_ci`, add the path to
+`ReadWritePaths` via `systemctl edit opp_ci-serve.service`.
 
 The worker unit ships with hardening **commented out**, because Nix
 and podman need filesystem access that is awkward to enumerate
@@ -265,7 +265,7 @@ to work; sensible starting point:
 
 ```ini
 NoNewPrivileges=true
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/opp_ci /nix/var
 ```

@@ -16,11 +16,9 @@ ExecStart=/opt/opp_ci/.venv/bin/opp_ci serve
 Restart=on-failure
 RestartSec=5s
 
-# Hardening — safe for serve (no Nix, no podman). ProtectSystem=full
-# (rather than strict) leaves /var and /run accessible so connections
-# to the local PostgreSQL Unix socket at /var/run/postgresql work.
+# Hardening — safe for serve (no Nix, no podman).
 NoNewPrivileges=true
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/var/lib/opp_ci
