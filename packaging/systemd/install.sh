@@ -97,11 +97,12 @@ if [[ ! -x "$INSTALL_DIR/.venv/bin/python" ]]; then
     python3 -m venv "$INSTALL_DIR/.venv"
 fi
 "$INSTALL_DIR/.venv/bin/pip" install --upgrade pip >/dev/null
-if [[ "$WITH_POSTGRES" -eq 1 ]]; then
-    "$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR[postgres]"
-else
-    "$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR"
-fi
+# Install all extras the service needs at runtime: web (uvicorn/fastapi/jinja2
+# for `serve`), client (requests for --remote CLI), podman (yaml/jinja2 for
+# podman-isolation jobs). Postgres extra is added by default but is
+# innocuous (just psycopg2-binary) even if you point at SQLite or a remote DB.
+EXTRAS="web,client,podman,postgres"
+"$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR[$EXTRAS]"
 
 # The venv needs to be readable & executable by the opp_ci user, but the
 # rest of /opt/opp_ci can stay root-owned.
