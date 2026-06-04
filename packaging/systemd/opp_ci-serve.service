@@ -1,0 +1,27 @@
+[Unit]
+Description=opp_ci coordinator (web UI + API + scheduler)
+Documentation=https://github.com/omnetpp/opp_ci
+After=network-online.target postgresql.service
+Wants=network-online.target
+PartOf=opp_ci.target
+
+[Service]
+Type=simple
+User=opp_ci
+Group=opp_ci
+WorkingDirectory=/var/lib/opp_ci
+EnvironmentFile=/etc/opp_ci/opp_ci.env
+EnvironmentFile=-/etc/opp_ci/serve.env
+ExecStart=/opt/opp_ci/.venv/bin/opp_ci serve
+Restart=on-failure
+RestartSec=5s
+
+# Hardening — safe for serve (no Nix, no podman).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/opp_ci
+
+[Install]
+WantedBy=opp_ci.target

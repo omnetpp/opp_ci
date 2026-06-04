@@ -62,6 +62,7 @@ Day-to-day:
 
 - [Web UI](doc/web_ui.md) — dashboard, run detail, multi-dimensional results search
 - [Deployment](doc/deployment.md) — local, cloud, hybrid
+- [systemd service](doc/systemd.md) — run as a service on Ubuntu
 - [Workers](doc/workers.md) — register and run remote workers
 - [GitHub integration](doc/github_integration.md) — webhooks, statuses, rules
 - [Git notes](doc/git_notes.md) — per-commit CI summaries delivered via `git fetch`

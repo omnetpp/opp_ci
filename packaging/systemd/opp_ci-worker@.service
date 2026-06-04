@@ -1,0 +1,33 @@
+[Unit]
+Description=opp_ci worker (%i)
+Documentation=https://github.com/omnetpp/opp_ci
+After=network-online.target nix-daemon.service
+Wants=network-online.target
+PartOf=opp_ci.target
+
+[Service]
+Type=simple
+User=opp_ci
+Group=opp_ci
+WorkingDirectory=/var/lib/opp_ci
+EnvironmentFile=/etc/opp_ci/opp_ci.env
+EnvironmentFile=/etc/opp_ci/workers/%i.env
+ExecStart=/opt/opp_ci/.venv/bin/opp_ci worker start
+Restart=on-failure
+RestartSec=10s
+# Worker handles SIGINT / SIGTERM cleanly per doc/workers.md.
+KillSignal=SIGTERM
+TimeoutStopSec=60s
+
+# Looser hardening — worker shells out to opp_env / nix / podman.
+# Enable selectively once you have validated it on your host:
+#   NoNewPrivileges=true
+#   ProtectSystem=strict
+#   ProtectHome=true
+#   ReadWritePaths=/var/lib/opp_ci /nix/var
+# Per-worker resource caps (optional):
+#   CPUQuota=400%
+#   MemoryMax=8G
+
+[Install]
+WantedBy=opp_ci.target

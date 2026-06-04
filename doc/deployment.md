@@ -50,6 +50,10 @@ individual runs or matrices, or set it as the matrix default.
 opp_ci serve --host 0.0.0.0 --port 8080
 ```
 
+For long-running deployments, run `serve` (and `worker start`) under
+systemd instead of a bare shell — see [systemd.md](systemd.md) for the
+unit files, install script, and per-role configuration.
+
 Always place behind a reverse proxy with HTTPS (Caddy or nginx + Let's
 Encrypt). Example public URLs:
 
