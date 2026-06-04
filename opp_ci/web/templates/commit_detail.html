@@ -32,7 +32,7 @@
             {% for run in runs %}
             <tr>
                 <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
-                <td>{{ run.test_type }}</td>
+                <td>{{ run.test }}</td>
                 <td>{{ run.mode or "-" }}</td>
                 <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
                 <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>

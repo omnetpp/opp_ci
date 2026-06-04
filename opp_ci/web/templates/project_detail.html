@@ -70,7 +70,7 @@
             {% for run in recent_runs %}
             <tr>
                 <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
-                <td>{{ run.test_type }}</td>
+                <td>{{ run.test }}</td>
                 <td>{{ run.mode or "-" }}</td>
                 {% set sha = run.commit_sha or run.github_commit_sha %}
                 <td>{% if sha %}<code title="{{ sha }}">{{ sha[:8] }}</code>{% elif run.git_ref %}{{ run.git_ref }}{% else %}-{% endif %}</td>

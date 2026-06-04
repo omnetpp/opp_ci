@@ -9,7 +9,7 @@
         <tr><th style="width:150px;">Name</th><td>{{ matrix.name }}</td></tr>
         <tr><th>Project</th><td><a href="/projects/{{ matrix.project }}">{{ matrix.project }}</a></td></tr>
         <tr><th>opp file</th><td>{{ matrix.opp_file or "-" }}</td></tr>
-        <tr><th>Tests</th><td>{{ matrix.config.get("test_types", [])|join(", ") }}</td></tr>
+        <tr><th>Tests</th><td>{{ matrix.config.get("tests", [])|join(", ") }}</td></tr>
         <tr><th>Modes</th><td>{{ matrix.config.get("modes", [])|join(", ") }}</td></tr>
         <tr><th>Versions</th><td>{{ matrix.config.get("versions", [])|join(", ") }}</td></tr>
         {% set ref_range = matrix.config.get("ref_range") %}
@@ -64,7 +64,7 @@
             <tr>
                 <td>{{ job.project }}</td>
                 <td>{{ job.version or "-" }}</td>
-                <td>{{ job.test_type }}</td>
+                <td>{{ job.test }}</td>
                 <td>{{ job.mode }}</td>
                 <td>{{ job.git_ref or "-" }}</td>
                 <td>{{ job.platform_desc or "-" }}</td>
@@ -100,7 +100,7 @@
             <tr>
                 <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.project }}</td>
-                <td>{{ run.test_type }}</td>
+                <td>{{ run.test }}</td>
                 <td>{{ run.mode or "-" }}</td>
                 {% set sha = run.commit_sha or run.github_commit_sha %}
                 <td>{% if sha %}<code title="{{ sha }}">{{ sha[:8] }}</code>{% elif run.git_ref %}{{ run.git_ref }}{% else %}-{% endif %}</td>

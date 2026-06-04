@@ -35,7 +35,7 @@
             <td>{{ m.id }}</td>
             <td>{{ m.name }}</td>
             <td>{{ m.project }}</td>
-            <td>{{ m.config.get("test_types", [])|join(", ") }}</td>
+            <td>{{ m.config.get("tests", [])|join(", ") }}</td>
             <td>{{ m.config.get("modes", [])|join(", ") }}</td>
             {% set refs = m.config.get("refs", []) %}
             {% set ref_range = m.config.get("ref_range") %}

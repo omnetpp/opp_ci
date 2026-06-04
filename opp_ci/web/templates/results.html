@@ -5,7 +5,7 @@
 
 <form class="filters" method="get" action="/results" style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center;">
     <input type="text" name="project" placeholder="Project" value="{{ filter_project }}">
-    <input type="text" name="test_type" placeholder="Test" value="{{ filter_test_type }}">
+    <input type="text" name="test" placeholder="Test" value="{{ filter_test }}">
     <input type="text" name="mode" placeholder="Mode" value="{{ filter_mode }}">
     <select name="status">
         <option value="">All statuses</option>
@@ -36,7 +36,7 @@
 <!-- Summary roll-up view -->
 {% if summaries %}
 {% set extra_labels = {"isolation": "Isolation", "toolchain": "Toolchain", "commit_sha": "Commit", "version": "Version"} %}
-{% set primary_dims = ["project", "test_type", "mode", "os", "os_version", "compiler", "compiler_version", "git_ref"] %}
+{% set primary_dims = ["project", "test", "mode", "os", "os_version", "compiler", "compiler_version", "git_ref"] %}
 {% set sha_dims = ["git_ref", "commit_sha"] %}
 {% set show_reps = summaries | selectattr("repetitions", "gt", 1) | list | length > 0 %}
 <table>
@@ -124,7 +124,7 @@
         <tr>
             <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
             <td>{{ run.project }}</td>
-            <td>{{ run.test_type }}</td>
+            <td>{{ run.test }}</td>
             <td>{{ run.mode or "-" }}</td>
             <td>{{ run.os or "-" }}</td>
             <td>{{ run.os_version or "-" }}</td>
