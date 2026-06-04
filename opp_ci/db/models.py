@@ -181,7 +181,7 @@ class TestRun(Base):
 
     id = Column(Integer, primary_key=True)
     project = Column(String, nullable=False)
-    test_type = Column(String, nullable=False)
+    test = Column(String, nullable=False)
     mode = Column(String, nullable=True)
     os = Column(String, nullable=True)
     os_version = Column(String, nullable=True)
@@ -213,7 +213,7 @@ class TestRun(Base):
     worker = relationship("Worker", backref="test_runs")
 
     def __repr__(self):
-        return f"<TestRun(id={self.id}, project={self.project!r}, test_type={self.test_type!r}, status={self.status.value!r})>"
+        return f"<TestRun(id={self.id}, project={self.project!r}, test={self.test!r}, status={self.status.value!r})>"
 
 
 class TestResult(Base):
