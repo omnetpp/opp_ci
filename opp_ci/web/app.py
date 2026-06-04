@@ -233,6 +233,10 @@ def results_page(
     mode: str = Query(default=None),
     os: str = Query(default=None, alias="os"),
     os_version: str = Query(default=None),
+    distro: str = Query(default=None),
+    distro_version: str = Query(default=None),
+    flavor: str = Query(default=None),
+    flavor_version: str = Query(default=None),
     compiler: str = Query(default=None),
     compiler_version: str = Query(default=None),
     status: str = Query(default=None),
@@ -259,6 +263,14 @@ def results_page(
             query = query.where(TestRun.os == os)
         if os_version:
             query = query.where(TestRun.os_version == os_version)
+        if distro:
+            query = query.where(TestRun.distro == distro.lower())
+        if distro_version:
+            query = query.where(TestRun.distro_version == distro_version)
+        if flavor:
+            query = query.where(TestRun.flavor == flavor.lower())
+        if flavor_version:
+            query = query.where(TestRun.flavor_version == flavor_version)
         if compiler:
             query = query.where(TestRun.compiler == compiler)
         if compiler_version:
@@ -282,6 +294,10 @@ def results_page(
             "filter_mode": mode or "",
             "filter_os": os or "",
             "filter_os_version": os_version or "",
+            "filter_distro": distro or "",
+            "filter_distro_version": distro_version or "",
+            "filter_flavor": flavor or "",
+            "filter_flavor_version": flavor_version or "",
             "filter_compiler": compiler or "",
             "filter_compiler_version": compiler_version or "",
             "filter_status": status or "",
@@ -460,6 +476,7 @@ def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
 def run_new_form(request: Request,
                  current_user: User = Depends(require_user("submitter")),
                  message: str = Query(default=None), message_type: str = Query(default=None)):
+    from opp_ci import platforms
     session = SessionLocal()
     try:
         projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
@@ -467,8 +484,10 @@ def run_new_form(request: Request,
         os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
         compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
 
-        os_suggestions = sorted({o.name for o in os_entries if o.name})
+        os_suggestions = list(platforms.OS_NAMES)
         os_version_suggestions = sorted({o.version for o in os_entries if o.version})
+        distro_suggestions = sorted({platforms.display_name(n) for n in platforms.DISTROS})
+        flavor_suggestions = sorted({platforms.display_name(n) for n in platforms.FLAVORS})
         arch_suggestions = _arch_suggestions(os_entries)
         compiler_suggestions = sorted({c.name for c in compilers if c.name})
         compiler_version_suggestions = sorted({c.version for c in compilers if c.version})
@@ -508,6 +527,8 @@ def run_new_form(request: Request,
             "compilers": compilers,
             "os_suggestions": os_suggestions,
             "os_version_suggestions": os_version_suggestions,
+            "distro_suggestions": distro_suggestions,
+            "flavor_suggestions": flavor_suggestions,
             "arch_suggestions": arch_suggestions,
             "compiler_suggestions": compiler_suggestions,
             "compiler_version_suggestions": compiler_version_suggestions,
@@ -533,6 +554,10 @@ def run_new_submit(
     omnetpp_version: str = Form(default=""),
     os: str = Form(default="", alias="os"),
     os_version: str = Form(default=""),
+    distro: str = Form(default=""),
+    distro_version: str = Form(default=""),
+    flavor: str = Form(default=""),
+    flavor_version: str = Form(default=""),
     arch: str = Form(default=""),
     compiler: str = Form(default=""),
     compiler_version: str = Form(default=""),
@@ -540,11 +565,27 @@ def run_new_submit(
     toolchain: str = Form(default="none"),
 ):
     import datetime
+    from opp_ci import platforms
+    from opp_ci.scheduler import _build_platform_desc
+
     session = SessionLocal()
     try:
         resolved_deps = None
         if omnetpp_version and project != "omnetpp":
             resolved_deps = {"omnetpp": omnetpp_version}
+        try:
+            r_os, r_distro, r_flavor = platforms.resolve_platform(
+                os=os or None, distro=distro or None, flavor=flavor or None,
+            )
+        except ValueError as e:
+            return RedirectResponse(
+                url=f"/runs/new?message={e}&message_type=error",
+                status_code=303,
+            )
+        os_canon = platforms._os_canonical(r_os) if r_os else None
+        os_ver_clean = (os_version or None) if os_canon and os_canon != "Linux" else None
+        distro_ver_clean = (distro_version or None) if r_distro else None
+        flavor_ver_clean = (flavor_version or None) if r_flavor else None
         run = TestRun(
             project=project,
             test=test,
@@ -552,13 +593,22 @@ def run_new_submit(
             git_ref=git_ref or None,
             version=version or None,
             resolved_deps=resolved_deps,
-            os=os or None,
-            os_version=os_version or None,
+            os=os_canon,
+            os_version=os_ver_clean,
+            distro=r_distro,
+            distro_version=distro_ver_clean,
+            flavor=r_flavor,
+            flavor_version=flavor_ver_clean,
             arch=arch or None,
             compiler=compiler or None,
             compiler_version=compiler_version or None,
             isolation=isolation or None,
             toolchain=toolchain or None,
+            platform_desc=_build_platform_desc(
+                os_canon, os_ver_clean, arch or None, compiler or None, compiler_version or None,
+                distro=r_distro, distro_version=distro_ver_clean,
+                flavor=r_flavor, flavor_version=flavor_ver_clean,
+            ),
             status=TestRunStatus.queued,
             trigger="web",
             started_at=datetime.datetime.utcnow(),
@@ -610,6 +660,10 @@ def run_new_matrix(request: Request,
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
                 os_version=job.get("os_version"),
+                distro=job.get("distro"),
+                distro_version=job.get("distro_version"),
+                flavor=job.get("flavor"),
+                flavor_version=job.get("flavor_version"),
                 arch=job.get("arch"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
@@ -628,6 +682,10 @@ def run_new_matrix(request: Request,
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
                 os_version=job.get("os_version"),
+                distro=job.get("distro"),
+                distro_version=job.get("distro_version"),
+                flavor=job.get("flavor"),
+                flavor_version=job.get("flavor_version"),
                 arch=job.get("arch"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
@@ -675,6 +733,10 @@ def run_rerun(run_id: int, current_user: User = Depends(require_user("submitter"
             git_ref=original.git_ref,
             os=original.os,
             os_version=original.os_version,
+            distro=original.distro,
+            distro_version=original.distro_version,
+            flavor=original.flavor,
+            flavor_version=original.flavor_version,
             arch=original.arch,
             compiler=original.compiler,
             compiler_version=original.compiler_version,
@@ -967,14 +1029,17 @@ def matrices_list(
 def matrix_new_form(request: Request,
                     current_user: User = Depends(require_user("submitter")),
                     error: str = Query(default=None)):
+    from opp_ci import platforms
     session = SessionLocal()
     try:
         projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
         os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
         compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
 
-        os_suggestions = sorted({o.name for o in os_entries if o.name})
+        os_suggestions = list(platforms.OS_NAMES)
         os_version_suggestions = sorted({o.version for o in os_entries if o.version})
+        distro_suggestions = sorted({platforms.display_name(n) for n in platforms.DISTROS})
+        flavor_suggestions = sorted({platforms.display_name(n) for n in platforms.FLAVORS})
         arch_suggestions = _arch_suggestions(os_entries)
         compiler_suggestions = sorted({c.name for c in compilers if c.name})
         compiler_version_suggestions = sorted({c.version for c in compilers if c.version})
@@ -1002,6 +1067,8 @@ def matrix_new_form(request: Request,
             "projects": projects,
             "os_suggestions": os_suggestions,
             "os_version_suggestions": os_version_suggestions,
+            "distro_suggestions": distro_suggestions,
+            "flavor_suggestions": flavor_suggestions,
             "arch_suggestions": arch_suggestions,
             "compiler_suggestions": compiler_suggestions,
             "compiler_version_suggestions": compiler_version_suggestions,
@@ -1062,6 +1129,10 @@ def matrix_create(
     refs: str = Form(default=""),
     os: str = Form(default=""),
     os_version: str = Form(default=""),
+    distro: str = Form(default=""),
+    distro_version: str = Form(default=""),
+    flavor: str = Form(default=""),
+    flavor_version: str = Form(default=""),
     arch: str = Form(default=""),
     compiler: str = Form(default=""),
     compiler_version: str = Form(default=""),
@@ -1089,6 +1160,10 @@ def matrix_create(
             "refs": _split_csv(refs),
             "os": _split_csv(os),
             "os_version": _split_csv(os_version),
+            "distro": _split_csv(distro),
+            "distro_version": _split_csv(distro_version),
+            "flavor": _split_csv(flavor),
+            "flavor_version": _split_csv(flavor_version),
             "arch": _split_csv(arch),
             "compiler": _split_csv(compiler),
             "compiler_version": _split_csv(compiler_version),
@@ -1297,17 +1372,22 @@ def workers_list(request: Request, current_user: User = Depends(require_user()))
             age = (now - w.last_heartbeat).total_seconds() if w.last_heartbeat else None
             tags = w.tags or []
             os_tags = [t for t in tags if t.startswith("os:")]
+            distro_tags = [t for t in tags if t.startswith("distro:")]
+            flavor_tags = [t for t in tags if t.startswith("flavor:")]
             compiler_tags = [t for t in tags if t.startswith("compiler:")]
             has_podman = "podman" in tags
             has_nix = "nix" in tags
             other_tags = [t for t in tags
-                          if not (t.startswith("os:") or t.startswith("compiler:")
+                          if not (t.startswith("os:") or t.startswith("distro:")
+                                  or t.startswith("flavor:") or t.startswith("compiler:")
                                   or t in ("podman", "nix"))]
             rows.append({
                 "worker": w,
                 "connected": connected,
                 "heartbeat_age_seconds": age,
                 "os_tags": os_tags,
+                "distro_tags": distro_tags,
+                "flavor_tags": flavor_tags,
                 "compiler_tags": compiler_tags,
                 "has_podman": has_podman,
                 "has_nix": has_nix,

@@ -14,7 +14,9 @@
         <tr><th>Version</th><td>{{ run.version or "-" }}</td></tr>
         <tr><th>Resolved deps</th><td>{% if run.resolved_deps %}{% for k, v in run.resolved_deps.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}-{% endif %}</td></tr>
         <tr><th>Platform</th><td>{{ run.platform_desc or "-" }}</td></tr>
-        <tr><th>OS</th><td>{{ (run.os ~ " " ~ run.os_version) if run.os else "-" }}</td></tr>
+        <tr><th>OS</th><td>{% if run.os %}{{ run.os }}{% if run.os_version %} {{ run.os_version }}{% endif %}{% else %}-{% endif %}</td></tr>
+        <tr><th>Distro</th><td>{% if run.distro %}{{ run.distro|title }}{% if run.distro_version %} {{ run.distro_version }}{% endif %}{% else %}-{% endif %}</td></tr>
+        <tr><th>Flavor</th><td>{% if run.flavor %}{{ run.flavor|title }}{% if run.flavor_version or run.distro_version %} {{ run.flavor_version or run.distro_version }}{% endif %}{% else %}-{% endif %}</td></tr>
         <tr><th>Arch</th><td>{{ run.arch or "-" }}</td></tr>
         <tr><th>Compiler</th><td>{{ (run.compiler ~ "-" ~ run.compiler_version) if run.compiler else "-" }}</td></tr>
         <tr><th>Isolation</th><td>{{ run.isolation or "none" }}</td></tr>

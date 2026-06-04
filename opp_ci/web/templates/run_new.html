@@ -74,14 +74,14 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="os">OS</label>
-                <input type="text" name="os" id="os" list="os-options" placeholder="Ubuntu">
+                <input type="text" name="os" id="os" list="os-options" placeholder="Linux">
                 <datalist id="os-options">
                     {% for o in os_suggestions %}<option value="{{ o }}">{% endfor %}
                 </datalist>
             </div>
             <div class="form-group">
                 <label for="os_version">OS Version</label>
-                <input type="text" name="os_version" id="os_version" list="os-version-options" placeholder="26.04">
+                <input type="text" name="os_version" id="os_version" list="os-version-options" placeholder="Windows/MacOS only">
                 <datalist id="os-version-options">
                     {% for v in os_version_suggestions %}<option value="{{ v }}">{% endfor %}
                 </datalist>
@@ -92,6 +92,30 @@
                 <datalist id="arch-options">
                     {% for a in arch_suggestions %}<option value="{{ a }}">{% endfor %}
                 </datalist>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="distro">Distro (Linux only)</label>
+                <input type="text" name="distro" id="distro" list="distro-options" placeholder="Ubuntu">
+                <datalist id="distro-options">
+                    {% for d in distro_suggestions %}<option value="{{ d }}">{% endfor %}
+                </datalist>
+            </div>
+            <div class="form-group">
+                <label for="distro_version">Distro Version</label>
+                <input type="text" name="distro_version" id="distro_version" placeholder="24.04">
+            </div>
+            <div class="form-group">
+                <label for="flavor">Flavor</label>
+                <input type="text" name="flavor" id="flavor" list="flavor-options" placeholder="Kubuntu">
+                <datalist id="flavor-options">
+                    {% for f in flavor_suggestions %}<option value="{{ f }}">{% endfor %}
+                </datalist>
+            </div>
+            <div class="form-group">
+                <label for="flavor_version">Flavor Version</label>
+                <input type="text" name="flavor_version" id="flavor_version" placeholder="(inherits distro)">
             </div>
         </div>
         <div class="form-row">

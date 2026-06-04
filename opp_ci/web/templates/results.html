@@ -18,8 +18,10 @@
         <option value="detailed" {{ "selected" if view == "detailed" }}>Detailed</option>
     </select>
     <br style="flex-basis:100%; height:0;">
-    <input type="text" name="os" placeholder="OS" value="{{ filter_os }}">
-    <input type="text" name="os_version" placeholder="OS version" value="{{ filter_os_version }}">
+    <input type="text" name="os" placeholder="OS (Linux/Windows/MacOS)" value="{{ filter_os }}">
+    <input type="text" name="distro" placeholder="Distro (e.g. ubuntu)" value="{{ filter_distro }}">
+    <input type="text" name="distro_version" placeholder="Distro ver." value="{{ filter_distro_version }}">
+    <input type="text" name="flavor" placeholder="Flavor (e.g. kubuntu)" value="{{ filter_flavor }}">
     <input type="text" name="compiler" placeholder="Compiler" value="{{ filter_compiler }}">
     <input type="text" name="compiler_version" placeholder="Compiler ver." value="{{ filter_compiler_version }}">
     <br style="flex-basis:100%; height:0;">
@@ -35,8 +37,8 @@
 {% if view == "summary" %}
 <!-- Summary roll-up view -->
 {% if summaries %}
-{% set extra_labels = {"isolation": "Isolation", "toolchain": "Toolchain", "commit_sha": "Commit", "version": "Version"} %}
-{% set primary_dims = ["project", "test", "mode", "os", "os_version", "compiler", "compiler_version", "git_ref"] %}
+{% set extra_labels = {"os_version": "OS ver.", "flavor_version": "Flavor ver.", "isolation": "Isolation", "toolchain": "Toolchain", "commit_sha": "Commit", "version": "Version"} %}
+{% set primary_dims = ["project", "test", "mode", "os", "distro", "distro_version", "flavor", "compiler", "compiler_version", "git_ref"] %}
 {% set sha_dims = ["git_ref", "commit_sha"] %}
 {% set show_reps = summaries | selectattr("repetitions", "gt", 1) | list | length > 0 %}
 <table>
@@ -46,7 +48,9 @@
             <th>Test</th>
             <th>Mode</th>
             <th>OS</th>
-            <th>OS ver.</th>
+            <th>Distro</th>
+            <th>Distro ver.</th>
+            <th>Flavor</th>
             <th>Compiler</th>
             <th>Comp. ver.</th>
             <th>Ref</th>
@@ -111,7 +115,8 @@
             <th>Test</th>
             <th>Mode</th>
             <th>OS</th>
-            <th>OS ver.</th>
+            <th>Distro</th>
+            <th>Flavor</th>
             <th>Compiler</th>
             <th>Comp. ver.</th>
             <th>Status</th>
@@ -126,8 +131,9 @@
             <td>{{ run.project }}</td>
             <td>{{ run.test }}</td>
             <td>{{ run.mode or "-" }}</td>
-            <td>{{ run.os or "-" }}</td>
-            <td>{{ run.os_version or "-" }}</td>
+            <td>{{ run.os or "-" }}{% if run.os_version %} {{ run.os_version }}{% endif %}</td>
+            <td>{% if run.distro %}{{ run.distro|title }}{% if run.distro_version %} {{ run.distro_version }}{% endif %}{% else %}-{% endif %}</td>
+            <td>{% if run.flavor %}{{ run.flavor|title }}{% if run.flavor_version or run.distro_version %} {{ run.flavor_version or run.distro_version }}{% endif %}{% else %}-{% endif %}</td>
             <td>{{ run.compiler or "-" }}</td>
             <td>{{ run.compiler_version or "-" }}</td>
             <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>

@@ -9,12 +9,12 @@ cross-product.  A separate "repetitions" value reports k when each cell
 is filled exactly k times; the UI shows a Reps column only when some row
 has k>1.
 
-Primary dimensions: project, test, mode, os, os_version, compiler,
-compiler_version, git_ref.
+Primary dimensions: project, test, mode, os, distro, distro_version,
+flavor, compiler, compiler_version, git_ref.
 
-Extra dimensions (isolation, toolchain, commit_sha, version) participate
-in classification and the Cartesian check but only appear as columns when
-they actually vary on the page.
+Extra dimensions (os_version, flavor_version, isolation, toolchain,
+commit_sha, version) participate in classification and the Cartesian
+check but only appear as columns when they actually vary on the page.
 """
 
 from collections import Counter, defaultdict
@@ -22,11 +22,14 @@ from functools import reduce
 from operator import mul
 
 PRIMARY_DIMENSIONS = [
-    "project", "test", "mode", "os", "os_version",
-    "compiler", "compiler_version", "git_ref",
+    "project", "test", "mode", "os", "distro", "distro_version",
+    "flavor", "compiler", "compiler_version", "git_ref",
 ]
 
-EXTRA_DIMENSIONS = ["isolation", "toolchain", "commit_sha", "version"]
+EXTRA_DIMENSIONS = [
+    "os_version", "flavor_version", "isolation", "toolchain",
+    "commit_sha", "version",
+]
 
 ALL_DIMENSIONS = PRIMARY_DIMENSIONS + EXTRA_DIMENSIONS
 

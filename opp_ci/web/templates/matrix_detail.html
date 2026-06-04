@@ -28,6 +28,10 @@
         </td></tr>
         <tr><th>OSes</th><td>{{ matrix.config.get("os", ["-"])|join(", ") }}</td></tr>
         <tr><th>OS Versions</th><td>{{ matrix.config.get("os_version", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Distros</th><td>{{ matrix.config.get("distro", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Distro Versions</th><td>{{ matrix.config.get("distro_version", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Flavors</th><td>{{ matrix.config.get("flavor", ["-"])|join(", ") }}</td></tr>
+        <tr><th>Flavor Versions</th><td>{{ matrix.config.get("flavor_version", ["-"])|join(", ") }}</td></tr>
         <tr><th>Architectures</th><td>{{ matrix.config.get("arch", ["-"])|join(", ") }}</td></tr>
         <tr><th>Compilers</th><td>{{ matrix.config.get("compiler", ["-"])|join(", ") }}</td></tr>
         <tr><th>Compiler Versions</th><td>{{ matrix.config.get("compiler_version", ["-"])|join(", ") }}</td></tr>
