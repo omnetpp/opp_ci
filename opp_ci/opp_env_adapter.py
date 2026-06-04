@@ -188,7 +188,8 @@ def sync_catalog(session):
     """
     from opp_ci.config import REFERENCE_PLATFORM
     from opp_ci.db.models import Project, Version, TestMatrix, OS, Compiler
-    from opp_ci.scheduler import _parse_os, _parse_compiler
+    from opp_ci.scheduler import _parse_name_version, _parse_compiler
+    from opp_ci import platforms
 
     projects = list_all_projects()
     if not projects:
@@ -228,7 +229,8 @@ def sync_catalog(session):
             _logger.info("New project: %s", name)
 
             # Create default matrix
-            os_name, os_ver = _parse_os(REFERENCE_PLATFORM.split("/")[0] if "/" in REFERENCE_PLATFORM else REFERENCE_PLATFORM)
+            ref_platform = REFERENCE_PLATFORM.split("/")[0] if "/" in REFERENCE_PLATFORM else REFERENCE_PLATFORM
+            ref_name, ref_ver = _parse_name_version(ref_platform)
             comp_name, comp_ver = _parse_compiler(REFERENCE_PLATFORM.split("/")[1] if "/" in REFERENCE_PLATFORM else "")
 
             matrix_config = {
@@ -236,9 +238,16 @@ def sync_catalog(session):
                 "modes": ["release"],
                 "versions": [name],
             }
-            if os_name:
-                os_str = f"{os_name} {os_ver}" if os_ver else os_name
-                matrix_config["os"] = [os_str]
+            if ref_name:
+                # REFERENCE_PLATFORM names a specific (distro|flavor|os) and version.
+                # Slot the value into the correct level via the registry.
+                axis_key = "os"
+                if platforms.is_known_flavor(ref_name):
+                    axis_key = "flavor"
+                elif platforms.is_linux_distro(ref_name):
+                    axis_key = "distro"
+                value = f"{ref_name} {ref_ver}" if ref_ver else ref_name
+                matrix_config[axis_key] = [value]
             if comp_name:
                 comp_str = f"{comp_name}-{comp_ver}" if comp_ver else comp_name
                 matrix_config["compiler"] = [comp_str]

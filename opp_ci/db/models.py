@@ -183,8 +183,12 @@ class TestRun(Base):
     project = Column(String, nullable=False)
     test = Column(String, nullable=False)
     mode = Column(String, nullable=True)
-    os = Column(String, nullable=True)
-    os_version = Column(String, nullable=True)
+    os = Column(String, nullable=True)          # "Linux" | "Windows" | "MacOS"
+    os_version = Column(String, nullable=True)  # only for Windows/MacOS; None for Linux
+    distro = Column(String, nullable=True)      # Linux only — "ubuntu", "fedora", ...
+    distro_version = Column(String, nullable=True)
+    flavor = Column(String, nullable=True)      # Linux only — "kubuntu", "xubuntu", ...
+    flavor_version = Column(String, nullable=True)  # falls back to distro_version when null
     arch = Column(String, nullable=True)        # CPU architecture, e.g. "amd64", "aarch64"
     compiler = Column(String, nullable=True)
     compiler_version = Column(String, nullable=True)

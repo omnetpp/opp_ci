@@ -16,26 +16,23 @@ Alternatively, 'ref_range' ({"base": "...", "head": "..."}) resolves a
 GitHub commit range at expansion time — so the list is always fresh.
 If both 'versions' and 'refs' are present, they are cross-producted.
 
-Platform axes support two styles:
+Platform axes form a three-level hierarchy — ``os`` ⊃ ``distro`` ⊃ ``flavor``:
 
-1. Structured (cross-product) — provide separate name and version lists:
-   {
-       "os": ["Ubuntu", "Fedora"],
-       "os_version": ["24.04", "41"],
-       "compiler": ["gcc", "clang"],
-       "compiler_version": ["14", "18"]
-   }
-   This produces all combinations: Ubuntu 24.04, Ubuntu 41, Fedora 24.04, etc.
+* ``os`` ∈ {Linux, Windows, MacOS}
+* ``distro`` ∈ {Ubuntu, Fedora, ...} (Linux only)
+* ``flavor`` ∈ {Kubuntu, ...} (variant of a distro)
 
-2. Combined (pre-composed strings) — omit the _version key:
-   {
-       "os": ["Ubuntu 24.04", "Fedora 41"],
-       "compiler": ["gcc-14", "clang-18"]
-   }
-   Values are parsed: OS splits on last space, compiler splits on last hyphen.
+Each level has an optional ``<level>_version`` partner. Levels and their
+versions support two styles, mirroring the compiler axis:
 
-Detection rule: if the _version key is present → structured mode (cross-product).
-If absent → combined mode (parse the strings).
+1. Structured — separate ``distro`` and ``distro_version`` lists are
+   cross-producted (Ubuntu 24.04, Ubuntu 26.04, Fedora 24.04, Fedora 26.04).
+2. Combined — values like ``"Ubuntu 24.04"`` are parsed into ``(name, version)``
+   on the last space.
+
+The expansion is *hierarchy-aware*: distro/flavor are only emitted under
+``os=Linux``; flavor is only emitted under its parent distro. Implied
+parents are filled in from [`platforms`](platforms.py).
 
 The ``arch`` axis names the CPU architecture (e.g. ``"amd64"``, ``"aarch64"``).
 omnetpp supports both; matrices that omit ``arch`` leave it unset on the
@@ -64,11 +61,13 @@ The scheduler expands this into individual jobs (one per combination).
 import itertools
 import logging
 
+from opp_ci import platforms
+
 _logger = logging.getLogger(__name__)
 
 
-def _parse_os(combined):
-    """Parse a combined OS string like 'Ubuntu 24.04' into (name, version)."""
+def _parse_name_version(combined):
+    """Parse a combined ``"Name 1.2"`` string into ``(name, version)``."""
     if not combined:
         return (None, None)
     parts = combined.rsplit(" ", 1)
@@ -87,17 +86,80 @@ def _parse_compiler(combined):
     return (combined, None)
 
 
-def _resolve_os_axis(config):
+def _resolve_level_axis(config, name_key, version_key):
+    """Return a list of ``(name, version)`` tuples for one platform level.
+
+    Either ``config[name_key]`` is a list of combined ``"Name version"``
+    strings (combined style) or both ``config[name_key]`` and
+    ``config[version_key]`` are present (structured cross-product style).
+    Missing entirely → ``[(None, None)]``.
     """
-    Resolve OS axis from config.
-    Returns a list of (os_name, os_version) tuples.
+    names = config.get(name_key, [None])
+    if version_key in config:
+        versions = config[version_key]
+        return list(itertools.product(names, versions))
+    return [_parse_name_version(n) for n in names]
+
+
+def _resolve_platform_axis(config):
+    """Resolve the three-level platform axis from a matrix config.
+
+    Returns a list of
+    ``(os, os_version, distro, distro_version, flavor, flavor_version)``
+    6-tuples.
+
+    The three levels (os, distro, flavor) don't cross-multiply — they form
+    a hierarchy and *union* into the cell list. Each level contributes its
+    own cells with implied parents filled in via the registry:
+
+    * ``os: [Linux, Windows]`` → (Linux), (Windows)
+    * ``distro: [Ubuntu, Fedora]`` → (Linux, Ubuntu), (Linux, Fedora)
+    * ``flavor: [Kubuntu]`` → (Linux, Ubuntu, Kubuntu)
+
+    Versions within a level still cross-product using the same combined /
+    structured rules as the compiler axis. An axis that names no entries
+    contributes no cells. When no level is named at all, returns one
+    ``(None, None, None, None, None, None)`` cell so the caller's
+    Cartesian product still has something to iterate.
     """
-    os_list = config.get("os", [None])
-    if "os_version" in config:
-        os_versions = config["os_version"]
-        return list(itertools.product(os_list, os_versions))
-    else:
-        return [_parse_os(o) for o in os_list]
+    cells = []
+
+    def _add(os_name, os_ver, distro_name, distro_ver, flavor_name, flavor_ver):
+        try:
+            r_os, r_distro, r_flavor = platforms.resolve_platform(
+                os=os_name, distro=distro_name, flavor=flavor_name,
+            )
+        except ValueError:
+            return
+        canon_os = platforms._os_canonical(r_os) if r_os else None
+        cell = (
+            canon_os,
+            os_ver if canon_os and canon_os != "Linux" else None,
+            r_distro,
+            distro_ver if r_distro else None,
+            r_flavor,
+            flavor_ver if r_flavor else None,
+        )
+        if cell not in cells:
+            cells.append(cell)
+
+    has_os = "os" in config
+    has_distro = "distro" in config
+    has_flavor = "flavor" in config
+
+    if has_os:
+        for name, ver in _resolve_level_axis(config, "os", "os_version"):
+            _add(name, ver, None, None, None, None)
+
+    if has_distro:
+        for name, ver in _resolve_level_axis(config, "distro", "distro_version"):
+            _add(None, None, name, ver, None, None)
+
+    if has_flavor:
+        for name, ver in _resolve_level_axis(config, "flavor", "flavor_version"):
+            _add(None, None, None, None, name, ver)
+
+    return cells or [(None, None, None, None, None, None)]
 
 
 def _resolve_compiler_axis(config):
@@ -177,19 +239,16 @@ def _validate_nix_compiler(compiler, compiler_version):
     )
 
 
-def _build_platform_desc(os_name, os_version, arch, compiler_name, compiler_version):
+def _build_platform_desc(os_name, os_version, arch, compiler_name, compiler_version,
+                         distro=None, distro_version=None,
+                         flavor=None, flavor_version=None):
     """Build a human-readable platform description from components."""
-    parts = []
-    if os_name:
-        os_part = f"{os_name} {os_version}" if os_version else os_name
-        if arch:
-            os_part = f"{os_part} ({arch})"
-        parts.append(os_part)
-    elif arch:
-        parts.append(arch)
-    if compiler_name:
-        parts.append(f"{compiler_name}-{compiler_version}" if compiler_version else compiler_name)
-    return " / ".join(parts) if parts else None
+    return platforms.build_platform_desc(
+        os=os_name, os_version=os_version,
+        distro=distro, distro_version=distro_version,
+        flavor=flavor, flavor_version=flavor_version,
+        arch=arch, compiler=compiler_name, compiler_version=compiler_version,
+    )
 
 
 def _resolve_deps_axis(config):
@@ -258,8 +317,12 @@ def expand_matrix(project, config):
             "test": "smoke",
             "mode": "release",
             "git_ref": "master",
-            "os": "Ubuntu",
-            "os_version": "24.04",
+            "os": "Linux",
+            "os_version": None,
+            "distro": "ubuntu",
+            "distro_version": "24.04",
+            "flavor": None,
+            "flavor_version": None,
             "arch": "amd64",
             "compiler": "gcc",
             "compiler_version": "14",
@@ -281,7 +344,7 @@ def expand_matrix(project, config):
         refs = _resolve_ref_range(project, config["ref_range"])
     else:
         refs = [None]
-    os_tuples = _resolve_os_axis(config)
+    platform_cells = _resolve_platform_axis(config)
     compiler_tuples = _resolve_compiler_axis(config)
     dep_combos = _resolve_deps_axis(config)
     isolations = _resolve_isolation_axis(config)
@@ -289,12 +352,13 @@ def expand_matrix(project, config):
     arches = _resolve_arch_axis(config)
 
     jobs = []
-    for (version, ref, test, mode, (os_name, os_ver), arch,
+    for (version, ref, test, mode, platform_cell, arch,
          (comp_name, comp_ver), dep_pins, isolation, toolchain) in itertools.product(
-            versions, refs, tests, modes, os_tuples, arches, compiler_tuples,
+            versions, refs, tests, modes, platform_cells, arches, compiler_tuples,
             dep_combos, isolations, toolchains):
         if toolchain == "nix":
             _validate_nix_compiler(comp_name, comp_ver)
+        os_name, os_ver, distro, distro_ver, flavor, flavor_ver = platform_cell
         jobs.append({
             "project": project,
             "version": version,
@@ -303,12 +367,20 @@ def expand_matrix(project, config):
             "git_ref": ref,
             "os": os_name,
             "os_version": os_ver,
+            "distro": distro,
+            "distro_version": distro_ver,
+            "flavor": flavor,
+            "flavor_version": flavor_ver,
             "arch": arch,
             "compiler": comp_name,
             "compiler_version": comp_ver,
             "isolation": isolation,
             "toolchain": toolchain,
-            "platform_desc": _build_platform_desc(os_name, os_ver, arch, comp_name, comp_ver),
+            "platform_desc": _build_platform_desc(
+                os_name, os_ver, arch, comp_name, comp_ver,
+                distro=distro, distro_version=distro_ver,
+                flavor=flavor, flavor_version=flavor_ver,
+            ),
             "resolved_deps": dep_pins or None,
         })
 
@@ -322,7 +394,7 @@ DEFAULT_MATRICES = {
         "config": {
             "tests": ["smoke", "fingerprint", "statistical"],
             "modes": ["release", "debug"],
-            "os": ["Ubuntu 24.04"],
+            "distro": ["Ubuntu 24.04"],
             "compiler": ["gcc-14", "clang-18"],
         },
     },
@@ -331,7 +403,7 @@ DEFAULT_MATRICES = {
         "config": {
             "tests": ["smoke", "build"],
             "modes": ["release", "debug"],
-            "os": ["Ubuntu 24.04"],
+            "distro": ["Ubuntu 24.04"],
             "arch": ["amd64", "aarch64"],
             "compiler": ["gcc-14", "clang-18"],
         },
@@ -343,7 +415,7 @@ DEFAULT_MATRICES = {
         "config": {
             "tests": ["smoke"],
             "modes": ["release"],
-            "os": ["Ubuntu 26.04", "Fedora 42"],
+            "distro": ["Ubuntu 26.04", "Fedora 42"],
             "compiler": ["clang-22"],
             "isolation": ["podman"],
             "toolchain": ["none"],
