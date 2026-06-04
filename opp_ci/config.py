@@ -69,6 +69,50 @@ GITHUB_STATUS_CONTEXT = os.environ.get("OPP_CI_GITHUB_STATUS_CONTEXT", "opp_ci")
 GITHUB_BASE_URL = os.environ.get("OPP_CI_GITHUB_BASE_URL", "https://api.github.com")
 
 
+# ── Web UI login (session + GitHub OAuth) ─────────────────────────────
+#
+# The session secret signs session cookies. Empty by default so a
+# misconfigured deploy fails closed at startup rather than handing out
+# unsigned-but-look-signed cookies. For development, `opp_ci serve` will
+# refuse to start without a value.
+SESSION_SECRET = os.environ.get("OPP_CI_SESSION_SECRET", "")
+SESSION_COOKIE_SECURE = os.environ.get("OPP_CI_SESSION_COOKIE_SECURE", "0") == "1"
+
+# Public origin (scheme+host[:port]) used to build the OAuth callback URL.
+# Required when GitHub OAuth is enabled; without it we'd derive the URL
+# from the Host: header, which breaks behind a reverse proxy.
+PUBLIC_URL = os.environ.get("OPP_CI_PUBLIC_URL", "")
+
+# GitHub OAuth App credentials. Leaving the client ID empty disables the
+# "Sign in with GitHub" button entirely; local password login remains.
+GITHUB_OAUTH_CLIENT_ID = os.environ.get("OPP_CI_GITHUB_OAUTH_CLIENT_ID", "")
+GITHUB_OAUTH_CLIENT_SECRET_FILE = os.environ.get(
+    "OPP_CI_GITHUB_OAUTH_CLIENT_SECRET_FILE",
+    os.path.expanduser("~/.ssh/opp_ci_github_oauth_secret"),
+)
+
+# Authorization policy applied after a successful GitHub login.
+# `OPP_CI_GITHUB_ORG` empty → no org check, every GitHub user → readonly.
+# `OPP_CI_GITHUB_SUBMITTER_TEAMS` == "*" → any member of the org gets
+# `submitter`; else only listed team slugs do.
+GITHUB_ORG = os.environ.get("OPP_CI_GITHUB_ORG", "")
+GITHUB_ADMIN_TEAMS = [s.strip() for s in os.environ.get("OPP_CI_GITHUB_ADMIN_TEAMS", "").split(",") if s.strip()]
+GITHUB_SUBMITTER_TEAMS = [s.strip() for s in os.environ.get("OPP_CI_GITHUB_SUBMITTER_TEAMS", "*").split(",") if s.strip()]
+GITHUB_ALLOW_EXTERNAL = os.environ.get("OPP_CI_GITHUB_ALLOW_EXTERNAL", "1") == "1"
+
+
+def get_github_oauth_client_secret():
+    """Read the OAuth App client secret from env or file."""
+    secret = os.environ.get("OPP_CI_GITHUB_OAUTH_CLIENT_SECRET", "")
+    if secret:
+        return secret
+    try:
+        with open(GITHUB_OAUTH_CLIENT_SECRET_FILE) as f:
+            return f.read().strip()
+    except (OSError, FileNotFoundError):
+        return ""
+
+
 GITHUB_ACTIONS_TOKEN_FILE = os.environ.get(
     "OPP_CI_GITHUB_ACTIONS_TOKEN_FILE",
     os.path.expanduser("~/.ssh/opp_ci_github_actions_token"),
