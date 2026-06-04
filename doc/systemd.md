@@ -39,11 +39,14 @@ The installer is idempotent. It:
 - copies the source tree to `/opt/opp_ci` (excluding `.venv`, caches,
   and any local SQLite DB; `.git/` is kept so setuptools-scm can
   resolve the version),
-- creates `/opt/opp_ci/.venv` and `pip install -e`s opp_ci into it,
-  with the `[postgres]` extra unless `--no-postgres` was passed,
+- creates `/opt/opp_ci/.venv` and `pip install -e`s opp_ci into it
+  with all runtime extras (`web`, `client`, `podman`, `postgres`),
 - by default installs PostgreSQL if missing, creates an `opp_ci` role
-  and database with peer-auth via the Unix socket, and appends
-  `OPP_CI_DATABASE_URL=postgresql:///opp_ci?host=/var/run/postgresql`
+  and database with peer-auth via the Unix socket, grants `ALL ON
+  SCHEMA public` to the role (required by PostgreSQL 15+), detects the
+  cluster's actual port (Ubuntu sometimes allocates 5433 instead of
+  5432), and appends a matching
+  `OPP_CI_DATABASE_URL=postgresql:///opp_ci?host=/var/run/postgresql&port=<detected>`
   to `/etc/opp_ci/opp_ci.env` if no DB URL is already set there,
 - installs the three unit files into `/etc/systemd/system/`,
 - seeds `/etc/opp_ci/` with `opp_ci.env`, `serve.env`, and
@@ -64,9 +67,8 @@ sudoedit /etc/opp_ci/opp_ci.env
 # OPP_CI_DATABASE_URL=postgresql://opp_ci:secret@db.example.com/opp_ci
 ```
 
-You will need `psycopg2-binary` in the venv — re-run the installer
-without `--no-postgres` once to get it, or install it manually:
-`sudo /opt/opp_ci/.venv/bin/pip install psycopg2-binary`.
+`psycopg2-binary` is part of the runtime extras the installer always
+pulls in, so no extra pip step is needed.
 
 ## Role selection
 
@@ -150,6 +152,56 @@ worker has up to 60s to drain in-flight work after `SIGTERM`. Both
 honour `SIGINT`/`SIGTERM` for clean shutdown — `systemctl stop` will
 not strand in-flight jobs as long as they finish within the timeout.
 
+To use `opp_ci.target` as the umbrella on/off switch, enable and start
+it once after enabling the individual units:
+
+```bash
+sudo systemctl enable --now opp_ci.target
+sudo systemctl stop  opp_ci.target   # takes serve + all workers down (PartOf=)
+sudo systemctl start opp_ci.target   # brings them all back up
+```
+
+Without that step the target stays inactive even when serve and the
+workers are running — they're started directly, not through the
+target. The target is purely an ergonomic wrapper; nothing else
+depends on it.
+
+## Running CLI commands by hand
+
+Admin commands like `opp_ci worker register`, `opp_ci list-runs`, or
+ad-hoc queries need the same database URL as the running service. The
+config layer auto-loads `/etc/opp_ci/opp_ci.env` at startup (without
+overriding anything already in your environment), so a bare CLI
+invocation as the `opp_ci` user just works:
+
+```bash
+sudo -u opp_ci /opt/opp_ci/.venv/bin/opp_ci worker register \
+    --name local --auto-tags
+```
+
+You can also `sudo -u opp_ci -i` (if you give the user a real shell) or
+add `/opt/opp_ci/.venv/bin` to root's PATH for convenience. The
+underlying mechanism is: any process importing `opp_ci.config` overlays
+that env file as a fallback, so the same precedence applies — explicit
+env vars and systemd `EnvironmentFile=` win, the file fills the gap.
+
+## Exposing serve externally
+
+The unit binds to `127.0.0.1:8080` by default — only reachable from the
+same host. Pick one of the access patterns:
+
+- **SSH tunnel** (zero server-side changes): from your laptop, run
+  `ssh -L 8080:127.0.0.1:8080 user@host`, then open
+  `http://127.0.0.1:8080/` locally.
+- **Direct bind to all interfaces**: in `/etc/opp_ci/serve.env`, set
+  `OPP_CI_SERVE_HOST=0.0.0.0`, restart the unit. Opens port 8080 over
+  plain HTTP — fine for a private VM, **not** for the public internet
+  (no TLS, credentials and tokens in cleartext).
+- **Reverse proxy with HTTPS** (recommended for any real exposure):
+  keep serve on 127.0.0.1, put Caddy or nginx + Let's Encrypt in front
+  on 443. See [deployment.md](deployment.md) for the reverse-proxy
+  shape.
+
 ## Environment files
 
 | File | Read by | Mode | Purpose |
@@ -188,17 +240,23 @@ the corresponding capability tag — there is no error at startup.
 
 ## Hardening
 
-The serve unit ships with strict hardening:
+The serve unit ships with this hardening:
 
 ```
 NoNewPrivileges=true
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/var/lib/opp_ci
 ```
 
-This is safe because the coordinator does not invoke Nix or podman.
+`ProtectSystem=full` (rather than `strict`) is deliberate: `strict`
+mounts the entire filesystem read-only inside the unit's namespace and,
+in combination with `PrivateTmp=true`, hides `/var/run/postgresql` so
+the local Unix-socket connection to PostgreSQL fails with `ENOENT`.
+`full` keeps `/usr`, `/boot`, `/efi`, `/etc` read-only while leaving
+`/var` and `/run` reachable. If your DB is remote (TCP), you can step
+back up to `strict` via `systemctl edit opp_ci-serve.service`.
 
 The worker unit ships with hardening **commented out**, because Nix
 and podman need filesystem access that is awkward to enumerate
@@ -207,7 +265,7 @@ to work; sensible starting point:
 
 ```ini
 NoNewPrivileges=true
-ProtectSystem=strict
+ProtectSystem=full
 ProtectHome=true
 ReadWritePaths=/var/lib/opp_ci /nix/var
 ```
