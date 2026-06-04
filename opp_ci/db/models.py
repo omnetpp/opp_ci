@@ -118,6 +118,39 @@ class ApiToken(Base):
         return f"<ApiToken(name={self.name!r}, role={self.role!r})>"
 
 
+class User(Base):
+    """A human user of the web UI.
+
+    Either `github_user_id` is set (GitHub OAuth login) or `username` is set
+    (local password login), or both (a local account that has linked a
+    GitHub identity). `role_locked` means an admin has pinned the role —
+    subsequent OAuth logins won't recompute it from GitHub team membership.
+    """
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    github_user_id = Column(Integer, unique=True, nullable=True)
+    github_username = Column(String, nullable=True)
+    username = Column(String, unique=True, nullable=True)
+    password_hash = Column(String, nullable=True)
+    role = Column(String, nullable=False, default="readonly")
+    role_locked = Column(Boolean, default=False, nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    last_login_at = Column(DateTime, nullable=True)
+    last_role_sync_at = Column(DateTime, nullable=True)
+
+    def __repr__(self):
+        ident = self.username or f"@{self.github_username}" or f"id={self.id}"
+        return f"<User({ident}, role={self.role!r})>"
+
+    @property
+    def display_name(self):
+        if self.github_username:
+            return f"@{self.github_username}"
+        return self.username or f"user#{self.id}"
+
+
 class AutoTestRule(Base):
     __tablename__ = "auto_test_rules"
 

@@ -36,6 +36,9 @@ web = [
     "jinja2",
     "pydantic>=2.0",
     "python-multipart",
+    "itsdangerous",
+    "bcrypt",
+    "httpx",
 ]
 client = [
     "requests",
