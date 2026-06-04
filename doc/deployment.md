@@ -54,6 +54,13 @@ For long-running deployments, run `serve` (and `worker start`) under
 systemd instead of a bare shell — see [systemd.md](systemd.md) for the
 unit files, install script, and per-role configuration.
 
+The web UI requires login. Before the first start, set
+`OPP_CI_SESSION_SECRET` to a random value and create a bootstrap
+admin with `opp_ci user create`. To let users sign in with GitHub
+instead of (or in addition to) local passwords, see
+[web-login.md](web-login.md) for the OAuth App setup and the
+role-mapping config.
+
 Always place behind a reverse proxy with HTTPS (Caddy or nginx + Let's
 Encrypt). Example public URLs:
 
