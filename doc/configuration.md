@@ -35,13 +35,24 @@ contract is explicit.
 | `OPP_CI_INSTALL_PROJECTS` | *(empty)* | Comma-separated list of opp_env projects the entrypoint should `opp_env install` before running the test command. |
 | `OPP_ENV_GIT_REF` | *(empty)* | Specific git ref to pin a `*-git` opp_env project to, when one is named. |
 
+## Web server (serve)
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPP_CI_SERVE_HOST` | `127.0.0.1` | Bind host for `opp_ci serve`. Overridden by `--host`. |
+| `OPP_CI_SERVE_PORT` | `8080` | Bind port for `opp_ci serve`. Overridden by `--port`. |
+
 ## Workers
 
 | Variable | Default | Description |
 |---|---|---|
+| `OPP_CI_WORKER_TOKEN` | *(empty)* | Token used by `opp_ci worker start` when `--token` is omitted (e.g. when run from a systemd unit). |
 | `OPP_CI_WORKER_POLL_INTERVAL` | `10` | Seconds between worker job polls. |
 | `OPP_CI_WORKER_HEARTBEAT_INTERVAL` | `30` | Seconds between worker heartbeats. |
 | `OPP_CI_WORKER_HEARTBEAT_TIMEOUT` | `120` | Seconds before a worker is marked offline. |
+
+Note: `opp_ci worker start` also falls back to `OPP_CI_COORDINATOR_URL`
+when `--coordinator` is omitted.
 
 ## GitHub integration
 

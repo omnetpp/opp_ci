@@ -247,13 +247,20 @@ def _run_remote(project, test_types, git_ref, *, mode=None,
 
 
 @main.command("serve")
-@click.option("--host", default="127.0.0.1", help="Bind host")
-@click.option("--port", default=8080, help="Bind port (matches the default OPP_CI_COORDINATOR_URL)")
+@click.option("--host", default=None,
+              help="Bind host (default from $OPP_CI_SERVE_HOST, or 127.0.0.1)")
+@click.option("--port", default=None, type=int,
+              help="Bind port (default from $OPP_CI_SERVE_PORT, or 8080)")
 def serve(host, port):
     """Start the web UI server."""
     import uvicorn
     from opp_ci.web.app import app
+    from opp_ci import config as cfg
     Base.metadata.create_all(engine)
+    if host is None:
+        host = cfg.SERVE_HOST
+    if port is None:
+        port = cfg.SERVE_PORT
     click.echo(f"Starting opp_ci web UI at http://{host}:{port}")
     uvicorn.run(app, host=host, port=port, log_level="info")
 
@@ -1073,8 +1080,10 @@ def worker_detect_tags():
 
 
 @worker_group.command("start")
-@click.option("--coordinator", required=True, help="Coordinator URL (e.g. https://ci.omnetpp.org)")
-@click.option("--token", required=True, help="Worker token")
+@click.option("--coordinator", default=None,
+              help="Coordinator URL (default from $OPP_CI_COORDINATOR_URL)")
+@click.option("--token", default=None,
+              help="Worker token (default from $OPP_CI_WORKER_TOKEN)")
 @click.option("--poll-interval", default=10, help="Seconds between polls (default: 10)")
 @click.option("--heartbeat-interval", default=30, help="Seconds between heartbeats (default: 30)")
 def worker_start(coordinator, token, poll_interval, heartbeat_interval):
@@ -1084,6 +1093,16 @@ def worker_start(coordinator, token, poll_interval, heartbeat_interval):
     `opp_ci worker register`) and fetched from the coordinator on startup.
     """
     from opp_ci.worker import WorkerAgent
+    from opp_ci import config as cfg
+
+    if coordinator is None:
+        coordinator = cfg.COORDINATOR_URL
+    if token is None:
+        token = cfg.WORKER_TOKEN
+    if not token:
+        raise click.ClickException(
+            "Worker token missing. Pass --token or set $OPP_CI_WORKER_TOKEN."
+        )
 
     agent = WorkerAgent(coordinator_url=coordinator, token=token)
     try:
