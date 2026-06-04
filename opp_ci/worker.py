@@ -120,7 +120,7 @@ class WorkerAgent:
         # opp_env project identifier; otherwise fall back to the bare project
         # name (e.g. "mm1k") for projects with a single version.
         project = job.get("version") or job["project"]
-        test_type = job["test_type"]
+        test = job["test"]
         git_ref = job.get("git_ref")
         opp_file = job.get("opp_file")
         mode = job.get("mode")
@@ -142,7 +142,7 @@ class WorkerAgent:
 
         _logger.info(
             "Executing run #%d: %s / %s (ref=%s, isolation=%s, toolchain=%s)",
-            run_id, project, test_type, git_ref, isolation, toolchain,
+            run_id, project, test, git_ref, isolation, toolchain,
         )
 
         try:
@@ -154,7 +154,7 @@ class WorkerAgent:
             return
 
         try:
-            outcome = run_test(project, test_type, **run_kwargs)
+            outcome = run_test(project, test, **run_kwargs)
         except Exception as e:
             _logger.error("Test execution failed for run #%d: %s", run_id, e)
             self._report_result(run_id, "ERROR", stderr=str(e))

@@ -7,7 +7,7 @@ Usage:
     from opp_ci.client import OppCiClient
 
     ci = OppCiClient(url="https://ci.omnetpp.org/api", token="...")
-    run = ci.submit_run(project="inet", test_type="smoke")
+    run = ci.submit_run(project="inet", test="smoke")
     ci.get_run(run["id"])
     results = ci.list_runs(project="inet", status="FAIL")
 """
@@ -33,12 +33,12 @@ class OppCiClient:
         self._session = requests.Session()
         self._session.headers["Authorization"] = f"Bearer {token}"
 
-    def submit_run(self, project, test_type, mode=None, git_ref=None,
+    def submit_run(self, project, test, mode=None, git_ref=None,
                    os=None, os_version=None, arch=None,
                    compiler=None, compiler_version=None,
                    isolation=None, toolchain=None, force=False):
         """Submit a single test run. Returns {"id": ..., "status": "queued"}."""
-        payload = {"project": project, "test_type": test_type}
+        payload = {"project": project, "test": test}
         if mode:
             payload["mode"] = mode
         if git_ref:
@@ -69,13 +69,13 @@ class OppCiClient:
         """Get full details of a run including results."""
         return self._get(f"/runs/{run_id}")
 
-    def list_runs(self, project=None, test_type=None, status=None, limit=50):
+    def list_runs(self, project=None, test=None, status=None, limit=50):
         """List test runs with optional filters."""
         params = {"limit": limit}
         if project:
             params["project"] = project
-        if test_type:
-            params["test_type"] = test_type
+        if test:
+            params["test"] = test
         if status:
             params["status"] = status
         return self._get("/runs", params=params)

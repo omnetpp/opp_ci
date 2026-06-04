@@ -48,7 +48,7 @@ router = APIRouter(prefix="/api")
 
 class SubmitRunRequest(BaseModel):
     project: str
-    test_type: str
+    test: str
     mode: str | None = None
     git_ref: str | None = None
     os: str | None = None
@@ -84,7 +84,7 @@ class CreateTokenRequest(BaseModel):
 class RunResponse(BaseModel):
     id: int
     project: str
-    test_type: str
+    test: str
     mode: str | None
     git_ref: str | None
     status: str
@@ -126,7 +126,7 @@ async def submit_run(
             existing = find_existing_run(
                 session,
                 project=req.project,
-                test_type=req.test_type,
+                test=req.test,
                 mode=req.mode,
                 git_ref=req.git_ref,
                 os=req.os,
@@ -145,7 +145,7 @@ async def submit_run(
 
         run = TestRun(
             project=req.project,
-            test_type=req.test_type,
+            test=req.test,
             mode=req.mode,
             git_ref=req.git_ref,
             os=req.os,
@@ -191,7 +191,7 @@ async def submit_matrix_run(
             existing = find_existing_run(
                 session,
                 project=job["project"],
-                test_type=job["test_type"],
+                test=job["test"],
                 mode=job.get("mode"),
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
@@ -209,7 +209,7 @@ async def submit_matrix_run(
             run = TestRun(
                 project=job["project"],
                 version=job.get("version"),
-                test_type=job["test_type"],
+                test=job["test"],
                 mode=job.get("mode"),
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
@@ -239,7 +239,7 @@ async def submit_matrix_run(
 @router.get("/runs")
 async def list_runs(
     project: str | None = None,
-    test_type: str | None = None,
+    test: str | None = None,
     status: str | None = None,
     limit: int = 50,
     _identity: dict = Depends(require_role("readonly")),
@@ -250,8 +250,8 @@ async def list_runs(
         query = select(TestRun).order_by(TestRun.id.desc()).limit(limit)
         if project:
             query = query.where(TestRun.project == project)
-        if test_type:
-            query = query.where(TestRun.test_type == test_type)
+        if test:
+            query = query.where(TestRun.test == test)
         if status:
             query = query.where(TestRun.status == TestRunStatus(status))
 
@@ -429,7 +429,7 @@ async def worker_poll(
                 "run_id": run.id,
                 "project": run.project,
                 "version": run.version,
-                "test_type": run.test_type,
+                "test": run.test,
                 "mode": run.mode,
                 "git_ref": run.git_ref,
                 "os": run.os,
@@ -897,7 +897,7 @@ def _run_to_dict(run):
     return {
         "id": run.id,
         "project": run.project,
-        "test_type": run.test_type,
+        "test": run.test,
         "mode": run.mode,
         "git_ref": run.git_ref,
         "os": run.os,

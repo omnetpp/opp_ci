@@ -192,7 +192,7 @@ def runs_list(
     request: Request,
     current_user: User = Depends(require_user()),
     project: str = Query(default=None),
-    test_type: str = Query(default=None),
+    test: str = Query(default=None),
     git_ref: str = Query(default=None),
     status: str = Query(default=None),
     limit: int = Query(default=50),
@@ -202,8 +202,8 @@ def runs_list(
         query = select(TestRun).order_by(TestRun.id.desc()).limit(limit)
         if project:
             query = query.where(TestRun.project == project)
-        if test_type:
-            query = query.where(TestRun.test_type == test_type)
+        if test:
+            query = query.where(TestRun.test == test)
         if git_ref:
             query = query.where(
                 (TestRun.git_ref == git_ref) | (TestRun.commit_sha.startswith(git_ref))
@@ -215,7 +215,7 @@ def runs_list(
         return templates.TemplateResponse(request, "runs.html", {
             "runs": runs,
             "filter_project": project or "",
-            "filter_test_type": test_type or "",
+            "filter_test": test or "",
             "filter_git_ref": git_ref or "",
             "filter_status": status or "",
             **_template_globals(request, current_user),
@@ -229,7 +229,7 @@ def results_page(
     request: Request,
     current_user: User = Depends(require_user()),
     project: str = Query(default=None),
-    test_type: str = Query(default=None),
+    test: str = Query(default=None),
     mode: str = Query(default=None),
     os: str = Query(default=None, alias="os"),
     os_version: str = Query(default=None),
@@ -251,8 +251,8 @@ def results_page(
             query = query.where(TestRun.id.in_(ids))
         if project:
             query = query.where(TestRun.project == project)
-        if test_type:
-            query = query.where(TestRun.test_type == test_type)
+        if test:
+            query = query.where(TestRun.test == test)
         if mode:
             query = query.where(TestRun.mode == mode)
         if os:
@@ -278,7 +278,7 @@ def results_page(
             "view": view,
             "grouping": grouping,
             "filter_project": project or "",
-            "filter_test_type": test_type or "",
+            "filter_test": test or "",
             "filter_mode": mode or "",
             "filter_os": os or "",
             "filter_os_version": os_version or "",
@@ -300,7 +300,7 @@ def compare_page(
     project: str = Query(default=None),
     ref_a: str = Query(default=None, description="Git ref for side A"),
     ref_b: str = Query(default=None, description="Git ref for side B"),
-    test_type: str = Query(default=None),
+    test: str = Query(default=None),
 ):
     """Compare two runs or two refs side-by-side."""
     session = SessionLocal()
@@ -332,8 +332,8 @@ def compare_page(
         elif project and ref_a and ref_b:
             # Compare by branch/ref — find most recent runs for each ref
             query_base = select(TestRun).where(TestRun.project == project).order_by(TestRun.id.desc())
-            if test_type:
-                query_base = query_base.where(TestRun.test_type == test_type)
+            if test:
+                query_base = query_base.where(TestRun.test == test)
 
             left_runs = session.execute(
                 query_base.where(TestRun.git_ref == ref_a).limit(20)
@@ -367,7 +367,7 @@ def compare_page(
             "filter_project": project or "",
             "ref_a": ref_a or "",
             "ref_b": ref_b or "",
-            "filter_test_type": test_type or "",
+            "filter_test": test or "",
             **_template_globals(request, current_user),
         })
     finally:
@@ -381,7 +381,7 @@ def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
     Each row: {test_key, left_status, right_status, changed, left_duration, right_duration}
     """
     def _result_key(result):
-        # Use test_run's test_type + result parameters as key
+        # Use test_run's test + result parameters as key
         return result.result_code  # fallback
 
     def _results_by_run(runs, results):
@@ -428,13 +428,13 @@ def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
             })
         return rows
 
-    # For multi-run (branch) comparison: compare by test_type
+    # For multi-run (branch) comparison: compare by test
     left_by_type = {}
     right_by_type = {}
     for r in left_runs:
-        left_by_type.setdefault(r.test_type, []).append(r)
+        left_by_type.setdefault(r.test, []).append(r)
     for r in right_runs:
-        right_by_type.setdefault(r.test_type, []).append(r)
+        right_by_type.setdefault(r.test, []).append(r)
 
     all_types = list(dict.fromkeys(list(left_by_type.keys()) + list(right_by_type.keys())))
     rows = []
@@ -526,7 +526,7 @@ def run_new_submit(
     request: Request,
     current_user: User = Depends(require_user("submitter")),
     project: str = Form(...),
-    test_type: str = Form(...),
+    test: str = Form(...),
     mode: str = Form(default=""),
     git_ref: str = Form(default=""),
     version: str = Form(default=""),
@@ -547,7 +547,7 @@ def run_new_submit(
             resolved_deps = {"omnetpp": omnetpp_version}
         run = TestRun(
             project=project,
-            test_type=test_type,
+            test=test,
             mode=mode or None,
             git_ref=git_ref or None,
             version=version or None,
@@ -605,7 +605,7 @@ def run_new_matrix(request: Request,
                 session,
                 project=job.get("project", matrix.project),
                 version=job.get("version"),
-                test_type=job.get("test_type", "smoke"),
+                test=job.get("test", "smoke"),
                 mode=job.get("mode"),
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
@@ -623,7 +623,7 @@ def run_new_matrix(request: Request,
             run = TestRun(
                 project=job.get("project", matrix.project),
                 version=job.get("version"),
-                test_type=job.get("test_type", "smoke"),
+                test=job.get("test", "smoke"),
                 mode=job.get("mode"),
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
@@ -670,7 +670,7 @@ def run_rerun(run_id: int, current_user: User = Depends(require_user("submitter"
         new_run = TestRun(
             project=original.project,
             version=original.version,
-            test_type=original.test_type,
+            test=original.test,
             mode=original.mode,
             git_ref=original.git_ref,
             os=original.os,
@@ -1055,7 +1055,7 @@ def matrix_create(
     current_user: User = Depends(require_user("submitter")),
     name: str = Form(...),
     project: str = Form(...),
-    test_types: str = Form(default=""),
+    tests: str = Form(default=""),
     modes: str = Form(default=""),
     versions: str = Form(default=""),
     omnetpp_versions: str = Form(default=""),
@@ -1083,7 +1083,7 @@ def matrix_create(
 
         config = {}
         axes = {
-            "test_types": _split_csv(test_types),
+            "tests": _split_csv(tests),
             "modes": _split_csv(modes),
             "versions": _split_csv(versions),
             "refs": _split_csv(refs),

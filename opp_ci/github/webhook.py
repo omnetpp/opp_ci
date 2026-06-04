@@ -197,7 +197,7 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
                 jobs = expand_matrix(matrix.project, matrix.config)
             else:
                 # No matrix linked — create a single smoke test job
-                jobs = [{"project": project.name, "test_type": "smoke"}]
+                jobs = [{"project": project.name, "test": "smoke"}]
 
             opp_file = matrix.opp_file if matrix else None
             for job in jobs:
@@ -205,7 +205,7 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
                 existing = find_existing_run(
                     session,
                     project=job.get("project", project.name),
-                    test_type=job.get("test_type", "smoke"),
+                    test=job.get("test", "smoke"),
                     mode=job.get("mode"),
                     git_ref=job_ref,
                     os=job.get("os"),
@@ -222,7 +222,7 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
                 job_sha = job_ref if job_ref and len(job_ref) >= 40 else commit_sha
                 run = TestRun(
                     project=job.get("project", project.name),
-                    test_type=job.get("test_type", "smoke"),
+                    test=job.get("test", "smoke"),
                     mode=job.get("mode"),
                     git_ref=job_ref,
                     opp_file=opp_file,

@@ -80,7 +80,7 @@ def reset_db(yes, preserve_tokens):
 
 @main.command("run")
 @click.option("--project", required=True, help="opp_env project name (e.g. inet-4.5)")
-@click.option("--test", "test_types", required=True, help="Test type(s), comma-separated (e.g. smoke,fingerprint)")
+@click.option("--test", "tests", required=True, help="Test(s), comma-separated (e.g. smoke,fingerprint)")
 @click.option("--ref", "git_ref", default=None, help="Git branch, tag, or commit to test (e.g. master, topic/my-feature)")
 @click.option("--mode", default=None, type=click.Choice(["debug", "release"]), help="Build mode (debug or release)")
 @click.option("--isolation", default="none", type=click.Choice(["none", "podman"]), help="Run on the host (none) or inside a Podman container")
@@ -94,12 +94,12 @@ def reset_db(yes, preserve_tokens):
 @click.option("--force", is_flag=True, help="Re-run even if an identical run already exists")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
 @click.pass_context
-def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
+def run_cmd(ctx, project, tests, git_ref, mode, isolation, toolchain,
             os_name, os_version, arch, compiler, compiler_version, pins, force, skip_install):
     """Run test(s) for a project and store the results."""
     if ctx.obj.get("remote"):
         _run_remote(
-            project, test_types, git_ref,
+            project, tests, git_ref,
             mode=mode, isolation=isolation, toolchain=toolchain,
             os_name=os_name, os_version=os_version, arch=arch,
             compiler=compiler, compiler_version=compiler_version,
@@ -124,7 +124,7 @@ def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
                 click.echo(f"ERROR: {e}")
                 return
 
-        # Install once for all test types
+        # Install once for all tests
         if not skip_install:
             try:
                 install_project(project, git_ref=git_ref,
@@ -133,25 +133,25 @@ def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
                 click.echo(f"ERROR during install: {e}")
                 return
 
-        for test_type in test_types.split(","):
-            test_type = test_type.strip()
-            if not test_type:
+        for test in tests.split(","):
+            test = test.strip()
+            if not test:
                 continue
 
             if not force:
                 existing = find_existing_run(
-                    session, project=project, test_type=test_type, mode=mode, git_ref=git_ref,
+                    session, project=project, test=test, mode=mode, git_ref=git_ref,
                     os=os_name, os_version=os_version, arch=arch,
                     compiler=compiler, compiler_version=compiler_version,
                     isolation=isolation, toolchain=toolchain,
                 )
                 if existing:
-                    click.echo(f"Skipping {project} / {test_type}: already has run #{existing.id} ({existing.status.value})")
+                    click.echo(f"Skipping {project} / {test}: already has run #{existing.id} ({existing.status.value})")
                     continue
 
             test_run = TestRun(
                 project=project,
-                test_type=test_type,
+                test=test,
                 mode=mode,
                 git_ref=git_ref,
                 os=os_name,
@@ -168,11 +168,11 @@ def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
             session.commit()
 
             desc = f"{project}@{git_ref}" if git_ref else project
-            click.echo(f"Test run #{test_run.id}: {desc} / {test_type}")
+            click.echo(f"Test run #{test_run.id}: {desc} / {test}")
 
             try:
                 outcome = run_test(
-                    project, test_type, git_ref=git_ref, mode=mode,
+                    project, test, git_ref=git_ref, mode=mode,
                     isolation=isolation, toolchain=toolchain,
                     os=os_name, os_version=os_version, arch=arch,
                     compiler=compiler, compiler_version=compiler_version,
@@ -207,7 +207,7 @@ def run_cmd(ctx, project, test_types, git_ref, mode, isolation, toolchain,
         session.close()
 
 
-def _run_remote(project, test_types, git_ref, *, mode=None,
+def _run_remote(project, tests, git_ref, *, mode=None,
                 isolation=None, toolchain=None, os_name=None, os_version=None,
                 arch=None, compiler=None, compiler_version=None,
                 pins=None, force=False):
@@ -229,21 +229,21 @@ def _run_remote(project, test_types, git_ref, *, mode=None,
     api_url = base if base.endswith("/api") else base + "/api"
 
     client = OppCiClient(url=api_url, token=API_TOKEN)
-    for test_type in test_types.split(","):
-        test_type = test_type.strip()
-        if not test_type:
+    for test in tests.split(","):
+        test = test.strip()
+        if not test:
             continue
         try:
             result = client.submit_run(
-                project=project, test_type=test_type, git_ref=git_ref,
+                project=project, test=test, git_ref=git_ref,
                 mode=mode, isolation=isolation, toolchain=toolchain,
                 os=os_name, os_version=os_version, arch=arch,
                 compiler=compiler, compiler_version=compiler_version,
                 force=force,
             )
-            click.echo(f"Submitted run #{result['id']}: {project} / {test_type} → {result['status']}")
+            click.echo(f"Submitted run #{result['id']}: {project} / {test} → {result['status']}")
         except Exception as e:
-            click.echo(f"ERROR submitting {project}/{test_type}: {e}")
+            click.echo(f"ERROR submitting {project}/{test}: {e}")
 
 
 @main.command("serve")
@@ -268,10 +268,10 @@ def serve(host, port):
 @main.command("list-runs")
 @click.option("--project", default=None, help="Filter by project")
 @click.option("--ref", "git_ref", default=None, help="Filter by git ref")
-@click.option("--test", "test_type", default=None, help="Filter by test type")
+@click.option("--test", default=None, help="Filter by test")
 @click.option("--status", default=None, help="Filter by status (PASS/FAIL/ERROR)")
 @click.option("--limit", default=20, help="Max rows to show")
-def list_runs(project, git_ref, test_type, status, limit):
+def list_runs(project, git_ref, test, status, limit):
     """List test runs."""
     session = SessionLocal()
     try:
@@ -280,8 +280,8 @@ def list_runs(project, git_ref, test_type, status, limit):
             query = query.where(TestRun.project == project)
         if git_ref:
             query = query.where(TestRun.git_ref == git_ref)
-        if test_type:
-            query = query.where(TestRun.test_type == test_type)
+        if test:
+            query = query.where(TestRun.test == test)
         if status:
             query = query.where(TestRun.status == TestRunStatus(status))
 
@@ -296,7 +296,7 @@ def list_runs(project, git_ref, test_type, status, limit):
             duration = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
             started = run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-"
             ref = run.git_ref or "-"
-            click.echo(f"{run.id:<6} {run.project:<20} {ref:<16} {run.test_type:<14} {run.status.value:<10} {duration:<10} {started}")
+            click.echo(f"{run.id:<6} {run.project:<20} {ref:<16} {run.test:<14} {run.status.value:<10} {duration:<10} {started}")
     finally:
         session.close()
 
@@ -319,7 +319,7 @@ def show_run(run_id):
         click.echo(f"  Ref:      {run.git_ref or '-'}")
         click.echo(f"  Commit:   {run.commit_sha or '-'}")
         click.echo(f"  Version:  {run.version or '-'}")
-        click.echo(f"  Test:     {run.test_type}")
+        click.echo(f"  Test:     {run.test}")
         click.echo(f"  Status:   {run.status.value}")
         click.echo(f"  Duration: {run.duration_seconds:.1f}s" if run.duration_seconds else "  Duration: -")
         click.echo(f"  Started:  {run.started_at}")
@@ -361,7 +361,7 @@ def delete_run(run_id, yes):
             click.echo(f"Run #{run_id} not found.")
             return
         if not yes:
-            click.confirm(f"Delete run #{run.id} ({run.project} / {run.test_type} / {run.status.value})?", abort=True)
+            click.confirm(f"Delete run #{run.id} ({run.project} / {run.test} / {run.status.value})?", abort=True)
         session.delete(run)
         session.commit()
         click.echo(f"Run #{run_id} deleted.")
@@ -372,13 +372,13 @@ def delete_run(run_id, yes):
 @main.command("delete-runs")
 @click.option("--project", default=None, help="Filter by project")
 @click.option("--ref", "git_ref", default=None, help="Filter by git ref")
-@click.option("--test", "test_type", default=None, help="Filter by test type")
+@click.option("--test", default=None, help="Filter by test")
 @click.option("--status", default=None, help="Filter by status (PASS/FAIL/ERROR/running/queued)")
 @click.option("--before", "before_date", default=None, help="Delete runs started before this date (YYYY-MM-DD)")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
-def delete_runs(project, git_ref, test_type, status, before_date, yes):
+def delete_runs(project, git_ref, test, status, before_date, yes):
     """Delete multiple test runs matching the given filters."""
-    if not any([project, git_ref, test_type, status, before_date]):
+    if not any([project, git_ref, test, status, before_date]):
         click.echo("ERROR: At least one filter is required (--project, --ref, --test, --status, --before).")
         return
 
@@ -389,8 +389,8 @@ def delete_runs(project, git_ref, test_type, status, before_date, yes):
             query = query.where(TestRun.project == project)
         if git_ref:
             query = query.where(TestRun.git_ref == git_ref)
-        if test_type:
-            query = query.where(TestRun.test_type == test_type)
+        if test:
+            query = query.where(TestRun.test == test)
         if status:
             query = query.where(TestRun.status == TestRunStatus(status))
         if before_date:
@@ -405,7 +405,7 @@ def delete_runs(project, git_ref, test_type, status, before_date, yes):
         click.echo(f"Found {len(runs)} run(s) to delete:")
         for run in runs[:10]:
             started = run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-"
-            click.echo(f"  #{run.id} {run.project} / {run.test_type} / {run.status.value} ({started})")
+            click.echo(f"  #{run.id} {run.project} / {run.test} / {run.status.value} ({started})")
         if len(runs) > 10:
             click.echo(f"  ... and {len(runs) - 10} more")
 
@@ -423,10 +423,10 @@ def delete_runs(project, git_ref, test_type, status, before_date, yes):
 @main.command("show-results")
 @click.option("--project", default=None, help="Filter by project")
 @click.option("--ref", "git_ref", default=None, help="Filter by git ref")
-@click.option("--test", "test_type", default=None, help="Filter by test type")
+@click.option("--test", default=None, help="Filter by test")
 @click.option("--status", default=None, help="Filter by status (PASS/FAIL/ERROR)")
 @click.option("--limit", default=20, help="Max rows to show")
-def show_results(project, git_ref, test_type, status, limit):
+def show_results(project, git_ref, test, status, limit):
     """Show test run results (alias for list-runs)."""
     session = SessionLocal()
     try:
@@ -435,8 +435,8 @@ def show_results(project, git_ref, test_type, status, limit):
             query = query.where(TestRun.project == project)
         if git_ref:
             query = query.where(TestRun.git_ref == git_ref)
-        if test_type:
-            query = query.where(TestRun.test_type == test_type)
+        if test:
+            query = query.where(TestRun.test == test)
         if status:
             query = query.where(TestRun.status == TestRunStatus(status))
 
@@ -450,7 +450,7 @@ def show_results(project, git_ref, test_type, status, limit):
         for run in runs:
             duration = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
             started = run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-"
-            click.echo(f"{run.id:<6} {run.project:<20} {run.test_type:<14} {run.status.value:<10} {duration:<10} {started}")
+            click.echo(f"{run.id:<6} {run.project:<20} {run.test:<14} {run.status.value:<10} {duration:<10} {started}")
     finally:
         session.close()
 
@@ -622,7 +622,7 @@ def _parse_ref_range(ref_range_str):
 @click.option("--compiler", "compilers", default=None, help="Comma-separated compilers (e.g. 'gcc-14,clang-18' or 'gcc,clang' with --compiler-version)")
 @click.option("--compiler-version", "compiler_versions", default=None, help="Comma-separated compiler versions for cross-product (e.g. '14,18')")
 @click.option("--arch", "arches", default=None, help="Comma-separated CPU architectures (e.g. 'amd64,aarch64')")
-@click.option("--tests", "test_types", required=True, help="Comma-separated test types")
+@click.option("--tests", required=True, help="Comma-separated tests")
 @click.option("--refs", default=None, help="Comma-separated git refs to test (e.g. 'master,topic/my-feature')")
 @click.option("--ref-range", "ref_range", default=None, help="Git ref range (base..head) — enumerate commits via GitHub API")
 @click.option("--deps", default=None, help="Dependency versions axis (e.g. 'omnetpp=6.3.0,6.2.0;inet=4.5')")
@@ -630,7 +630,7 @@ def _parse_ref_range(ref_range_str):
 @click.option("--toolchain", default=None, help="Comma-separated toolchain values: 'none' and/or 'nix' (cross-product axis)")
 @click.option("--opp-file", "opp_file", default=None, help="Path to the project's .opp file (for opp_repl project discovery)")
 @click.option("--replace", is_flag=True, help="Replace existing matrix with the same name")
-def create_matrix(name, project, test_types, modes, os_names, os_versions, compilers, compiler_versions, arches, versions, refs, ref_range, deps, isolation, toolchain, opp_file, replace):
+def create_matrix(name, project, tests, modes, os_names, os_versions, compilers, compiler_versions, arches, versions, refs, ref_range, deps, isolation, toolchain, opp_file, replace):
     """Create a test matrix configuration.
 
     Platform axes support two styles:
@@ -649,7 +649,7 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
     session = SessionLocal()
     try:
         config = {
-            "test_types": [t.strip() for t in test_types.split(",")],
+            "tests": [t.strip() for t in tests.split(",")],
             "modes": [m.strip() for m in modes.split(",")],
             "versions": [v.strip() for v in versions.split(",")] if versions else [project],
         }
@@ -693,7 +693,7 @@ def create_matrix(name, project, test_types, modes, os_names, os_versions, compi
         jobs = expand_matrix(project, config)
         click.echo(f"Matrix '{name}' created ({len(jobs)} jobs when expanded):")
         for job in jobs[:10]:
-            parts = [job["project"], job["test_type"], job["mode"]]
+            parts = [job["project"], job["test"], job["mode"]]
             if job.get("git_ref"):
                 parts.append(f"@{job['git_ref']}")
             if job.get("platform_desc"):
@@ -781,7 +781,7 @@ def run_matrix(matrix_name, force, skip_install):
                 existing = find_existing_run(
                     session,
                     project=job["project"],
-                    test_type=job["test_type"],
+                    test=job["test"],
                     mode=job.get("mode"),
                     git_ref=job.get("git_ref"),
                     os=job.get("os"),
@@ -799,7 +799,7 @@ def run_matrix(matrix_name, force, skip_install):
 
             test_run = TestRun(
                 project=job["project"],
-                test_type=job["test_type"],
+                test=job["test"],
                 mode=job.get("mode"),
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
@@ -818,7 +818,7 @@ def run_matrix(matrix_name, force, skip_install):
             session.add(test_run)
             session.commit()
 
-            parts = [job["project"], job["test_type"], job.get("mode", "")]
+            parts = [job["project"], job["test"], job.get("mode", "")]
             if job.get("git_ref"):
                 parts.append(f"@{job['git_ref']}")
             if job.get("platform_desc"):
@@ -827,7 +827,7 @@ def run_matrix(matrix_name, force, skip_install):
 
             try:
                 outcome = run_test(
-                    job["project"], job["test_type"],
+                    job["project"], job["test"],
                     git_ref=job.get("git_ref"), opp_file=matrix.opp_file,
                     mode=job.get("mode"),
                     isolation=job.get("isolation"), toolchain=job.get("toolchain"),
@@ -1530,11 +1530,11 @@ def internal_group():
 
 @internal_group.command("run-direct")
 @click.option("--project", required=True)
-@click.option("--test-type", required=True)
+@click.option("--test", required=True)
 @click.option("--mode", default=None)
 @click.option("--opp-file", default=None)
 @click.option("--git-ref", default=None)
-def internal_run_direct(project, test_type, mode, opp_file, git_ref):
+def internal_run_direct(project, test, mode, opp_file, git_ref):
     """Run a single test by calling opp_repl directly (host-toolchain path).
 
     Designed to be invoked inside an opp-ci-runner image whose base OS already
@@ -1543,7 +1543,7 @@ def internal_run_direct(project, test_type, mode, opp_file, git_ref):
     """
     from opp_ci.executor import _run_test_direct
     outcome = _run_test_direct(
-        project, test_type, opp_file=opp_file, git_ref=git_ref, mode=mode,
+        project, test, opp_file=opp_file, git_ref=git_ref, mode=mode,
     )
     if outcome.get("stdout"):
         click.echo(outcome["stdout"], nl=False)

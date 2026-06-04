@@ -51,7 +51,7 @@ def format_results_comment(runs):
             "running": "🔄", "queued": "⏳",
         }.get(run.status.value, "❓")
         dur = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
-        lines.append(f"| {run.test_type} | {run.project} | {status_emoji} {run.status.value} | {dur} |")
+        lines.append(f"| {run.test} | {run.project} | {status_emoji} {run.status.value} | {dur} |")
 
     return "\n".join(lines)
 

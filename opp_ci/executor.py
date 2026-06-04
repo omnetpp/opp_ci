@@ -65,13 +65,13 @@ def run_external(args, *, label, timeout=None, env=None, cwd=None):
     return result
 
 
-def find_existing_run(session, *, project, test_type, version=None, mode=None, git_ref=None,
+def find_existing_run(session, *, project, test, version=None, mode=None, git_ref=None,
                       os=None, os_version=None, arch=None,
                       compiler=None, compiler_version=None,
                       isolation=None, toolchain=None):
     """Return an existing TestRun with matching params and terminal status, or None.
 
-    Matches on the full (project, version, test_type, mode, git_ref, os,
+    Matches on the full (project, version, test, mode, git_ref, os,
     os_version, arch, compiler, compiler_version, isolation, toolchain) tuple.
     Two runs with different arch, isolation, or toolchain are considered
     different runs even if every other field matches — they test different
@@ -85,7 +85,7 @@ def find_existing_run(session, *, project, test_type, version=None, mode=None, g
         .where(
             TestRun.project == project,
             TestRun.version == version,
-            TestRun.test_type == test_type,
+            TestRun.test == test,
             TestRun.mode == mode,
             TestRun.git_ref == git_ref,
             TestRun.os == os,
@@ -116,7 +116,7 @@ COMMAND_MAP = {
     "all": "opp_run_all_tests",
 }
 
-# Mapping from test_type to the opp_repl function that runs it.
+# Mapping from test name to the opp_repl function that runs it.
 # Lazily imported to avoid pulling opp_repl at module load time.
 _TEST_FUNCTIONS = None
 
@@ -289,7 +289,7 @@ def install_project(project, git_ref=None, *, isolation="none", toolchain="none"
     _logger.info("Installation of %s complete", effective_project)
 
 
-def run_test(project, test_type, *, isolation=None, toolchain=None, **kwargs):
+def run_test(project, test, *, isolation=None, toolchain=None, **kwargs):
     """
     Run a test for the given project, dispatching on isolation × toolchain.
 
@@ -306,10 +306,10 @@ def run_test(project, test_type, *, isolation=None, toolchain=None, **kwargs):
     isolation = isolation or "none"
     toolchain = toolchain or "none"
     if isolation == "podman":
-        return _run_test_in_podman(project, test_type, toolchain=toolchain, **kwargs)
+        return _run_test_in_podman(project, test, toolchain=toolchain, **kwargs)
     if toolchain == "nix":
-        return _run_test_via_opp_env(project, test_type, **kwargs)
-    return _run_test_direct(project, test_type, **kwargs)
+        return _run_test_via_opp_env(project, test, **kwargs)
+    return _run_test_direct(project, test, **kwargs)
 
 
 def _opp_cache_root():
@@ -595,7 +595,7 @@ def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler
     )
 
 
-def _run_test_in_podman(project, test_type, *, toolchain="none", **kwargs):
+def _run_test_in_podman(project, test, *, toolchain="none", **kwargs):
     """Run a test inside a Podman container.
 
     Two flavours, distinguished by whether the matrix has an opp_file:
@@ -667,9 +667,9 @@ def _run_test_in_podman(project, test_type, *, toolchain="none", **kwargs):
         if git_ref:
             podman_cmd += ["-e", f"OPP_ENV_GIT_REF={git_ref}"]
         effective_project, _ = resolve_git_project(project, git_ref, toolchain="nix")
-        inner_cmd = COMMAND_MAP.get(test_type)
+        inner_cmd = COMMAND_MAP.get(test)
         if inner_cmd is None:
-            raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(COMMAND_MAP.keys())}")
+            raise ValueError(f"Unknown test: {test!r}. Supported: {list(COMMAND_MAP.keys())}")
         if mode:
             inner_cmd += f" --mode {mode}"
         # Help opp_repl find the SimulationProject inside the container:
@@ -696,7 +696,7 @@ def _run_test_in_podman(project, test_type, *, toolchain="none", **kwargs):
                           "-c", f"env -u PYTHONPATH {inner_cmd}"]
     else:
         container_args = ["internal", "run-direct",
-                          "--project", project, "--test-type", test_type]
+                          "--project", project, "--test", test]
         if mode:
             container_args += ["--mode", mode]
         if opp_file:
@@ -730,14 +730,14 @@ def _run_test_in_podman(project, test_type, *, toolchain="none", **kwargs):
     }
 
 
-def _run_test_via_opp_env(project, test_type, **kwargs):
+def _run_test_via_opp_env(project, test, **kwargs):
     """Run a test via opp_env subprocess (Nix environment on the host)."""
     git_ref = kwargs.get("git_ref")
     mode = kwargs.get("mode")
 
-    cmd = COMMAND_MAP.get(test_type)
+    cmd = COMMAND_MAP.get(test)
     if cmd is None:
-        raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(COMMAND_MAP.keys())}")
+        raise ValueError(f"Unknown test: {test!r}. Supported: {list(COMMAND_MAP.keys())}")
 
     if mode:
         cmd += f" --mode {mode}"
@@ -763,7 +763,7 @@ def _run_test_via_opp_env(project, test_type, **kwargs):
     }
 
 
-def _run_test_direct(project, test_type, *, opp_file=None, git_ref=None, mode=None, **_unused):
+def _run_test_direct(project, test, *, opp_file=None, git_ref=None, mode=None, **_unused):
     """Run a test by calling opp_repl functions directly (no subprocess).
 
     When *git_ref* is set, an isolated git worktree is created for that
@@ -773,9 +773,9 @@ def _run_test_direct(project, test_type, *, opp_file=None, git_ref=None, mode=No
     sit downstream of the run_test dispatcher.
     """
     test_functions = _get_test_functions()
-    func = test_functions.get(test_type)
+    func = test_functions.get(test)
     if func is None:
-        raise ValueError(f"Unknown test type: {test_type!r}. Supported: {list(test_functions.keys())}")
+        raise ValueError(f"Unknown test: {test!r}. Supported: {list(test_functions.keys())}")
 
     _ws, simulation_project = _load_workspace(project, opp_file)
 
@@ -793,7 +793,7 @@ def _run_test_direct(project, test_type, *, opp_file=None, git_ref=None, mode=No
     from opp_repl.common.util import ensure_logging_initialized
     ensure_logging_initialized("DEBUG", "DEBUG", None)
 
-    _logger.info("Running %s test for %s (direct mode)", test_type, project)
+    _logger.info("Running %s test for %s (direct mode)", test, project)
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
     start = time.time()
@@ -801,7 +801,7 @@ def _run_test_direct(project, test_type, *, opp_file=None, git_ref=None, mode=No
         call_kwargs = {"simulation_project": simulation_project, "build": "task", "build_mode": "task"}
         if mode:
             call_kwargs["mode"] = mode
-        if test_type == "opp":
+        if test == "opp":
             call_kwargs["test_folder"] = simulation_project.get_full_path(".")
         with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
             result = func(**call_kwargs)
@@ -821,7 +821,7 @@ def _run_test_direct(project, test_type, *, opp_file=None, git_ref=None, mode=No
 
     except Exception as e:
         duration = time.time() - start
-        _logger.error("Test %s raised exception: %s", test_type, e)
+        _logger.error("Test %s raised exception: %s", test, e)
         return {
             "result_code": "ERROR",
             "duration_seconds": duration,

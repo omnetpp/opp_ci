@@ -9,7 +9,7 @@ cross-product.  A separate "repetitions" value reports k when each cell
 is filled exactly k times; the UI shows a Reps column only when some row
 has k>1.
 
-Primary dimensions: project, test_type, mode, os, os_version, compiler,
+Primary dimensions: project, test, mode, os, os_version, compiler,
 compiler_version, git_ref.
 
 Extra dimensions (isolation, toolchain, commit_sha, version) participate
@@ -22,7 +22,7 @@ from functools import reduce
 from operator import mul
 
 PRIMARY_DIMENSIONS = [
-    "project", "test_type", "mode", "os", "os_version",
+    "project", "test", "mode", "os", "os_version",
     "compiler", "compiler_version", "git_ref",
 ]
 

@@ -232,7 +232,7 @@ def sync_catalog(session):
             comp_name, comp_ver = _parse_compiler(REFERENCE_PLATFORM.split("/")[1] if "/" in REFERENCE_PLATFORM else "")
 
             matrix_config = {
-                "test_types": ["build", "smoke"],
+                "tests": ["build", "smoke"],
                 "modes": ["release"],
                 "versions": [name],
             }

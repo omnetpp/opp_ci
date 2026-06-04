@@ -72,7 +72,7 @@ def format_note(runs, run_url_base=None):
     detail_lines = []
     for run in sorted(runs, key=lambda r: r.id):
         icon = _STATUS_ICONS.get(run.status, "?")
-        label = run.test_type
+        label = run.test
         if run.mode:
             label += f"/{run.mode}"
         status = run.status.value
