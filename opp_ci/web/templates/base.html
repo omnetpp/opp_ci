@@ -98,9 +98,11 @@
     <header>
         <div class="container">
             <h1>opp_ci</h1>
-            <nav>
+            <nav style="flex: 1;">
                 <a href="/">Dashboard</a> &nbsp;
+                {% if current_user and current_user.role in ("submitter", "admin") %}
                 <a href="/runs/new" style="color:var(--pass); font-weight:600;">+ New Run</a> &nbsp;
+                {% endif %}
                 <a href="/runs">Runs</a> &nbsp;
                 <a href="/queue">Queue</a> &nbsp;
                 <a href="/results">Results</a> &nbsp;
@@ -111,9 +113,23 @@
                 <a href="/rules">Rules</a> &nbsp;
                 <a href="/os">OS</a> &nbsp;
                 <a href="/compilers">Compilers</a> &nbsp;
-                <a href="/workers">Workers</a> &nbsp;
-                <a href="/admin">Admin</a>
+                <a href="/workers">Workers</a>
+                {% if current_user and current_user.role == "admin" %}
+                &nbsp; <a href="/admin">Admin</a>
+                {% endif %}
             </nav>
+            {% if current_user %}
+            <div style="display:flex; align-items:center; gap:0.5rem; color:var(--muted); font-size:0.85rem;">
+                <span title="role: {{ current_user.role }}">
+                    {{ current_user.display_name }}
+                    <span class="badge badge-queued" style="text-transform:lowercase;">{{ current_user.role }}</span>
+                </span>
+                <form method="post" action="/logout" class="inline-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-sm btn-secondary">Log out</button>
+                </form>
+            </div>
+            {% endif %}
         </div>
     </header>
     <div class="container">

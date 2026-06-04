@@ -14,6 +14,8 @@
 
 <div class="actions">
     <form method="post" action="/compilers/{{ compiler.id }}/delete" class="inline-form">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete {{ compiler.label }}?')">Delete</button>
     </form>
     <a href="/compilers" class="btn btn-secondary btn-sm">&larr; Back to compilers</a>

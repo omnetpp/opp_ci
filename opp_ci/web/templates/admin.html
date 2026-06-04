@@ -3,6 +3,10 @@
 {% block content %}
 <h2 style="margin-bottom: 1rem;">Admin</h2>
 
+<p style="margin-bottom: 1rem;">
+    <a class="btn btn-primary btn-sm" href="/admin/users">Manage users</a>
+</p>
+
 <div class="stats">
     <div class="stat"><div class="value">{{ stats.projects }}</div><div class="label">Projects</div></div>
     <div class="stat"><div class="value">{{ stats.runs_total }}</div><div class="label">Runs</div></div>
@@ -64,6 +68,8 @@
 
     <h3 style="margin-top:1rem; font-size:0.9rem;">Register Worker</h3>
     <form method="post" action="/admin/workers/register">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
             <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="builder-1"></div>
             <div class="form-group"><label>Tags (comma-sep)</label><input type="text" name="tags" placeholder="linux,amd64"></div>
@@ -92,6 +98,8 @@
                 <td>
                     {% if t.enabled %}
                     <form method="post" action="/admin/tokens/{{ t.id }}/revoke" class="inline-form">
+
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <button type="submit" class="btn btn-danger btn-sm">Revoke</button>
                     </form>
                     {% endif %}
@@ -106,6 +114,8 @@
 
     <h3 style="margin-top:1rem; font-size:0.9rem;">Create Token</h3>
     <form method="post" action="/admin/tokens/create">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
             <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="my-token"></div>
             <div class="form-group">

@@ -43,6 +43,8 @@
             <td>{{ run_counts.get(m.id, 0) }}</td>
             <td onclick="event.stopPropagation()">
                 <form method="post" action="/matrices/{{ m.id }}/delete" class="inline-form">
+
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete matrix {{ m.name }}?')">Delete</button>
                 </form>
             </td>

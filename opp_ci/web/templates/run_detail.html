@@ -89,10 +89,14 @@
 
 <div class="actions">
     <form method="post" action="/runs/{{ run.id }}/rerun" class="inline-form">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-primary btn-sm">Re-run</button>
     </form>
     {% if run.status.value in ("queued", "running") %}
     <form method="post" action="/runs/{{ run.id }}/cancel" class="inline-form">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Cancel this run?')">Cancel</button>
     </form>
     {% endif %}

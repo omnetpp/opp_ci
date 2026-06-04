@@ -10,6 +10,8 @@
 <div class="card">
     <h2>Single Run</h2>
     <form method="post" action="/runs/new">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
             <div class="form-group">
                 <label for="project">Project</label>
@@ -135,6 +137,8 @@
 <div class="card">
     <h2>Run from Matrix</h2>
     <form method="post" action="/runs/new/matrix">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
             <div class="form-group">
                 <label for="matrix_name">Matrix</label>

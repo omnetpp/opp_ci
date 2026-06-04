@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Users — opp_ci{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Users</h2>
+
+{% if message %}
+<div class="flash flash-{{ message_type or 'success' }}">{{ message | replace('+', ' ') }}</div>
+{% endif %}
+
+<div class="card" style="font-size:0.85rem; color:var(--muted); margin-bottom:1rem;">
+    Roles: <strong>readonly</strong> can browse, <strong>submitter</strong> can submit runs and edit matrices,
+    <strong>admin</strong> can manage everything (including users and tokens).
+    Setting a role here <em>locks</em> it — GitHub team membership won't overwrite it on next login.
+    Unlock to let GitHub decide again.
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Login</th>
+            <th>Role</th>
+            <th>Locked</th>
+            <th>Enabled</th>
+            <th>Last login</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for u in users %}
+        <tr>
+            <td>{{ u.id }}</td>
+            <td>
+                {{ u.display_name }}
+                {% if u.username and u.github_user_id %}
+                <span style="color:var(--muted); font-size:0.8rem;">(local + GitHub)</span>
+                {% elif u.username %}
+                <span style="color:var(--muted); font-size:0.8rem;">(local)</span>
+                {% elif u.github_user_id %}
+                <span style="color:var(--muted); font-size:0.8rem;">(GitHub)</span>
+                {% endif %}
+            </td>
+            <td>
+                <form method="post" action="/admin/users/{{ u.id }}/role" class="inline-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <select name="role" onchange="this.form.submit()">
+                        {% for r in ("readonly", "submitter", "admin") %}
+                        <option value="{{ r }}" {% if u.role == r %}selected{% endif %}>{{ r }}</option>
+                        {% endfor %}
+                    </select>
+                </form>
+            </td>
+            <td>
+                {% if u.role_locked %}
+                <form method="post" action="/admin/users/{{ u.id }}/unlock" class="inline-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-sm btn-secondary">locked — unlock</button>
+                </form>
+                {% else %}
+                <span style="color:var(--muted);">no</span>
+                {% endif %}
+            </td>
+            <td>
+                <form method="post" action="/admin/users/{{ u.id }}/disable" class="inline-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    {% if u.enabled %}
+                    <input type="hidden" name="enabled" value="0">
+                    <button type="submit" class="btn btn-sm btn-danger"
+                            {% if u.id == current_user.id %}disabled title="Cannot disable yourself"{% endif %}>
+                        disable
+                    </button>
+                    {% else %}
+                    <input type="hidden" name="enabled" value="1">
+                    <button type="submit" class="btn btn-sm btn-success">enable</button>
+                    {% endif %}
+                </form>
+            </td>
+            <td>{{ u.last_login_at.strftime("%Y-%m-%d %H:%M") if u.last_login_at else "—" }}</td>
+            <td>&nbsp;</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if not users %}
+<div class="empty">No users yet. Run <code>opp_ci user create</code> to bootstrap an admin.</div>
+{% endif %}
+
+<p style="margin-top:1rem; color:var(--muted); font-size:0.85rem;">
+    To add a local account, run on the server:
+    <code>opp_ci user create --username NAME --role admin</code>.
+    GitHub users are auto-created on first successful sign-in.
+</p>
+{% endblock %}

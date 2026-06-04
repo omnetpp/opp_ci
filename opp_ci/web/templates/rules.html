@@ -10,6 +10,8 @@
 <div class="card">
     <h2>Create Rule</h2>
     <form method="post" action="/rules/create">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
             <div class="form-group">
                 <label for="project_name">Project</label>
@@ -76,6 +78,8 @@
             <td>{{ "Yes" if r.enabled else "No" }}</td>
             <td>
                 <form method="post" action="/rules/{{ r.id }}/delete" class="inline-form">
+
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete rule #{{ r.id }}?')">Delete</button>
                 </form>
             </td>

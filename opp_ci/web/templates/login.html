@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Sign in — opp_ci{% endblock %}
+{% block content %}
+<div style="max-width: 420px; margin: 3rem auto;">
+    <div class="card">
+        <h2 style="margin-bottom: 1rem;">Sign in to opp_ci</h2>
+
+        {% if error %}
+        <div class="flash flash-error">{{ error }}</div>
+        {% endif %}
+
+        {% if github_enabled %}
+        <p style="margin-bottom: 1rem;">
+            <a class="btn btn-primary" style="display:block; text-align:center; padding:0.6rem;"
+               href="/login/github{% if next %}?next={{ next | urlencode }}{% endif %}">
+                Sign in with GitHub
+            </a>
+        </p>
+        {% endif %}
+
+        {% if local_enabled %}
+        <details {% if not github_enabled %}open{% endif %} style="margin-top: 1rem;">
+            <summary style="cursor:pointer; color:var(--muted); font-size:0.9rem;">
+                Use a local account
+            </summary>
+            <form method="post" action="/login" style="margin-top: 0.75rem;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" name="username" id="username" autocomplete="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" name="password" id="password" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%;">Sign in</button>
+            </form>
+        </details>
+        {% endif %}
+
+        {% if not github_enabled and not local_enabled %}
+        <div class="flash flash-error">
+            No login method is configured. Run
+            <code>opp_ci user create --username root --role admin</code>
+            to bootstrap a local admin account.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -34,6 +34,8 @@
             <td>{{ o.arch }}</td>
             <td onclick="event.stopPropagation()">
                 <form method="post" action="/os/{{ o.id }}/delete" class="inline-form">
+
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete {{ o.name }} {{ o.version or '' }}?')">Delete</button>
                 </form>
             </td>

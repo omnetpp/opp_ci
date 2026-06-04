@@ -5,6 +5,8 @@
 
 <div class="card">
     <form method="post" action="/os/new">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
             <div class="form-group">
                 <label for="name">Name</label>

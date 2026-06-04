@@ -6,6 +6,8 @@
 <div class="card">
     <h2>Edit Rule</h2>
     <form method="post" action="/rules/{{ rule.id }}/edit">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
             <div class="form-group">
                 <label>Project</label>
@@ -50,6 +52,8 @@
 
 <div class="actions" style="margin-top: 1rem;">
     <form method="post" action="/rules/{{ rule.id }}/delete" class="inline-form">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete rule #{{ rule.id }}?')">Delete</button>
     </form>
     <a href="/rules" class="btn btn-secondary btn-sm">&larr; Back to rules</a>

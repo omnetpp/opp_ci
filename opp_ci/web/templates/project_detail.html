@@ -89,6 +89,8 @@
 
 <div class="actions">
     <form method="post" action="/projects/{{ project.name }}/delete" class="inline-form">
+
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete project {{ project.name }} and its versions/rules?')">Delete</button>
     </form>
     <a href="/projects" class="btn btn-secondary btn-sm">&larr; Back to projects</a>

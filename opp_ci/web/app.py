@@ -3,14 +3,17 @@ import re
 from html import escape as html_escape
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request, Query
+from fastapi import APIRouter, Depends, FastAPI, Form, Request, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 from sqlalchemy import select, func
+from starlette.middleware.sessions import SessionMiddleware
 
+from opp_ci import config as cfg
+from opp_ci.auth import get_csrf_token, require_csrf, require_user
 from opp_ci.db.connection import SessionLocal
-from opp_ci.db.models import Project, Version, OS, Compiler, TestMatrix, AutoTestRule, TestRun, TestRunStatus, TestResult, Worker, ApiToken
+from opp_ci.db.models import Project, Version, OS, Compiler, TestMatrix, AutoTestRule, TestRun, TestRunStatus, TestResult, Worker, ApiToken, User
 
 _ANSI_RE = re.compile(r'\x1b\[([0-9;]*)m')
 
@@ -86,16 +89,58 @@ def _resolve_ansi_style(codes):
 
 app = FastAPI(title="opp_ci")
 
+# Session middleware signs cookies with OPP_CI_SESSION_SECRET. We fail
+# closed if it's unset: a random per-process secret would silently log
+# everyone out on every restart and let anyone forge cookies on a
+# misconfigured deploy.
+if not cfg.SESSION_SECRET:
+    raise RuntimeError(
+        "OPP_CI_SESSION_SECRET is required for `opp_ci serve`. "
+        "Generate one with `python -c 'import secrets; print(secrets.token_urlsafe(32))'` "
+        "and set it in /etc/opp_ci/serve.env or the environment."
+    )
+if cfg.GITHUB_OAUTH_CLIENT_ID and not cfg.PUBLIC_URL:
+    # Behind a reverse proxy, deriving the callback URL from request
+    # headers is brittle. Demand an explicit value.
+    raise RuntimeError(
+        "OPP_CI_GITHUB_OAUTH_CLIENT_ID is set but OPP_CI_PUBLIC_URL is empty. "
+        "Set OPP_CI_PUBLIC_URL to the base URL the browser sees (e.g. "
+        "https://opp-ci.example.com) so the OAuth callback URL is stable."
+    )
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=cfg.SESSION_SECRET,
+    same_site="lax",
+    https_only=cfg.SESSION_COOKIE_SECURE,
+    session_cookie="opp_ci_session",
+)
+
 from opp_ci.web.api import router as api_router
+from opp_ci.web.login import router as login_router
 app.include_router(api_router)
+app.include_router(login_router)
 
 templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 templates.env.filters["ansi_to_html"] = _ansi_to_html
 
 
-@app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request):
+def _template_globals(request, current_user):
+    """Common context for gated HTML templates."""
+    return {
+        "current_user": current_user,
+        "csrf_token": get_csrf_token(request),
+    }
+
+
+# Every route on `web_router` requires a logged-in user. Routes that need
+# `submitter` or `admin` add a stricter `require_user(...)` dependency
+# locally. POST routes additionally depend on `require_csrf`.
+web_router = APIRouter(dependencies=[Depends(require_user())])
+
+
+@web_router.get("/", response_class=HTMLResponse)
+def dashboard(request: Request, current_user: User = Depends(require_user())):
     session = SessionLocal()
     try:
         recent_runs = session.execute(
@@ -113,13 +158,15 @@ def dashboard(request: Request):
             "passed": passed,
             "failed": failed,
             "errored": errored,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/queue", response_class=HTMLResponse)
-def queue_page(request: Request, message: str = Query(default=None), message_type: str = Query(default=None)):
+@web_router.get("/queue", response_class=HTMLResponse)
+def queue_page(request: Request, current_user: User = Depends(require_user()),
+               message: str = Query(default=None), message_type: str = Query(default=None)):
     session = SessionLocal()
     try:
         running = session.execute(
@@ -134,14 +181,16 @@ def queue_page(request: Request, message: str = Query(default=None), message_typ
             "queued": queued,
             "message": message,
             "message_type": message_type,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/runs", response_class=HTMLResponse)
+@web_router.get("/runs", response_class=HTMLResponse)
 def runs_list(
     request: Request,
+    current_user: User = Depends(require_user()),
     project: str = Query(default=None),
     test_type: str = Query(default=None),
     git_ref: str = Query(default=None),
@@ -169,14 +218,16 @@ def runs_list(
             "filter_test_type": test_type or "",
             "filter_git_ref": git_ref or "",
             "filter_status": status or "",
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/results", response_class=HTMLResponse)
+@web_router.get("/results", response_class=HTMLResponse)
 def results_page(
     request: Request,
+    current_user: User = Depends(require_user()),
     project: str = Query(default=None),
     test_type: str = Query(default=None),
     mode: str = Query(default=None),
@@ -234,14 +285,16 @@ def results_page(
             "filter_compiler": compiler or "",
             "filter_compiler_version": compiler_version or "",
             "filter_status": status or "",
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/compare", response_class=HTMLResponse)
+@web_router.get("/compare", response_class=HTMLResponse)
 def compare_page(
     request: Request,
+    current_user: User = Depends(require_user()),
     run_a: int = Query(default=None, description="First run ID"),
     run_b: int = Query(default=None, description="Second run ID"),
     project: str = Query(default=None),
@@ -315,6 +368,7 @@ def compare_page(
             "ref_a": ref_a or "",
             "ref_b": ref_b or "",
             "filter_test_type": test_type or "",
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
@@ -402,8 +456,10 @@ def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
     return rows
 
 
-@app.get("/runs/new", response_class=HTMLResponse)
-def run_new_form(request: Request, message: str = Query(default=None), message_type: str = Query(default=None)):
+@web_router.get("/runs/new", response_class=HTMLResponse)
+def run_new_form(request: Request,
+                 current_user: User = Depends(require_user("submitter")),
+                 message: str = Query(default=None), message_type: str = Query(default=None)):
     session = SessionLocal()
     try:
         projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
@@ -459,14 +515,16 @@ def run_new_form(request: Request, message: str = Query(default=None), message_t
             "omnetpp_versions": omnetpp_versions,
             "message": message,
             "message_type": message_type,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.post("/runs/new")
+@web_router.post("/runs/new", dependencies=[Depends(require_csrf)])
 def run_new_submit(
     request: Request,
+    current_user: User = Depends(require_user("submitter")),
     project: str = Form(...),
     test_type: str = Form(...),
     mode: str = Form(default=""),
@@ -512,8 +570,10 @@ def run_new_submit(
         session.close()
 
 
-@app.post("/runs/new/matrix")
-def run_new_matrix(request: Request, matrix_name: str = Form(...)):
+@web_router.post("/runs/new/matrix", dependencies=[Depends(require_csrf)])
+def run_new_matrix(request: Request,
+                   current_user: User = Depends(require_user("submitter")),
+                   matrix_name: str = Form(...)):
     import datetime
     from opp_ci.scheduler import expand_matrix
     from opp_ci.executor import find_existing_run
@@ -596,8 +656,8 @@ def run_new_matrix(request: Request, matrix_name: str = Form(...)):
         session.close()
 
 
-@app.post("/runs/{run_id}/rerun")
-def run_rerun(run_id: int):
+@web_router.post("/runs/{run_id}/rerun", dependencies=[Depends(require_csrf)])
+def run_rerun(run_id: int, current_user: User = Depends(require_user("submitter"))):
     import datetime
     session = SessionLocal()
     try:
@@ -633,8 +693,8 @@ def run_rerun(run_id: int):
         session.close()
 
 
-@app.post("/runs/{run_id}/cancel")
-def run_cancel(run_id: int):
+@web_router.post("/runs/{run_id}/cancel", dependencies=[Depends(require_csrf)])
+def run_cancel(run_id: int, current_user: User = Depends(require_user("submitter"))):
     import datetime
     session = SessionLocal()
     try:
@@ -655,8 +715,8 @@ def run_cancel(run_id: int):
         session.close()
 
 
-@app.get("/runs/{run_id}", response_class=HTMLResponse)
-def run_detail(request: Request, run_id: int):
+@web_router.get("/runs/{run_id}", response_class=HTMLResponse)
+def run_detail(request: Request, run_id: int, current_user: User = Depends(require_user())):
     session = SessionLocal()
     try:
         run = session.execute(
@@ -672,14 +732,16 @@ def run_detail(request: Request, run_id: int):
         return templates.TemplateResponse(request, "run_detail.html", {
             "run": run,
             "results": results,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/projects", response_class=HTMLResponse)
+@web_router.get("/projects", response_class=HTMLResponse)
 def projects_list(
     request: Request,
+    current_user: User = Depends(require_user()),
     name: str = Query(default=None),
 ):
     session = SessionLocal()
@@ -709,20 +771,25 @@ def projects_list(
             "run_counts": run_counts,
             "last_status": last_status,
             "filter_name": name or "",
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/projects/new", response_class=HTMLResponse)
-def project_new_form(request: Request, error: str = Query(default=None)):
+@web_router.get("/projects/new", response_class=HTMLResponse)
+def project_new_form(request: Request,
+                     current_user: User = Depends(require_user("submitter")),
+                     error: str = Query(default=None)):
     return templates.TemplateResponse(request, "project_new.html", {
         "error": error,
+        **_template_globals(request, current_user),
     })
 
 
-@app.post("/projects/new")
+@web_router.post("/projects/new", dependencies=[Depends(require_csrf)])
 def project_new_submit(
+    current_user: User = Depends(require_user("submitter")),
     name: str = Form(...),
     opp_env_name: str = Form(default=""),
     github_owner: str = Form(default=""),
@@ -751,8 +818,8 @@ def project_new_submit(
         session.close()
 
 
-@app.post("/projects/{name}/delete")
-def project_delete(name: str):
+@web_router.post("/projects/{name}/delete", dependencies=[Depends(require_csrf)])
+def project_delete(name: str, current_user: User = Depends(require_user("submitter"))):
     session = SessionLocal()
     try:
         project = session.execute(
@@ -770,8 +837,8 @@ def project_delete(name: str):
         session.close()
 
 
-@app.get("/projects/{name}", response_class=HTMLResponse)
-def project_detail(request: Request, name: str):
+@web_router.get("/projects/{name}", response_class=HTMLResponse)
+def project_detail(request: Request, name: str, current_user: User = Depends(require_user())):
     session = SessionLocal()
     try:
         project = session.execute(
@@ -800,13 +867,15 @@ def project_detail(request: Request, name: str):
             "total": total,
             "passed": passed,
             "failed": failed,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/commits/{project}/{sha}", response_class=HTMLResponse)
-def commit_detail(request: Request, project: str, sha: str):
+@web_router.get("/commits/{project}/{sha}", response_class=HTMLResponse)
+def commit_detail(request: Request, project: str, sha: str,
+                  current_user: User = Depends(require_user())):
     session = SessionLocal()
     try:
         runs = session.execute(
@@ -819,13 +888,14 @@ def commit_detail(request: Request, project: str, sha: str):
             "project": project,
             "sha": sha,
             "runs": runs,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/compatibility", response_class=HTMLResponse)
-def compatibility_index(request: Request):
+@web_router.get("/compatibility", response_class=HTMLResponse)
+def compatibility_index(request: Request, current_user: User = Depends(require_user())):
     session = SessionLocal()
     try:
         projects = session.execute(
@@ -835,13 +905,15 @@ def compatibility_index(request: Request):
         projects = [p for p in projects if p.dependency_names]
         return templates.TemplateResponse(request, "compatibility_index.html", {
             "projects": projects,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/compatibility/{project_name}", response_class=HTMLResponse)
-def compatibility_page(request: Request, project_name: str):
+@web_router.get("/compatibility/{project_name}", response_class=HTMLResponse)
+def compatibility_page(request: Request, project_name: str,
+                       current_user: User = Depends(require_user())):
     from opp_ci.compatibility import get_compatibility_matrix
     session = SessionLocal()
     try:
@@ -849,14 +921,16 @@ def compatibility_page(request: Request, project_name: str):
         return templates.TemplateResponse(request, "compatibility.html", {
             "project_name": project_name,
             "matrices": matrices,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/matrices", response_class=HTMLResponse)
+@web_router.get("/matrices", response_class=HTMLResponse)
 def matrices_list(
     request: Request,
+    current_user: User = Depends(require_user()),
     name: str = Query(default=None),
     project: str = Query(default=None),
     error: str = Query(default=None),
@@ -883,13 +957,16 @@ def matrices_list(
             "filter_name": name or "",
             "filter_project": project or "",
             "error": error,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/matrices/new", response_class=HTMLResponse)
-def matrix_new_form(request: Request, error: str = Query(default=None)):
+@web_router.get("/matrices/new", response_class=HTMLResponse)
+def matrix_new_form(request: Request,
+                    current_user: User = Depends(require_user("submitter")),
+                    error: str = Query(default=None)):
     session = SessionLocal()
     try:
         projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
@@ -931,13 +1008,15 @@ def matrix_new_form(request: Request, error: str = Query(default=None)):
             "versions_by_project": versions_by_project,
             "omnetpp_versions": omnetpp_versions,
             "error": error,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/matrices/{matrix_id}", response_class=HTMLResponse)
-def matrix_detail(request: Request, matrix_id: int):
+@web_router.get("/matrices/{matrix_id}", response_class=HTMLResponse)
+def matrix_detail(request: Request, matrix_id: int,
+                  current_user: User = Depends(require_user())):
     from opp_ci.scheduler import expand_matrix
 
     session = SessionLocal()
@@ -958,6 +1037,7 @@ def matrix_detail(request: Request, matrix_id: int):
             "matrix": matrix,
             "jobs": jobs,
             "recent_runs": recent_runs,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
@@ -970,8 +1050,9 @@ def _split_csv(value):
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-@app.post("/matrices/create")
+@web_router.post("/matrices/create", dependencies=[Depends(require_csrf)])
 def matrix_create(
+    current_user: User = Depends(require_user("submitter")),
     name: str = Form(...),
     project: str = Form(...),
     test_types: str = Form(default=""),
@@ -1034,8 +1115,8 @@ def matrix_create(
         session.close()
 
 
-@app.post("/matrices/{matrix_id}/delete")
-def matrix_delete(matrix_id: int):
+@web_router.post("/matrices/{matrix_id}/delete", dependencies=[Depends(require_csrf)])
+def matrix_delete(matrix_id: int, current_user: User = Depends(require_user("submitter"))):
     session = SessionLocal()
     try:
         matrix = session.execute(
@@ -1049,9 +1130,10 @@ def matrix_delete(matrix_id: int):
         session.close()
 
 
-@app.get("/os", response_class=HTMLResponse)
+@web_router.get("/os", response_class=HTMLResponse)
 def os_list(
     request: Request,
+    current_user: User = Depends(require_user()),
     name: str = Query(default=None),
     version: str = Query(default=None),
     arch: str = Query(default=None),
@@ -1072,18 +1154,20 @@ def os_list(
             "filter_name": name or "",
             "filter_version": version or "",
             "filter_arch": arch or "",
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/os/new", response_class=HTMLResponse)
-def os_new_form(request: Request):
-    return templates.TemplateResponse(request, "os_new.html", {})
+@web_router.get("/os/new", response_class=HTMLResponse)
+def os_new_form(request: Request, current_user: User = Depends(require_user("submitter"))):
+    return templates.TemplateResponse(request, "os_new.html", _template_globals(request, current_user))
 
 
-@app.post("/os/new")
-def os_new_submit(name: str = Form(...), version: str = Form(default=""), arch: str = Form(default="x86_64")):
+@web_router.post("/os/new", dependencies=[Depends(require_csrf)])
+def os_new_submit(current_user: User = Depends(require_user("submitter")),
+                  name: str = Form(...), version: str = Form(default=""), arch: str = Form(default="x86_64")):
     session = SessionLocal()
     try:
         entry = OS(name=name, version=version or None, arch=arch or "x86_64")
@@ -1094,8 +1178,8 @@ def os_new_submit(name: str = Form(...), version: str = Form(default=""), arch: 
         session.close()
 
 
-@app.get("/os/{os_id}", response_class=HTMLResponse)
-def os_detail(request: Request, os_id: int):
+@web_router.get("/os/{os_id}", response_class=HTMLResponse)
+def os_detail(request: Request, os_id: int, current_user: User = Depends(require_user())):
     session = SessionLocal()
     try:
         entry = session.execute(select(OS).where(OS.id == os_id)).scalar_one_or_none()
@@ -1103,13 +1187,14 @@ def os_detail(request: Request, os_id: int):
             return HTMLResponse("<h1>OS not found</h1>", status_code=404)
         return templates.TemplateResponse(request, "os_detail.html", {
             "os": entry,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.post("/os/{os_id}/delete")
-def os_delete(os_id: int):
+@web_router.post("/os/{os_id}/delete", dependencies=[Depends(require_csrf)])
+def os_delete(os_id: int, current_user: User = Depends(require_user("submitter"))):
     session = SessionLocal()
     try:
         entry = session.execute(select(OS).where(OS.id == os_id)).scalar_one_or_none()
@@ -1121,9 +1206,10 @@ def os_delete(os_id: int):
         session.close()
 
 
-@app.get("/compilers", response_class=HTMLResponse)
+@web_router.get("/compilers", response_class=HTMLResponse)
 def compilers_list(
     request: Request,
+    current_user: User = Depends(require_user()),
     name: str = Query(default=None),
     version: str = Query(default=None),
 ):
@@ -1140,18 +1226,20 @@ def compilers_list(
             "compilers": compilers,
             "filter_name": name or "",
             "filter_version": version or "",
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/compilers/new", response_class=HTMLResponse)
-def compiler_new_form(request: Request):
-    return templates.TemplateResponse(request, "compiler_new.html", {})
+@web_router.get("/compilers/new", response_class=HTMLResponse)
+def compiler_new_form(request: Request, current_user: User = Depends(require_user("submitter"))):
+    return templates.TemplateResponse(request, "compiler_new.html", _template_globals(request, current_user))
 
 
-@app.post("/compilers/new")
-def compiler_new_submit(name: str = Form(...), version: str = Form(default="")):
+@web_router.post("/compilers/new", dependencies=[Depends(require_csrf)])
+def compiler_new_submit(current_user: User = Depends(require_user("submitter")),
+                         name: str = Form(...), version: str = Form(default="")):
     session = SessionLocal()
     try:
         entry = Compiler(name=name, version=version or None)
@@ -1162,8 +1250,9 @@ def compiler_new_submit(name: str = Form(...), version: str = Form(default="")):
         session.close()
 
 
-@app.get("/compilers/{compiler_id}", response_class=HTMLResponse)
-def compiler_detail(request: Request, compiler_id: int):
+@web_router.get("/compilers/{compiler_id}", response_class=HTMLResponse)
+def compiler_detail(request: Request, compiler_id: int,
+                    current_user: User = Depends(require_user())):
     session = SessionLocal()
     try:
         entry = session.execute(select(Compiler).where(Compiler.id == compiler_id)).scalar_one_or_none()
@@ -1171,13 +1260,14 @@ def compiler_detail(request: Request, compiler_id: int):
             return HTMLResponse("<h1>Compiler not found</h1>", status_code=404)
         return templates.TemplateResponse(request, "compiler_detail.html", {
             "compiler": entry,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.post("/compilers/{compiler_id}/delete")
-def compiler_delete(compiler_id: int):
+@web_router.post("/compilers/{compiler_id}/delete", dependencies=[Depends(require_csrf)])
+def compiler_delete(compiler_id: int, current_user: User = Depends(require_user("submitter"))):
     session = SessionLocal()
     try:
         entry = session.execute(select(Compiler).where(Compiler.id == compiler_id)).scalar_one_or_none()
@@ -1189,8 +1279,8 @@ def compiler_delete(compiler_id: int):
         session.close()
 
 
-@app.get("/workers", response_class=HTMLResponse)
-def workers_list(request: Request):
+@web_router.get("/workers", response_class=HTMLResponse)
+def workers_list(request: Request, current_user: User = Depends(require_user())):
     """List registered workers, flagging those whose heartbeat is fresh as connected."""
     import datetime as _dt
     from opp_ci.config import WORKER_HEARTBEAT_TIMEOUT
@@ -1229,13 +1319,14 @@ def workers_list(request: Request):
             "rows": rows,
             "connected_count": connected_count,
             "heartbeat_timeout": WORKER_HEARTBEAT_TIMEOUT,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/rules", response_class=HTMLResponse)
-def rules_list(request: Request):
+@web_router.get("/rules", response_class=HTMLResponse)
+def rules_list(request: Request, current_user: User = Depends(require_user())):
     session = SessionLocal()
     try:
         rules = session.execute(
@@ -1271,13 +1362,14 @@ def rules_list(request: Request):
             "rules": rule_data,
             "projects": projects,
             "matrices": matrices,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.get("/rules/{rule_id}", response_class=HTMLResponse)
-def rule_detail(request: Request, rule_id: int):
+@web_router.get("/rules/{rule_id}", response_class=HTMLResponse)
+def rule_detail(request: Request, rule_id: int, current_user: User = Depends(require_user())):
     session = SessionLocal()
     try:
         rule = session.execute(
@@ -1304,14 +1396,16 @@ def rule_detail(request: Request, rule_id: int):
             "matrix_name": matrix_name,
             "projects": projects,
             "matrices": matrices,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.post("/rules/{rule_id}/edit")
+@web_router.post("/rules/{rule_id}/edit", dependencies=[Depends(require_csrf)])
 def rule_edit_web(
     rule_id: int,
+    current_user: User = Depends(require_user("submitter")),
     rule_type: str = Form(...),
     pattern: str = Form(...),
     matrix_name: str = Form(default=""),
@@ -1343,8 +1437,9 @@ def rule_edit_web(
         session.close()
 
 
-@app.post("/rules/create")
+@web_router.post("/rules/create", dependencies=[Depends(require_csrf)])
 def rule_create_web(
+    current_user: User = Depends(require_user("submitter")),
     project_name: str = Form(...),
     rule_type: str = Form(...),
     pattern: str = Form(...),
@@ -1380,8 +1475,8 @@ def rule_create_web(
         session.close()
 
 
-@app.post("/rules/{rule_id}/delete")
-def rule_delete_web(rule_id: int):
+@web_router.post("/rules/{rule_id}/delete", dependencies=[Depends(require_csrf)])
+def rule_delete_web(rule_id: int, current_user: User = Depends(require_user("submitter"))):
     session = SessionLocal()
     try:
         rule = session.execute(
@@ -1395,8 +1490,8 @@ def rule_delete_web(rule_id: int):
         session.close()
 
 
-@app.get("/admin", response_class=HTMLResponse)
-def admin_page(request: Request):
+@web_router.get("/admin", response_class=HTMLResponse)
+def admin_page(request: Request, current_user: User = Depends(require_user("admin"))):
     session = SessionLocal()
     try:
         stats = {
@@ -1415,6 +1510,7 @@ def admin_page(request: Request):
             "workers_total": session.execute(select(func.count(Worker.id))).scalar(),
             "workers_online": session.execute(select(func.count(Worker.id)).where(Worker.status == "online")).scalar(),
             "tokens": session.execute(select(func.count(ApiToken.id))).scalar(),
+            "users": session.execute(select(func.count(User.id))).scalar(),
         }
 
         workers = session.execute(
@@ -1439,13 +1535,15 @@ def admin_page(request: Request):
             "tokens": tokens,
             "rules": rules,
             "recent_errors": recent_errors,
+            **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-@app.post("/admin/workers/register")
+@web_router.post("/admin/workers/register", dependencies=[Depends(require_csrf)])
 def admin_register_worker(
+    current_user: User = Depends(require_user("admin")),
     name: str = Form(...),
     tags: str = Form(default=""),
     concurrency: int = Form(default=1),
@@ -1473,8 +1571,9 @@ def admin_register_worker(
         session.close()
 
 
-@app.post("/admin/tokens/create")
+@web_router.post("/admin/tokens/create", dependencies=[Depends(require_csrf)])
 def admin_create_token(
+    current_user: User = Depends(require_user("admin")),
     name: str = Form(...),
     role: str = Form(default="readonly"),
 ):
@@ -1493,8 +1592,8 @@ def admin_create_token(
         session.close()
 
 
-@app.post("/admin/tokens/{token_id}/revoke")
-def admin_revoke_token(token_id: int):
+@web_router.post("/admin/tokens/{token_id}/revoke", dependencies=[Depends(require_csrf)])
+def admin_revoke_token(token_id: int, current_user: User = Depends(require_user("admin"))):
     session = SessionLocal()
     try:
         token = session.execute(
@@ -1508,8 +1607,9 @@ def admin_revoke_token(token_id: int):
         session.close()
 
 
-@app.post("/admin/projects/register")
+@web_router.post("/admin/projects/register", dependencies=[Depends(require_csrf)])
 def admin_register_project(
+    current_user: User = Depends(require_user("admin")),
     name: str = Form(...),
     opp_env_name: str = Form(default=""),
     github_owner: str = Form(default=""),
@@ -1534,3 +1634,97 @@ def admin_register_project(
         return RedirectResponse(url="/admin", status_code=303)
     finally:
         session.close()
+
+
+# ── Admin: users page ──────────────────────────────────────────────────
+
+
+@web_router.get("/admin/users", response_class=HTMLResponse)
+def admin_users(request: Request, current_user: User = Depends(require_user("admin")),
+                message: str = Query(default=None), message_type: str = Query(default=None)):
+    session = SessionLocal()
+    try:
+        users = session.execute(select(User).order_by(User.id)).scalars().all()
+        return templates.TemplateResponse(request, "users.html", {
+            "users": users,
+            "message": message,
+            "message_type": message_type,
+            **_template_globals(request, current_user),
+        })
+    finally:
+        session.close()
+
+
+_ROLE_CHOICES = ("readonly", "submitter", "admin")
+
+
+@web_router.post("/admin/users/{user_id}/role", dependencies=[Depends(require_csrf)])
+def admin_set_user_role(
+    user_id: int,
+    current_user: User = Depends(require_user("admin")),
+    role: str = Form(...),
+):
+    if role not in _ROLE_CHOICES:
+        return RedirectResponse(url="/admin/users?message=Invalid+role&message_type=error", status_code=303)
+    session = SessionLocal()
+    try:
+        user = session.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+        if user is None:
+            return RedirectResponse(url="/admin/users", status_code=303)
+        user.role = role
+        user.role_locked = True  # pin: don't recompute from GitHub next login
+        session.commit()
+        return RedirectResponse(
+            url=f"/admin/users?message=Role+for+{user.display_name}+set+to+{role}+(locked)&message_type=success",
+            status_code=303,
+        )
+    finally:
+        session.close()
+
+
+@web_router.post("/admin/users/{user_id}/unlock", dependencies=[Depends(require_csrf)])
+def admin_unlock_user(user_id: int, current_user: User = Depends(require_user("admin"))):
+    session = SessionLocal()
+    try:
+        user = session.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+        if user is None:
+            return RedirectResponse(url="/admin/users", status_code=303)
+        user.role_locked = False
+        session.commit()
+        return RedirectResponse(
+            url=f"/admin/users?message=Role+for+{user.display_name}+unlocked&message_type=success",
+            status_code=303,
+        )
+    finally:
+        session.close()
+
+
+@web_router.post("/admin/users/{user_id}/disable", dependencies=[Depends(require_csrf)])
+def admin_disable_user(
+    user_id: int,
+    current_user: User = Depends(require_user("admin")),
+    enabled: int = Form(default=0),
+):
+    session = SessionLocal()
+    try:
+        user = session.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+        if user is None:
+            return RedirectResponse(url="/admin/users", status_code=303)
+        # Don't let an admin lock themselves out of the only admin account.
+        if user.id == current_user.id and not enabled:
+            return RedirectResponse(
+                url="/admin/users?message=Refusing+to+disable+your+own+account&message_type=error",
+                status_code=303,
+            )
+        user.enabled = bool(enabled)
+        session.commit()
+        state = "enabled" if user.enabled else "disabled"
+        return RedirectResponse(
+            url=f"/admin/users?message=User+{user.display_name}+{state}&message_type=success",
+            status_code=303,
+        )
+    finally:
+        session.close()
+
+
+app.include_router(web_router)
