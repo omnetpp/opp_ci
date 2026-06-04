@@ -51,8 +51,12 @@ class SubmitRunRequest(BaseModel):
     test: str
     mode: str | None = None
     git_ref: str | None = None
-    os: str | None = None
-    os_version: str | None = None
+    os: str | None = None           # "Linux" | "Windows" | "MacOS"
+    os_version: str | None = None   # Windows/MacOS only
+    distro: str | None = None       # Linux only — "ubuntu", "fedora", ...
+    distro_version: str | None = None
+    flavor: str | None = None       # Linux only — "kubuntu", "xubuntu", ...
+    flavor_version: str | None = None
     arch: str | None = None         # "amd64", "aarch64", ...
     compiler: str | None = None
     compiler_version: str | None = None
@@ -122,6 +126,20 @@ async def submit_run(
 
     session = SessionLocal()
     try:
+        from opp_ci import platforms
+        try:
+            resolved_os, resolved_distro, resolved_flavor = platforms.resolve_platform(
+                os=req.os, distro=req.distro, flavor=req.flavor,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        os_canon = platforms._os_canonical(resolved_os) if resolved_os else None
+        distro_value = resolved_distro
+        flavor_value = resolved_flavor
+        os_ver = req.os_version if os_canon and os_canon != "Linux" else None
+        distro_ver = req.distro_version if distro_value else None
+        flavor_ver = req.flavor_version if flavor_value else None
+
         if not req.force:
             existing = find_existing_run(
                 session,
@@ -129,8 +147,12 @@ async def submit_run(
                 test=req.test,
                 mode=req.mode,
                 git_ref=req.git_ref,
-                os=req.os,
-                os_version=req.os_version,
+                os=os_canon,
+                os_version=os_ver,
+                distro=distro_value,
+                distro_version=distro_ver,
+                flavor=flavor_value,
+                flavor_version=flavor_ver,
                 arch=req.arch,
                 compiler=req.compiler,
                 compiler_version=req.compiler_version,
@@ -141,15 +163,23 @@ async def submit_run(
                 return {"id": existing.id, "status": existing.status.value, "skipped": True}
 
         from opp_ci.scheduler import _build_platform_desc
-        platform_desc = _build_platform_desc(req.os, req.os_version, req.arch, req.compiler, req.compiler_version)
+        platform_desc = _build_platform_desc(
+            os_canon, os_ver, req.arch, req.compiler, req.compiler_version,
+            distro=distro_value, distro_version=distro_ver,
+            flavor=flavor_value, flavor_version=flavor_ver,
+        )
 
         run = TestRun(
             project=req.project,
             test=req.test,
             mode=req.mode,
             git_ref=req.git_ref,
-            os=req.os,
-            os_version=req.os_version,
+            os=os_canon,
+            os_version=os_ver,
+            distro=distro_value,
+            distro_version=distro_ver,
+            flavor=flavor_value,
+            flavor_version=flavor_ver,
             arch=req.arch,
             compiler=req.compiler,
             compiler_version=req.compiler_version,
@@ -196,6 +226,10 @@ async def submit_matrix_run(
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
                 os_version=job.get("os_version"),
+                distro=job.get("distro"),
+                distro_version=job.get("distro_version"),
+                flavor=job.get("flavor"),
+                flavor_version=job.get("flavor_version"),
                 arch=job.get("arch"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
@@ -214,6 +248,10 @@ async def submit_matrix_run(
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
                 os_version=job.get("os_version"),
+                distro=job.get("distro"),
+                distro_version=job.get("distro_version"),
+                flavor=job.get("flavor"),
+                flavor_version=job.get("flavor_version"),
                 arch=job.get("arch"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
@@ -241,6 +279,12 @@ async def list_runs(
     project: str | None = None,
     test: str | None = None,
     status: str | None = None,
+    os: str | None = None,
+    os_version: str | None = None,
+    distro: str | None = None,
+    distro_version: str | None = None,
+    flavor: str | None = None,
+    flavor_version: str | None = None,
     limit: int = 50,
     _identity: dict = Depends(require_role("readonly")),
 ):
@@ -254,6 +298,18 @@ async def list_runs(
             query = query.where(TestRun.test == test)
         if status:
             query = query.where(TestRun.status == TestRunStatus(status))
+        if os:
+            query = query.where(TestRun.os == os)
+        if os_version:
+            query = query.where(TestRun.os_version == os_version)
+        if distro:
+            query = query.where(TestRun.distro == distro.lower())
+        if distro_version:
+            query = query.where(TestRun.distro_version == distro_version)
+        if flavor:
+            query = query.where(TestRun.flavor == flavor.lower())
+        if flavor_version:
+            query = query.where(TestRun.flavor_version == flavor_version)
 
         runs = session.execute(query).scalars().all()
         return [_run_to_dict(r) for r in runs]
@@ -434,6 +490,10 @@ async def worker_poll(
                 "git_ref": run.git_ref,
                 "os": run.os,
                 "os_version": run.os_version,
+                "distro": run.distro,
+                "distro_version": run.distro_version,
+                "flavor": run.flavor,
+                "flavor_version": run.flavor_version,
                 "arch": run.arch,
                 "compiler": run.compiler,
                 "compiler_version": run.compiler_version,
@@ -447,19 +507,46 @@ async def worker_poll(
         session.close()
 
 
+def _platform_required_tag(run):
+    """Return the most-specific platform capability tag a worker must
+    advertise to claim *run*, or None when the run doesn't pin a platform.
+
+    Rules:
+      - run names a flavor   →  flavor:<flavor>-<flavor_version-or-distro_version>
+      - run names a distro   →  distro:<distro>-<distro_version>
+      - run names Windows/MacOS with a version → os:<os>-<ver>
+      - run names just an OS family → os:<os>
+    """
+    if run.flavor:
+        ver = run.flavor_version or run.distro_version
+        return f"flavor:{run.flavor.lower()}-{ver}" if ver else f"flavor:{run.flavor.lower()}"
+    if run.distro:
+        return (f"distro:{run.distro.lower()}-{run.distro_version}"
+                if run.distro_version else f"distro:{run.distro.lower()}")
+    if run.os:
+        os_lower = run.os.lower()
+        if os_lower != "linux" and run.os_version:
+            return f"os:{os_lower}-{run.os_version}"
+        return f"os:{os_lower}"
+    return None
+
+
 def _worker_can_run(worker_tags, run):
     """Return True if a worker with *worker_tags* may claim *run*.
 
     Required tags by execution environment:
       - isolation=podman             →  {"podman"}
-      - isolation=none, toolchain=nix → {"nix", "os:<os>-<ver>", "compiler:<c>-<cv>"}
-      - isolation=none, toolchain=none → {"os:<os>-<ver>", "compiler:<c>-<cv>"}
+      - isolation=none, toolchain=nix → {"nix", "<platform>", "compiler:<c>-<cv>"}
+      - isolation=none, toolchain=none → {"<platform>", "compiler:<c>-<cv>"}
+
+    ``<platform>`` is the most-specific level the run pins (see
+    [`_platform_required_tag()`](#_platform_required_tag)).
 
     When ``run.arch`` is set, the worker must additionally advertise
     ``arch:<arch>`` regardless of isolation — the host kernel architecture
     matters for both bare-metal and podman runs.
 
-    Tags derived from run fields that aren't set (e.g. os=None) are skipped.
+    Tags derived from run fields that aren't set are skipped.
     """
     isolation = run.isolation or "none"
     toolchain = run.toolchain or "none"
@@ -469,8 +556,9 @@ def _worker_can_run(worker_tags, run):
     else:
         if toolchain == "nix":
             required.add("nix")
-        if run.os and run.os_version:
-            required.add(f"os:{run.os.lower()}-{run.os_version}")
+        platform_tag = _platform_required_tag(run)
+        if platform_tag:
+            required.add(platform_tag)
         if run.compiler and run.compiler_version:
             required.add(f"compiler:{run.compiler.lower()}-{run.compiler_version}")
     if run.arch:
@@ -902,6 +990,10 @@ def _run_to_dict(run):
         "git_ref": run.git_ref,
         "os": run.os,
         "os_version": run.os_version,
+        "distro": run.distro,
+        "distro_version": run.distro_version,
+        "flavor": run.flavor,
+        "flavor_version": run.flavor_version,
         "arch": run.arch,
         "compiler": run.compiler,
         "compiler_version": run.compiler_version,

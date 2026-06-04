@@ -85,8 +85,13 @@ def reset_db(yes, preserve_tokens):
 @click.option("--mode", default=None, type=click.Choice(["debug", "release"]), help="Build mode (debug or release)")
 @click.option("--isolation", default="none", type=click.Choice(["none", "podman"]), help="Run on the host (none) or inside a Podman container")
 @click.option("--toolchain", default="none", type=click.Choice(["none", "nix"]), help="Use the host's installed toolchain (none) or opp_env/Nix")
-@click.option("--os", "os_name", default=None, help="OS name for the run (required for isolation=podman, e.g. 'Ubuntu')")
-@click.option("--os-version", default=None, help="OS version (e.g. '26.04'); required for isolation=podman")
+@click.option("--os", "os_name", default=None, type=click.Choice(["Linux", "Windows", "MacOS"], case_sensitive=False),
+              help="OS family for the run: Linux, Windows, or MacOS")
+@click.option("--os-version", default=None, help="OS version (Windows/MacOS only, e.g. '11', '15.1')")
+@click.option("--distro", default=None, help="Linux distribution name (e.g. 'Ubuntu'), or combined 'Ubuntu 24.04'")
+@click.option("--distro-version", default=None, help="Distribution version (e.g. '24.04')")
+@click.option("--flavor", default=None, help="Distribution flavor (e.g. 'Kubuntu'), or combined 'Kubuntu 24.04'")
+@click.option("--flavor-version", default=None, help="Flavor version; defaults to --distro-version when unset")
 @click.option("--arch", default=None, help="CPU architecture (e.g. 'amd64', 'aarch64'); omit to leave unconstrained")
 @click.option("--compiler", default=None, help="Compiler name (e.g. 'clang'); required for isolation=podman + toolchain=none")
 @click.option("--compiler-version", default=None, help="Compiler version (e.g. '22')")
@@ -95,13 +100,41 @@ def reset_db(yes, preserve_tokens):
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
 @click.pass_context
 def run_cmd(ctx, project, tests, git_ref, mode, isolation, toolchain,
-            os_name, os_version, arch, compiler, compiler_version, pins, force, skip_install):
+            os_name, os_version, distro, distro_version, flavor, flavor_version,
+            arch, compiler, compiler_version, pins, force, skip_install):
     """Run test(s) for a project and store the results."""
+    from opp_ci import platforms
+    from opp_ci.scheduler import _parse_name_version, _build_platform_desc
+
+    # Allow combined 'Ubuntu 24.04' / 'Kubuntu 24.04' shorthand on --distro/--flavor.
+    if distro and not distro_version:
+        distro, distro_version = _parse_name_version(distro)
+    if flavor and not flavor_version:
+        flavor, flavor_version = _parse_name_version(flavor)
+    try:
+        resolved_os, resolved_distro, resolved_flavor = platforms.resolve_platform(
+            os=os_name, distro=distro, flavor=flavor,
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    os_name = platforms._os_canonical(resolved_os) if resolved_os else None
+    distro = resolved_distro
+    flavor = resolved_flavor
+    if os_name == "Linux":
+        os_version = None
+    if not resolved_distro:
+        distro_version = None
+    if not resolved_flavor:
+        flavor_version = None
+
     if ctx.obj.get("remote"):
         _run_remote(
             project, tests, git_ref,
             mode=mode, isolation=isolation, toolchain=toolchain,
-            os_name=os_name, os_version=os_version, arch=arch,
+            os_name=os_name, os_version=os_version,
+            distro=distro, distro_version=distro_version,
+            flavor=flavor, flavor_version=flavor_version,
+            arch=arch,
             compiler=compiler, compiler_version=compiler_version,
             pins=pins, force=force,
         )
@@ -141,7 +174,10 @@ def run_cmd(ctx, project, tests, git_ref, mode, isolation, toolchain,
             if not force:
                 existing = find_existing_run(
                     session, project=project, test=test, mode=mode, git_ref=git_ref,
-                    os=os_name, os_version=os_version, arch=arch,
+                    os=os_name, os_version=os_version,
+                    distro=distro, distro_version=distro_version,
+                    flavor=flavor, flavor_version=flavor_version,
+                    arch=arch,
                     compiler=compiler, compiler_version=compiler_version,
                     isolation=isolation, toolchain=toolchain,
                 )
@@ -156,11 +192,20 @@ def run_cmd(ctx, project, tests, git_ref, mode, isolation, toolchain,
                 git_ref=git_ref,
                 os=os_name,
                 os_version=os_version,
+                distro=distro,
+                distro_version=distro_version,
+                flavor=flavor,
+                flavor_version=flavor_version,
                 arch=arch,
                 compiler=compiler,
                 compiler_version=compiler_version,
                 isolation=isolation,
                 toolchain=toolchain,
+                platform_desc=_build_platform_desc(
+                    os_name, os_version, arch, compiler, compiler_version,
+                    distro=distro, distro_version=distro_version,
+                    flavor=flavor, flavor_version=flavor_version,
+                ),
                 status=TestRunStatus.running,
                 started_at=datetime.datetime.utcnow(),
             )
@@ -174,7 +219,10 @@ def run_cmd(ctx, project, tests, git_ref, mode, isolation, toolchain,
                 outcome = run_test(
                     project, test, git_ref=git_ref, mode=mode,
                     isolation=isolation, toolchain=toolchain,
-                    os=os_name, os_version=os_version, arch=arch,
+                    os=os_name, os_version=os_version,
+                    distro=distro, distro_version=distro_version,
+                    flavor=flavor, flavor_version=flavor_version,
+                    arch=arch,
                     compiler=compiler, compiler_version=compiler_version,
                 )
             except Exception as e:
@@ -209,6 +257,8 @@ def run_cmd(ctx, project, tests, git_ref, mode, isolation, toolchain,
 
 def _run_remote(project, tests, git_ref, *, mode=None,
                 isolation=None, toolchain=None, os_name=None, os_version=None,
+                distro=None, distro_version=None,
+                flavor=None, flavor_version=None,
                 arch=None, compiler=None, compiler_version=None,
                 pins=None, force=False):
     """Submit test run(s) to the remote coordinator."""
@@ -237,7 +287,10 @@ def _run_remote(project, tests, git_ref, *, mode=None,
             result = client.submit_run(
                 project=project, test=test, git_ref=git_ref,
                 mode=mode, isolation=isolation, toolchain=toolchain,
-                os=os_name, os_version=os_version, arch=arch,
+                os=os_name, os_version=os_version,
+                distro=distro, distro_version=distro_version,
+                flavor=flavor, flavor_version=flavor_version,
+                arch=arch,
                 compiler=compiler, compiler_version=compiler_version,
                 force=force,
             )
@@ -617,8 +670,18 @@ def _parse_ref_range(ref_range_str):
 @click.option("--project", required=True, help="Project name")
 @click.option("--project-versions", "versions", default=None, help="Comma-separated project versions (optional, defaults to project name)")
 @click.option("--builds", "modes", default="release", help="Comma-separated build modes (default: release)")
-@click.option("--os", "os_names", default=None, help="Comma-separated OS (e.g. 'Ubuntu 24.04,Fedora 41' or 'Ubuntu,Fedora' with --os-version)")
-@click.option("--os-version", "os_versions", default=None, help="Comma-separated OS versions for cross-product (e.g. '24.04,41')")
+@click.option("--os", "os_names", default=None,
+              help="Comma-separated OS families: Linux, Windows, MacOS (e.g. 'Linux,Windows')")
+@click.option("--os-version", "os_versions", default=None,
+              help="Comma-separated OS versions for cross-product (Windows/MacOS only, e.g. '11,15')")
+@click.option("--distro", "distros", default=None,
+              help="Comma-separated Linux distributions, combined or structured (e.g. 'Ubuntu 24.04,Fedora 41')")
+@click.option("--distro-version", "distro_versions", default=None,
+              help="Comma-separated distro versions for cross-product (e.g. '24.04,41')")
+@click.option("--flavor", "flavors", default=None,
+              help="Comma-separated distro flavors (e.g. 'Kubuntu 24.04')")
+@click.option("--flavor-version", "flavor_versions", default=None,
+              help="Comma-separated flavor versions for cross-product")
 @click.option("--compiler", "compilers", default=None, help="Comma-separated compilers (e.g. 'gcc-14,clang-18' or 'gcc,clang' with --compiler-version)")
 @click.option("--compiler-version", "compiler_versions", default=None, help="Comma-separated compiler versions for cross-product (e.g. '14,18')")
 @click.option("--arch", "arches", default=None, help="Comma-separated CPU architectures (e.g. 'amd64,aarch64')")
@@ -630,15 +693,21 @@ def _parse_ref_range(ref_range_str):
 @click.option("--toolchain", default=None, help="Comma-separated toolchain values: 'none' and/or 'nix' (cross-product axis)")
 @click.option("--opp-file", "opp_file", default=None, help="Path to the project's .opp file (for opp_repl project discovery)")
 @click.option("--replace", is_flag=True, help="Replace existing matrix with the same name")
-def create_matrix(name, project, tests, modes, os_names, os_versions, compilers, compiler_versions, arches, versions, refs, ref_range, deps, isolation, toolchain, opp_file, replace):
+def create_matrix(name, project, tests, modes, os_names, os_versions,
+                  distros, distro_versions, flavors, flavor_versions,
+                  compilers, compiler_versions, arches, versions, refs,
+                  ref_range, deps, isolation, toolchain, opp_file, replace):
     """Create a test matrix configuration.
 
-    Platform axes support two styles:
+    Platform axes form a three-level hierarchy:
 
-    Combined: --os 'Ubuntu 24.04,Fedora 41' (parsed into name+version automatically)
+    \b
+        --os Linux,Windows,MacOS
+        --distro 'Ubuntu 24.04,Fedora 41'   (Linux only; flavor=parent distro)
+        --flavor 'Kubuntu 24.04'            (variant of a distro)
 
-    Structured: --os 'Ubuntu,Fedora' --os-version '24.04,41' (cross-product)
-
+    Each level supports combined ('Ubuntu 24.04') or structured
+    (--distro Ubuntu,Fedora --distro-version 24.04,41) styles.
     Same for --compiler / --compiler-version.
     """
     if refs and ref_range:
@@ -661,6 +730,14 @@ def create_matrix(name, project, tests, modes, os_names, os_versions, compilers,
             config["os"] = [o.strip() for o in os_names.split(",")]
         if os_versions:
             config["os_version"] = [o.strip() for o in os_versions.split(",")]
+        if distros:
+            config["distro"] = [d.strip() for d in distros.split(",")]
+        if distro_versions:
+            config["distro_version"] = [d.strip() for d in distro_versions.split(",")]
+        if flavors:
+            config["flavor"] = [f.strip() for f in flavors.split(",")]
+        if flavor_versions:
+            config["flavor_version"] = [f.strip() for f in flavor_versions.split(",")]
         if compilers:
             config["compiler"] = [c.strip() for c in compilers.split(",")]
         if compiler_versions:
@@ -786,6 +863,10 @@ def run_matrix(matrix_name, force, skip_install):
                     git_ref=job.get("git_ref"),
                     os=job.get("os"),
                     os_version=job.get("os_version"),
+                    distro=job.get("distro"),
+                    distro_version=job.get("distro_version"),
+                    flavor=job.get("flavor"),
+                    flavor_version=job.get("flavor_version"),
                     arch=job.get("arch"),
                     compiler=job.get("compiler"),
                     compiler_version=job.get("compiler_version"),
@@ -804,6 +885,10 @@ def run_matrix(matrix_name, force, skip_install):
                 git_ref=job.get("git_ref"),
                 os=job.get("os"),
                 os_version=job.get("os_version"),
+                distro=job.get("distro"),
+                distro_version=job.get("distro_version"),
+                flavor=job.get("flavor"),
+                flavor_version=job.get("flavor_version"),
                 arch=job.get("arch"),
                 compiler=job.get("compiler"),
                 compiler_version=job.get("compiler_version"),
@@ -832,6 +917,8 @@ def run_matrix(matrix_name, force, skip_install):
                     mode=job.get("mode"),
                     isolation=job.get("isolation"), toolchain=job.get("toolchain"),
                     os=job.get("os"), os_version=job.get("os_version"),
+                    distro=job.get("distro"), distro_version=job.get("distro_version"),
+                    flavor=job.get("flavor"), flavor_version=job.get("flavor_version"),
                     arch=job.get("arch"),
                     compiler=job.get("compiler"), compiler_version=job.get("compiler_version"),
                 )
@@ -1126,30 +1213,57 @@ def _detect_capability_tags():
     """Probe the host for execution capabilities.
 
     Returns a list of opp_ci worker tags reflecting what this host can run:
-      - os:<id>-<version>          from /etc/os-release
-      - compiler:<name>-<major>    for each of gcc, clang found on PATH
-      - podman                     if "podman --version" succeeds
-      - nix                        if both nix and opp_env are on PATH
+      - os:linux | os:windows | os:macos     from platform / /etc/os-release
+      - os:windows-<ver> | os:macos-<ver>    Windows/MacOS only
+      - distro:<id>-<version>                Linux only (from /etc/os-release)
+      - flavor:<id>-<version>                Linux only when a flavor marker
+                                             (VARIANT_ID or kubuntu-desktop)
+                                             is recognised
+      - compiler:<name>-<major>              for each of gcc, clang on PATH
+      - podman                               if "podman --version" succeeds
+      - nix                                  if both nix and opp_env are on PATH
     """
+    import platform as _platform
     import re
     import shutil
     import subprocess as sp
 
+    from opp_ci import platforms as _platforms
+
     tags = []
 
-    try:
-        with open("/etc/os-release") as f:
-            kv = {}
-            for line in f:
-                if "=" in line:
-                    k, _, v = line.strip().partition("=")
-                    kv[k] = v.strip('"')
-        os_id = kv.get("ID", "").lower()
-        os_ver = kv.get("VERSION_ID", "")
-        if os_id and os_ver:
-            tags.append(f"os:{os_id}-{os_ver}")
-    except OSError:
-        pass
+    system = _platform.system().lower()
+    if system == "linux":
+        tags.append("os:linux")
+        try:
+            with open("/etc/os-release") as f:
+                kv = {}
+                for line in f:
+                    if "=" in line:
+                        k, _, v = line.strip().partition("=")
+                        kv[k] = v.strip('"')
+            distro_id = kv.get("ID", "").lower()
+            distro_ver = kv.get("VERSION_ID", "")
+            variant_id = kv.get("VARIANT_ID", "").lower()
+            if distro_id and distro_ver:
+                tags.append(f"distro:{distro_id}-{distro_ver}")
+            if variant_id and _platforms.is_known_flavor(variant_id):
+                tags.append(f"flavor:{variant_id}-{distro_ver}")
+            elif distro_id == "ubuntu" and shutil.which("plasmashell"):
+                # Heuristic: KDE Plasma on Ubuntu ⇒ Kubuntu.
+                tags.append(f"flavor:kubuntu-{distro_ver}")
+        except OSError:
+            pass
+    elif system == "windows":
+        tags.append("os:windows")
+        ver = _platform.release() or _platform.version()
+        if ver:
+            tags.append(f"os:windows-{ver}")
+    elif system == "darwin":
+        tags.append("os:macos")
+        ver = _platform.mac_ver()[0]
+        if ver:
+            tags.append(f"os:macos-{ver}")
 
     for compiler in ("gcc", "clang"):
         if not shutil.which(compiler):
@@ -1562,8 +1676,14 @@ def image_group():
 
 
 @image_group.command("build")
-@click.option("--os", "os_name", required=True, help="Base OS name, e.g. 'Ubuntu' or 'Fedora'")
-@click.option("--os-version", required=True, help="OS version tag, e.g. '26.04'")
+@click.option("--os", "os_name", default=None,
+              type=click.Choice(["Linux", "Windows", "MacOS"], case_sensitive=False),
+              help="OS family (defaults to Linux when --distro is set)")
+@click.option("--os-version", default=None, help="OS version (Windows/MacOS only)")
+@click.option("--distro", default=None, help="Linux distribution name (e.g. 'Ubuntu')")
+@click.option("--distro-version", default=None, help="Distribution version (e.g. '24.04')")
+@click.option("--flavor", default=None, help="Distribution flavor (e.g. 'Kubuntu')")
+@click.option("--flavor-version", default=None, help="Flavor version; defaults to --distro-version")
 @click.option("--compiler", default=None, help="Compiler name (required for --toolchain=host)")
 @click.option("--compiler-version", default=None, help="Compiler version (required for --toolchain=host)")
 @click.option("--omnetpp-version", default=None,
@@ -1571,9 +1691,11 @@ def image_group():
 @click.option("--toolchain", type=click.Choice(["host", "nix"]), required=True,
               help="Whether the compiler comes from the OS package manager (host) or opp_env/Nix")
 @click.option("--push", is_flag=True, help="Push the built image to the configured registry")
-def image_build(os_name, os_version, compiler, compiler_version, omnetpp_version, toolchain, push):
-    """Build one opp-ci-runner image for a (toolchain, os, compiler, omnetpp) combination."""
+def image_build(os_name, os_version, distro, distro_version, flavor, flavor_version,
+                compiler, compiler_version, omnetpp_version, toolchain, push):
+    """Build one opp-ci-runner image for a (toolchain, platform, compiler, omnetpp) combination."""
     from opp_ci.executor import build_runner_image
+    from opp_ci import platforms
 
     if toolchain == "host":
         if not compiler or not compiler_version:
@@ -1581,15 +1703,36 @@ def image_build(os_name, os_version, compiler, compiler_version, omnetpp_version
         if not omnetpp_version:
             raise click.ClickException("--omnetpp-version is required when --toolchain=host")
 
-    os_slug = f"{os_name.lower()}-{os_version}"
+    try:
+        resolved_os, resolved_distro, resolved_flavor = platforms.resolve_platform(
+            os=os_name, distro=distro, flavor=flavor,
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    os_name = platforms._os_canonical(resolved_os) if resolved_os else None
+    distro = resolved_distro
+    flavor = resolved_flavor
+
+    slug = platforms.platform_slug(
+        os=os_name, os_version=os_version,
+        distro=distro, distro_version=distro_version,
+        flavor=flavor, flavor_version=flavor_version,
+    )
+    if not slug or "-" not in slug:
+        raise click.ClickException(
+            "Need a fully-specified platform: pass --distro NAME --distro-version VER, "
+            "or --flavor NAME --flavor-version VER, or --os Windows/MacOS --os-version VER."
+        )
     if toolchain == "nix":
-        tag = f"opp-ci-runner:nix-{os_slug}"
+        tag = f"opp-ci-runner:nix-{slug}"
     else:
-        tag = f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}-omnetpp-{omnetpp_version}"
+        tag = f"opp-ci-runner:host-{slug}-{compiler.lower()}-{compiler_version}-omnetpp-{omnetpp_version}"
 
     try:
         build_runner_image(
             tag, toolchain, os_name, os_version, compiler, compiler_version,
+            distro=distro, distro_version=distro_version,
+            flavor=flavor, flavor_version=flavor_version,
             omnetpp_version=omnetpp_version, push=push,
         )
     except RuntimeError as e:
@@ -1625,8 +1768,14 @@ def image_build_matrix(ctx, matrix_name, push):
                 continue
             deps = job.get("resolved_deps") or {}
             omnetpp_version = deps.get("omnetpp") if isinstance(deps, dict) else None
-            key = (job.get("toolchain") or "none", job.get("os"), job.get("os_version"),
-                   job.get("compiler"), job.get("compiler_version"), omnetpp_version)
+            key = (
+                job.get("toolchain") or "none",
+                job.get("os"), job.get("os_version"),
+                job.get("distro"), job.get("distro_version"),
+                job.get("flavor"), job.get("flavor_version"),
+                job.get("compiler"), job.get("compiler_version"),
+                omnetpp_version,
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -1636,9 +1785,13 @@ def image_build_matrix(ctx, matrix_name, push):
                 image_build,
                 os_name=key[1],
                 os_version=key[2],
-                compiler=key[3],
-                compiler_version=key[4],
-                omnetpp_version=key[5],
+                distro=key[3],
+                distro_version=key[4],
+                flavor=key[5],
+                flavor_version=key[6],
+                compiler=key[7],
+                compiler_version=key[8],
+                omnetpp_version=key[9],
                 toolchain=toolchain_arg,
                 push=push,
             )

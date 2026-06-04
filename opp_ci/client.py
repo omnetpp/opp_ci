@@ -34,29 +34,25 @@ class OppCiClient:
         self._session.headers["Authorization"] = f"Bearer {token}"
 
     def submit_run(self, project, test, mode=None, git_ref=None,
-                   os=None, os_version=None, arch=None,
+                   os=None, os_version=None,
+                   distro=None, distro_version=None,
+                   flavor=None, flavor_version=None,
+                   arch=None,
                    compiler=None, compiler_version=None,
                    isolation=None, toolchain=None, force=False):
         """Submit a single test run. Returns {"id": ..., "status": "queued"}."""
         payload = {"project": project, "test": test}
-        if mode:
-            payload["mode"] = mode
-        if git_ref:
-            payload["git_ref"] = git_ref
-        if os:
-            payload["os"] = os
-        if os_version:
-            payload["os_version"] = os_version
-        if arch:
-            payload["arch"] = arch
-        if compiler:
-            payload["compiler"] = compiler
-        if compiler_version:
-            payload["compiler_version"] = compiler_version
-        if isolation:
-            payload["isolation"] = isolation
-        if toolchain:
-            payload["toolchain"] = toolchain
+        for key, value in (
+            ("mode", mode), ("git_ref", git_ref),
+            ("os", os), ("os_version", os_version),
+            ("distro", distro), ("distro_version", distro_version),
+            ("flavor", flavor), ("flavor_version", flavor_version),
+            ("arch", arch),
+            ("compiler", compiler), ("compiler_version", compiler_version),
+            ("isolation", isolation), ("toolchain", toolchain),
+        ):
+            if value:
+                payload[key] = value
         if force:
             payload["force"] = True
         return self._post("/runs", payload)
@@ -69,15 +65,16 @@ class OppCiClient:
         """Get full details of a run including results."""
         return self._get(f"/runs/{run_id}")
 
-    def list_runs(self, project=None, test=None, status=None, limit=50):
+    def list_runs(self, project=None, test=None, status=None,
+                  os=None, distro=None, flavor=None, limit=50):
         """List test runs with optional filters."""
         params = {"limit": limit}
-        if project:
-            params["project"] = project
-        if test:
-            params["test"] = test
-        if status:
-            params["status"] = status
+        for key, value in (
+            ("project", project), ("test", test), ("status", status),
+            ("os", os), ("distro", distro), ("flavor", flavor),
+        ):
+            if value:
+                params[key] = value
         return self._get("/runs", params=params)
 
     def list_workers(self):

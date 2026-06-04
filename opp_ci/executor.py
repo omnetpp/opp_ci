@@ -66,15 +66,19 @@ def run_external(args, *, label, timeout=None, env=None, cwd=None):
 
 
 def find_existing_run(session, *, project, test, version=None, mode=None, git_ref=None,
-                      os=None, os_version=None, arch=None,
+                      os=None, os_version=None,
+                      distro=None, distro_version=None,
+                      flavor=None, flavor_version=None,
+                      arch=None,
                       compiler=None, compiler_version=None,
                       isolation=None, toolchain=None):
     """Return an existing TestRun with matching params and terminal status, or None.
 
     Matches on the full (project, version, test, mode, git_ref, os,
-    os_version, arch, compiler, compiler_version, isolation, toolchain) tuple.
-    Two runs with different arch, isolation, or toolchain are considered
-    different runs even if every other field matches — they test different
+    os_version, distro, distro_version, flavor, flavor_version, arch,
+    compiler, compiler_version, isolation, toolchain) tuple. Two runs
+    with different arch, isolation, or toolchain are considered different
+    runs even if every other field matches — they test different
     execution paths.
 
     Only runs that have completed (PASS, FAIL, or ERROR) are considered —
@@ -90,6 +94,10 @@ def find_existing_run(session, *, project, test, version=None, mode=None, git_re
             TestRun.git_ref == git_ref,
             TestRun.os == os,
             TestRun.os_version == os_version,
+            TestRun.distro == distro,
+            TestRun.distro_version == distro_version,
+            TestRun.flavor == flavor,
+            TestRun.flavor_version == flavor_version,
             TestRun.arch == arch,
             TestRun.compiler == compiler,
             TestRun.compiler_version == compiler_version,
@@ -421,22 +429,36 @@ def _create_git_worktree(project_dir, git_ref):
 
 
 def _podman_image_tag(toolchain, os_name, os_version, compiler, compiler_version,
+                      *, distro=None, distro_version=None,
+                      flavor=None, flavor_version=None,
                       omnetpp_version=None):
     """Compute the runner image tag for a given combination.
 
     Naming convention:
-      toolchain=nix:  opp-ci-runner:nix-<os>-<osver>
-      toolchain=none: opp-ci-runner:host-<os>-<osver>-<compiler>-<compver>-omnetpp-<ompver>
+      toolchain=nix:  opp-ci-runner:nix-<platform-slug>
+      toolchain=none: opp-ci-runner:host-<platform-slug>-<compiler>-<compver>-omnetpp-<ompver>
+
+    ``<platform-slug>`` is the most-specific named level — ``kubuntu-24.04``,
+    ``ubuntu-24.04``, ``windows-11``, ``macos-15`` — built by
+    [`platforms.platform_slug()`](platforms.py).
 
     The host-toolchain image has a specific OMNeT++ version baked in (built
     via opp_env install --nixless-workspace at image-build time), so a
     different omnetpp version means a different image.
     """
-    if not os_name or not os_version:
-        raise ValueError("isolation=podman requires both 'os' and 'os_version' to be set on the run")
-    os_slug = f"{os_name.lower()}-{os_version}"
+    from opp_ci import platforms
+    slug = platforms.platform_slug(
+        os=os_name, os_version=os_version,
+        distro=distro, distro_version=distro_version,
+        flavor=flavor, flavor_version=flavor_version,
+    )
+    if not slug or "-" not in slug:
+        raise ValueError(
+            "isolation=podman requires a fully-specified platform "
+            "(os+os_version, or distro+distro_version, or flavor+version)"
+        )
     if toolchain == "nix":
-        return f"opp-ci-runner:nix-{os_slug}"
+        return f"opp-ci-runner:nix-{slug}"
     if not compiler or not compiler_version:
         raise ValueError(
             "isolation=podman with toolchain=none requires both 'compiler' and 'compiler_version'"
@@ -446,7 +468,7 @@ def _podman_image_tag(toolchain, os_name, os_version, compiler, compiler_version
             "isolation=podman with toolchain=none requires an omnetpp version "
             "(set resolved_deps['omnetpp'] on the run, or pick one in the New Run form)"
         )
-    return f"opp-ci-runner:host-{os_slug}-{compiler.lower()}-{compiler_version}-omnetpp-{omnetpp_version}"
+    return f"opp-ci-runner:host-{slug}-{compiler.lower()}-{compiler_version}-omnetpp-{omnetpp_version}"
 
 
 def _resolve_remote_head(url, ref="HEAD"):
@@ -472,6 +494,8 @@ _OPP_ENV_REPO = "https://github.com/omnetpp/opp_env.git"
 
 
 def render_containerfile(toolchain, os_name, os_version, compiler, compiler_version,
+                         *, distro=None, distro_version=None,
+                         flavor=None, flavor_version=None,
                          omnetpp_version=None):
     """Render the Containerfile (and, for host toolchain, the entrypoint script)
     for one runner-image combination.
@@ -502,12 +526,19 @@ def render_containerfile(toolchain, os_name, os_version, compiler, compiler_vers
 
     template_name = "host" if toolchain == "none" else toolchain
 
+    # Containerfile templates pick package-manager rules off the *distro*
+    # (Ubuntu/Fedora/...). Flavors share their parent distro's package
+    # base, so we resolve down to the distro for the template context.
+    # For Windows/MacOS the runners stay native, never podman.
+    base_name = (distro or os_name or "").lower()
+    base_version = distro_version or os_version
+
     podman_dir = importlib.resources.files("opp_ci").joinpath("podman")
     jenv = Environment(loader=FileSystemLoader(str(podman_dir)),
                        keep_trailing_newline=True)
     ctx = {
-        "os": os_name.lower(),
-        "os_version": os_version,
+        "os": base_name,
+        "os_version": base_version,
         "compiler": compiler.lower() if compiler else None,
         "compiler_version": compiler_version,
     }
@@ -548,7 +579,9 @@ def _image_exists_locally(tag):
 
 
 def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version,
-                       *, omnetpp_version=None, push=False):
+                       *, distro=None, distro_version=None,
+                       flavor=None, flavor_version=None,
+                       omnetpp_version=None, push=False):
     """Build (and optionally push) one opp-ci-runner image.
 
     For host toolchain, *omnetpp_version* is required — the Containerfile uses
@@ -558,6 +591,8 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
     """
     files = render_containerfile(
         toolchain, os_name, os_version, compiler, compiler_version,
+        distro=distro, distro_version=distro_version,
+        flavor=flavor, flavor_version=flavor_version,
         omnetpp_version=omnetpp_version,
     )
     with tempfile.TemporaryDirectory() as tmp:
@@ -578,7 +613,9 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
 
 
 def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version,
-                         *, omnetpp_version=None):
+                         *, distro=None, distro_version=None,
+                         flavor=None, flavor_version=None,
+                         omnetpp_version=None):
     """Invoke 'podman build' for the image so podman's layer cache picks up
     any changes — new pinned SHAs from an upstream push, edits to the
     Containerfile template, a different compiler package, a different OMNeT++
@@ -591,6 +628,8 @@ def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler
     _logger.info("Ensuring image %s is up to date", tag)
     build_runner_image(
         tag, toolchain, os_name, os_version, compiler, compiler_version,
+        distro=distro, distro_version=distro_version,
+        flavor=flavor, flavor_version=flavor_version,
         omnetpp_version=omnetpp_version,
     )
 
@@ -617,6 +656,10 @@ def _run_test_in_podman(project, test, *, toolchain="none", **kwargs):
     mode = kwargs.get("mode")
     os_name = kwargs.get("os")
     os_version = kwargs.get("os_version")
+    distro = kwargs.get("distro")
+    distro_version = kwargs.get("distro_version")
+    flavor = kwargs.get("flavor")
+    flavor_version = kwargs.get("flavor_version")
     compiler = kwargs.get("compiler")
     compiler_version = kwargs.get("compiler_version")
     resolved_deps = kwargs.get("resolved_deps") or {}
@@ -624,10 +667,14 @@ def _run_test_in_podman(project, test, *, toolchain="none", **kwargs):
 
     image = _podman_image_tag(
         toolchain, os_name, os_version, compiler, compiler_version,
+        distro=distro, distro_version=distro_version,
+        flavor=flavor, flavor_version=flavor_version,
         omnetpp_version=omnetpp_version,
     )
     _ensure_runner_image(
         image, toolchain, os_name, os_version, compiler, compiler_version,
+        distro=distro, distro_version=distro_version,
+        flavor=flavor, flavor_version=flavor_version,
         omnetpp_version=omnetpp_version,
     )
 
