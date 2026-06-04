@@ -24,7 +24,7 @@ value (typically `None` or a hard-coded default).
 
 ```json
 {
-  "test_types": ["smoke", "fingerprint"],
+  "tests": ["smoke", "fingerprint"],
   "modes": ["release", "debug"],
   "versions": ["inet-4.5", "inet-4.4"],
   "refs": ["master", "topic/my-feature"],
@@ -151,17 +151,17 @@ toolchains, the ref is fed straight to git.
 
 ---
 
-## Axis: test types
+## Axis: test
 
 | Aspect | Value |
 |---|---|
-| JSON key | `test_types` |
+| JSON key | `tests` |
 | CLI flag | `--tests` (required) |
 | Default | `["smoke"]` if the JSON key is absent |
 | Cross-product | yes |
 
-What kind of test each job runs. Recorded on the `TestRun` as
-`test_type`; the executor uses it to pick the opp_repl entry point via
+What test each job runs. Recorded on the `TestRun` as
+`test`; the executor uses it to pick the opp_repl entry point via
 [COMMAND_MAP](../opp_ci/executor.py).
 
 | Value | What it runs | opp_repl entry point |
@@ -204,8 +204,8 @@ Build mode for the C++ compilation. Typical values are `release` and
 value is passed through to opp_repl's `build_mode` argument and is
 recorded on the `TestRun` as `mode`.
 
-Build mode is orthogonal to [Test type](#axis-test-types). For
-example, `test_types: ["fingerprint"], modes: ["release", "debug"]`
+Build mode is orthogonal to [Test](#axis-test). For
+example, `tests: ["fingerprint"], modes: ["release", "debug"]`
 produces two fingerprint runs — one against a release build, one
 against a debug build — and is the standard way to catch
 mode-dependent regressions.
@@ -488,7 +488,7 @@ Version's stored map (or to live resolution via
 Listed in [concepts.md](concepts.md#test-matrix-concepts) as a
 standard axis, but currently treated as a passthrough — the scheduler
 does not cross-product it. INET-style feature flags are exercised via
-the `feature` [test type](#axis-test-types) instead, which opp_repl
+the `feature` [test](#axis-test) instead, which opp_repl
 expands internally. Reserved for future per-feature matrix
 control.
 
@@ -520,7 +520,7 @@ mental model:
 ```
 jobs = |versions|
      × |refs|              (or len(ref_range))
-     × |test_types|
+     × |tests|
      × |modes|
      × |os|     (× |os_version|     in structured style)
      × |compiler| (× |compiler_version| in structured style)
@@ -530,7 +530,7 @@ jobs = |versions|
 ```
 
 It is easy to get this very large by accident. Defining
-`versions: 4`, `refs: 10` (via `ref_range`), `test_types: 3`,
+`versions: 4`, `refs: 10` (via `ref_range`), `tests: 3`,
 `modes: 2`, `os: 2`, `compiler: 2`, `isolation: 2`, `toolchain: 2`
 produces 3 840 jobs from a config that *looks* small. Cross-products
 are pure multiplication — there is no implicit filter to discard
@@ -563,7 +563,7 @@ axis and the special `name=v1,v2;name=v1` syntax for `--deps`.
 | `--project-versions` | `versions` | Defaults to `[<project>]`. |
 | `--refs` | `refs` | Mutually exclusive with `--ref-range`. |
 | `--ref-range` | `ref_range` | `base..head`; resolved at expansion. |
-| `--tests` | `test_types` | Required. |
+| `--tests` | `tests` | Required. |
 | `--builds` | `modes` | |
 | `--os` | `os` | Combined style if `--os-version` is absent. |
 | `--os-version` | `os_version` | Triggers structured cross-product. |

@@ -2,7 +2,7 @@
 
 `opp_ci` is the orchestration layer of a three-tool stack that tests
 OMNeT++ simulation projects across version, dependency, platform, and
-test-type matrices.
+test matrices.
 
 This document is both the conceptual overview and the vocabulary
 reference: it explains what each concept *is*, what role it plays, and
@@ -108,7 +108,7 @@ opp_env understands.
 
 A named JSON configuration describing the cross-product to test.
 Attached to a [Project](#project). Defines which [axes](#axis) to vary
-(`test_types`, `modes`, `versions`, `refs`, `deps`, `os`, `compiler`,
+(`tests`, `modes`, `versions`, `refs`, `deps`, `os`, `compiler`,
 `isolation`, `toolchain`, `features`). Expanded by the
 [scheduler](#scheduler) into [jobs](#job).
 
@@ -119,7 +119,7 @@ defaults, validation, and lifecycle), see
 [single_test_parameters.md](single_test_parameters.md).
 
 One row per queued/in-flight/finished job — the unit of work. Records
-the full coordinate (project, version, test_type, mode, os, compiler,
+the full coordinate (project, version, test, mode, os, compiler,
 isolation, toolchain, git_ref, commit_sha, resolved_deps), the
 [TestRunStatus](#testrunstatus), the [Worker](#worker-model) that ran
 it, the [Trigger](#trigger) source, and any GitHub linkage fields
@@ -210,7 +210,7 @@ axes:
 | Isolation | none, podman |
 | Toolchain | none, nix |
 | Features | INET feature flags — *reserved; not yet implemented by `expand_matrix()`* |
-| Tests | the [test types](#test-type) defined in `COMMAND_MAP` — see [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test-types) for the canonical list |
+| Tests | the [tests](#test) defined in `COMMAND_MAP` — see [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test) for the canonical list |
 
 Not every combination is tested — the matrix config defines which axes
 to cross. Matrix expansion happens in
@@ -243,12 +243,12 @@ whether the varying dimensions form a complete cross-product. The
 indicator (`●`/`○`) tells the reader at a glance whether the merged
 group is dense or sparse.
 
-### Test type
+### Test
 
-The kind of test the job runs — the canonical list is in
-[test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test-types) and
+The test the job runs — the canonical list is in
+[test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test) and
 mirrors `executor.COMMAND_MAP`. Determines what opp_repl is told to do.
-Each test type can produce one or many [TestResult](#testresult) rows.
+Each test can produce one or many [TestResult](#testresult) rows.
 
 ### Mode
 
@@ -485,7 +485,7 @@ a full cross-product (see
 
 ### Primary / extra dimensions
 
-A rollup distinction: **primary dimensions** (project, test_type, mode,
+A rollup distinction: **primary dimensions** (project, test, mode,
 os, os_version, compiler, compiler_version, git_ref) are always
 considered; **extra dimensions** (isolation, toolchain, commit_sha,
 version) participate in classification but only show as columns when

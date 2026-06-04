@@ -79,8 +79,8 @@ page in the coordinator's web UI.
 
 ```
 <summary>
-  <icon> <test_type>[/<mode>]  <STATUS>  <duration>  #<run_id>
-  <icon> <test_type>[/<mode>]  <STATUS>  <duration>  #<run_id>
+  <icon> <test>[/<mode>]  <STATUS>  <duration>  #<run_id>
+  <icon> <test>[/<mode>]  <STATUS>  <duration>  #<run_id>
   ...
 
 <url>

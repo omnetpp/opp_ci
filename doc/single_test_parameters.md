@@ -20,7 +20,7 @@ and [architecture.md](architecture.md#database-schema).
 | Parameter | CLI flag | TestRun column | Default | Group |
 |---|---|---|---|---|
 | [`project`](#project) | `--project` *(required)* | `project` | — | Required |
-| [`test_type`](#test_type) | `--test` *(required)* | `test_type` | — | Required |
+| [`test`](#test) | `--test` *(required)* | `test` | — | Required |
 | [`mode`](#mode) | `--mode` | `mode` | `None` | Identity |
 | [`git_ref`](#git_ref) | `--ref` | `git_ref` | `None` | Identity |
 | [`version`](#version) | *(matrix-only)* | `version` | `None` | Identity |
@@ -82,21 +82,21 @@ The project must exist in the database. For projects not in the
 opp_env catalog, register one with `opp_ci add-project` (see
 [cli_reference.md](cli_reference.md#projects-and-versions)).
 
-### `test_type`
+### `test`
 
-What kind of test to run. The executor uses this to dispatch into
+What test to run. The executor uses this to dispatch into
 opp_repl via [COMMAND_MAP](../opp_ci/executor.py).
 
 | Aspect | Value |
 |---|---|
 | CLI flag | `--test` (required, comma-separated for multiple) |
-| REST field | `test_type` (required) |
-| TestRun column | `test_type` |
+| REST field | `test` (required) |
+| TestRun column | `test` |
 | Default | none |
 
 Recognized values: `smoke`, `build`, `fingerprint`, `statistical`,
 `feature`, `chart`, `speed`, `sanitizer`, `release`, `opp`, `all`.
-See [Axis: test types](test_matrix_dimensions.md#axis-test-types) for
+See [Axis: test](test_matrix_dimensions.md#axis-test) for
 what each entry point does.
 
 Note: the CLI accepts a comma-separated list (`--test smoke,fingerprint`)
@@ -111,7 +111,7 @@ These together determine whether the run is considered a duplicate of
 an earlier one — `find_existing_run()` in
 [executor.py](../opp_ci/executor.py) keys on the full tuple.
 Use `--force` to bypass the duplicate check. The full tuple is
-`(project, version, test_type, mode, git_ref, os, os_version, arch,
+`(project, version, test, mode, git_ref, os, os_version, arch,
 compiler, compiler_version, isolation, toolchain)`.
 
 ### `mode`
@@ -372,7 +372,7 @@ Bypass the duplicate-run check.
 
 Without `--force`, the submitter asks
 [find_existing_run()](../opp_ci/executor.py) whether a run with
-the same `(project, version, test_type, mode, git_ref, os, os_version,
+the same `(project, version, test, mode, git_ref, os, os_version,
 arch, compiler, compiler_version, isolation, toolchain)` already
 exists. If it does, the new submission is skipped (CLI prints a
 message; REST returns `{"skipped": true}` with the existing run's
@@ -468,7 +468,7 @@ single-test row knows it came from a GitHub event.
 | Field | Required for `opp_ci run` | Required for `POST /api/runs` | Required under `isolation=podman` |
 |---|---|---|---|
 | `project` | yes | yes | yes |
-| `test_type` | yes | yes | yes |
+| `test` | yes | yes | yes |
 | `mode` | no | no | no |
 | `git_ref` | no | no | no |
 | `os` | no | no | **yes** |
@@ -506,7 +506,7 @@ Produces one TestRun row with:
 
 ```
 project          inet-4.5
-test_type        fingerprint
+test             fingerprint
 mode             release
 git_ref          topic/my-feature
 os               Ubuntu
@@ -532,7 +532,7 @@ from opp_ci.client import OppCiClient
 ci = OppCiClient(url="https://ci.omnetpp.org/api", token="…")
 ci.submit_run(
     project="inet-4.5",
-    test_type="fingerprint",
+    test="fingerprint",
     mode="release",
     git_ref="topic/my-feature",
     os="Ubuntu", os_version="26.04", arch="amd64",

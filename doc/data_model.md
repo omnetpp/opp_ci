@@ -201,7 +201,7 @@ below is the *DBA's* view.
 |---|---|---|
 | `id` | int PK | |
 | `project` | string, not null | Project name (denormalised, see below) |
-| `test_type` | string, not null | Entry in `executor.COMMAND_MAP` (`smoke`, `fingerprint`, …) |
+| `test` | string, not null | Entry in `executor.COMMAND_MAP` (`smoke`, `fingerprint`, …) |
 | `mode` | string, nullable | Build mode (`release`, `debug`) |
 | `os` | string, nullable | OS name |
 | `os_version` | string, nullable | OS version |

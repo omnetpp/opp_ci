@@ -28,7 +28,7 @@ For full per-command flags, run `opp_ci <command> --help`.
 | `opp_ci run-matrix --matrix NAME` | Expand a named matrix and run all jobs. Options: `--force`, `--skip-install`. |
 
 Supported tests (comma-separated for `--test`) — see the canonical list
-in [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test-types):
+in [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test):
 `smoke`, `fingerprint`, `statistical`, `feature`, `speed`, `sanitizer`,
 `chart`, `release`, `build`, `opp`, `all`.
 

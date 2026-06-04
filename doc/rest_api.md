@@ -30,7 +30,7 @@ Implementation: `opp_ci/auth.py`.
 |---|---|---|---|
 | `/api/runs` | POST | submitter | Submit a single test run to the queue |
 | `/api/runs/matrix` | POST | submitter | Expand a named matrix and queue all jobs |
-| `/api/runs` | GET | readonly | List runs (filterable by project, test_type, status) |
+| `/api/runs` | GET | readonly | List runs (filterable by project, test, status) |
 | `/api/runs/{id}` | GET | readonly | Run detail including results |
 
 ### Workers
@@ -73,7 +73,7 @@ Implementation: `opp_ci/auth.py`.
 curl -X POST https://ci.omnetpp.org/api/runs \
   -H "Authorization: Bearer $OPP_CI_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"project": "inet", "test_type": "smoke", "git_ref": "master"}'
+  -d '{"project": "inet", "test": "smoke", "git_ref": "master"}'
 ```
 
 Or via the CLI in remote mode:

@@ -55,10 +55,10 @@ This will:
 3. Read structured per-test details from the returned result's `to_dict()`
 4. Store the result (pass/fail, stdout, stderr, per-test details) in the database
 
-The full list of test types (`smoke`, `fingerprint`, `statistical`, `feature`,
+The full list of tests (`smoke`, `fingerprint`, `statistical`, `feature`,
 `speed`, `sanitizer`, `chart`, `release`, `build`, `opp`, `all`) and what each
 one does is in
-[test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test-types).
+[test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test).
 
 ### Pointing opp_ci at a real project
 
@@ -108,7 +108,7 @@ The web UI shows:
 ### Direct DB inspection
 
 ```bash
-sqlite3 opp_ci.db "SELECT id, project, test_type, status FROM test_runs;"
+sqlite3 opp_ci.db "SELECT id, project, test, status FROM test_runs;"
 ```
 
 ## Test Matrices

@@ -24,12 +24,12 @@ read-only scripts.
 
 ```python
 # Single run
-run = ci.submit_run(project="inet", test_type="smoke", git_ref="topic/my-feature")
+run = ci.submit_run(project="inet", test="smoke", git_ref="topic/my-feature")
 print(run)  # {"id": 42, "status": "queued"}
 
 # Fully-specified run on a podman/host-toolchain worker
 ci.submit_run(
-    project="inet-4.5", test_type="fingerprint",
+    project="inet-4.5", test="fingerprint",
     mode="release", git_ref="master",
     os="Ubuntu", os_version="26.04", arch="amd64",
     compiler="clang", compiler_version="22",
