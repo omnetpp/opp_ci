@@ -203,8 +203,12 @@ below is the *DBA's* view.
 | `project` | string, not null | Project name (denormalised, see below) |
 | `test` | string, not null | Entry in `executor.COMMAND_MAP` (`smoke`, `fingerprint`, …) |
 | `mode` | string, nullable | Build mode (`release`, `debug`) |
-| `os` | string, nullable | OS name |
-| `os_version` | string, nullable | OS version |
+| `os` | string, nullable | OS family — `Linux`, `Windows`, `MacOS` |
+| `os_version` | string, nullable | OS version (Windows/MacOS only; NULL for Linux) |
+| `distro` | string, nullable | Linux distribution (`ubuntu`, `fedora`, ...). NULL for non-Linux. |
+| `distro_version` | string, nullable | Distribution version. NULL when no distro. |
+| `flavor` | string, nullable | Distribution variant (`kubuntu`, ...). NULL when not a flavor. |
+| `flavor_version` | string, nullable | Flavor version. Falls back to `distro_version` when NULL. |
 | `arch` | string, nullable | CPU architecture (`amd64`, `aarch64`) |
 | `compiler` | string, nullable | Compiler name |
 | `compiler_version` | string, nullable | Compiler version |

@@ -24,8 +24,12 @@ and [architecture.md](architecture.md#database-schema).
 | [`mode`](#mode) | `--mode` | `mode` | `None` | Identity |
 | [`git_ref`](#git_ref) | `--ref` | `git_ref` | `None` | Identity |
 | [`version`](#version) | *(matrix-only)* | `version` | `None` | Identity |
-| [`os`](#os-and-os_version) | `--os` | `os` | `None` | Platform |
-| [`os_version`](#os-and-os_version) | `--os-version` | `os_version` | `None` | Platform |
+| [`os`](#os-distro-and-flavor) | `--os` | `os` | `None` | Platform |
+| [`os_version`](#os-distro-and-flavor) | `--os-version` | `os_version` | `None` | Platform |
+| [`distro`](#os-distro-and-flavor) | `--distro` | `distro` | `None` | Platform |
+| [`distro_version`](#os-distro-and-flavor) | `--distro-version` | `distro_version` | `None` | Platform |
+| [`flavor`](#os-distro-and-flavor) | `--flavor` | `flavor` | `None` | Platform |
+| [`flavor_version`](#os-distro-and-flavor) | `--flavor-version` | `flavor_version` | `None` | Platform |
 | [`arch`](#arch) | `--arch` | `arch` | `None` | Platform |
 | [`compiler`](#compiler-and-compiler_version) | `--compiler` | `compiler` | `None` | Platform |
 | [`compiler_version`](#compiler-and-compiler_version) | `--compiler-version` | `compiler_version` | `None` | Platform |
@@ -111,7 +115,8 @@ These together determine whether the run is considered a duplicate of
 an earlier one — `find_existing_run()` in
 [executor.py](../opp_ci/executor.py) keys on the full tuple.
 Use `--force` to bypass the duplicate check. The full tuple is
-`(project, version, test, mode, git_ref, os, os_version, arch,
+`(project, version, test, mode, git_ref, os, os_version, distro,
+distro_version, flavor, flavor_version, arch,
 compiler, compiler_version, isolation, toolchain)`.
 
 ### `mode`
@@ -181,22 +186,52 @@ identifier).
 The platform parameters determine where the run executes and which
 toolchain produces the binary.
 
-### `os` and `os_version`
+### `os`, `distro`, and `flavor`
 
-The target operating system, recorded as two columns.
+The target platform forms a three-level hierarchy:
+
+* **`os`** — one of `Linux`, `Windows`, `MacOS`. The kernel family.
+* **`distro`** — Linux distribution (`ubuntu`, `fedora`, ...). Only
+  meaningful when `os == "Linux"`.
+* **`flavor`** — distribution variant (`kubuntu`, `xubuntu`, ...).
+  Carries the same package base as its parent distro.
+
+Each level has an optional `<level>_version` partner. The version
+always attaches to the *most specific* named level:
+
+| `os` | `os_version` | `distro` | `distro_version` | `flavor` | `flavor_version` |
+|---|---|---|---|---|---|
+| `Linux` | **NULL** | `ubuntu` | `24.04` | — | — |
+| `Linux` | **NULL** | `ubuntu` | `24.04` | `kubuntu` | inherits from distro |
+| `Windows` | `11` | — | — | — | — |
+| `MacOS` | `15.1` | — | — | — | — |
+
+CLI:
 
 | Aspect | Value |
 |---|---|
-| CLI flags | `--os`, `--os-version` |
-| REST fields | `os`, `os_version` |
-| TestRun columns | `os`, `os_version` |
-| Default | `None` (let the worker decide) |
+| CLI flags | `--os`, `--os-version`, `--distro`, `--distro-version`, `--flavor`, `--flavor-version` |
+| REST fields | `os`, `os_version`, `distro`, `distro_version`, `flavor`, `flavor_version` |
+| TestRun columns | (same names) |
+| Default | `None` at every level |
 
-Under `isolation=podman`, both fields are required — the executor
-picks the runner image by exact match on
-`(os, os_version, compiler, compiler_version)`. Under
-`isolation=none`, they constrain dispatch to workers tagged
-`os:<name>-<version>`.
+Combined shorthand on `--distro` / `--flavor` works:
+`--distro 'Ubuntu 24.04'` is parsed as `--distro Ubuntu
+--distro-version 24.04`. `--os` is restricted to the three OS family
+names; passing a distro name there is a hard error.
+
+Implied parents fill in automatically — `--flavor Kubuntu` resolves
+`distro=ubuntu, os=Linux` via the [registry](../opp_ci/platforms.py).
+Explicit contradictions (e.g. `--os Windows --distro Ubuntu`) raise an
+error at submit time.
+
+Under `isolation=podman`, the executor picks the runner image by
+exact match on `(<platform-slug>, compiler, compiler_version)` —
+where `platform-slug` is the most-specific named level
+(`kubuntu-24.04`, `ubuntu-24.04`, `windows-11`, `macos-15`).
+Under `isolation=none`, the run constrains dispatch to workers
+tagged with the most-specific level: `flavor:<flavor>-<ver>`,
+`distro:<distro>-<ver>`, or `os:<os>[-<ver>]`.
 
 ### `arch`
 

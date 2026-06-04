@@ -29,7 +29,7 @@ value (typically `None` or a hard-coded default).
   "versions": ["inet-4.5", "inet-4.4"],
   "refs": ["master", "topic/my-feature"],
   "deps": {"omnetpp": ["6.1", "6.0"]},
-  "os": ["Ubuntu 24.04", "Fedora 41"],
+  "distro": ["Ubuntu 24.04", "Fedora 41"],
   "compiler": ["gcc-14", "clang-18"],
   "isolation": ["none", "podman"],
   "toolchain": ["none", "nix"]
@@ -41,6 +41,11 @@ lists ([scheduler.py](../opp_ci/scheduler.py)). A 2 × 2 × 2 ×
 2 × 2 × 2 config produces 64 jobs; one axis with 10 values turns that
 into 640. There is no implicit pruning — every combination becomes a
 queued `TestRun`.
+
+The platform dimension is the one exception: `os`, `distro`, and
+`flavor` are a hierarchy, not orthogonal axes. They contribute cells
+*at their level* rather than multiplying together — see
+[Axes: OS, distro, flavor](#axes-os-distro-flavor).
 
 The remainder of this guide describes each axis in turn.
 
@@ -212,57 +217,107 @@ mode-dependent regressions.
 
 ---
 
-## Axis: operating system
+## Axes: OS, distro, flavor
+
+The platform dimension is a three-level hierarchy — ``os`` ⊃ ``distro``
+⊃ ``flavor``. Each level is its own axis. Each axis contributes its own
+cells (the levels do **not** cross-multiply); within an axis, name and
+version cross-product the same way the compiler axis does.
+
+The registry in [`opp_ci/platforms.py`](../opp_ci/platforms.py) maps
+each distro to its OS and each flavor to its parent distro, so a
+matrix that names only the most specific level still picks up the right
+parent values on the resulting `TestRun`.
+
+### Axis: `os`
 
 | Aspect | Value |
 |---|---|
 | JSON keys | `os`, optionally `os_version` |
 | CLI flags | `--os`, optionally `--os-version` |
-| Default | `[None]` — let the worker pick |
-| Cross-product | yes (both styles) |
+| Allowed | `Linux`, `Windows`, `MacOS` |
+| Cross-product within axis | yes |
 
-The OS dimension supports two input styles, detected by whether the
-`os_version` key is present.
+`os_version` is meaningful only for `Windows` / `MacOS`; for `Linux`
+it is always stored as `NULL` (the version attaches to the distro
+instead). Combined-style `"Windows 11"` is parsed into `(name,
+version)`; structured `{"os": ["Windows", "MacOS"], "os_version":
+["11", "15.1"]}` cross-products within the axis.
 
-### Combined style
+### Axis: `distro`
+
+| Aspect | Value |
+|---|---|
+| JSON keys | `distro`, optionally `distro_version` |
+| CLI flags | `--distro`, optionally `--distro-version` |
+| Default | `[None]` |
+| Cross-product within axis | yes |
+
+Linux distribution. Known distros (`ubuntu`, `fedora`, `debian`,
+`arch`, `rhel`) imply `os=Linux`; unknown names are accepted with a
+warning. Combined `"Ubuntu 24.04"` splits on the last space.
+
+### Axis: `flavor`
+
+| Aspect | Value |
+|---|---|
+| JSON keys | `flavor`, optionally `flavor_version` |
+| CLI flags | `--flavor`, optionally `--flavor-version` |
+| Default | `[None]` |
+| Cross-product within axis | yes |
+
+Distribution variant. Known flavors (`kubuntu`, `xubuntu`, `lubuntu`)
+imply their parent distro; an unknown flavor without `--distro` is a
+hard error. `flavor_version` defaults to the parent distro's version
+when omitted.
+
+### Cell union, not cross-product
+
+Each axis contributes cells *at its level* — they don't multiply:
 
 ```json
-{ "os": ["Ubuntu 24.04", "Fedora 41"] }
+{ "os": ["Linux", "Windows"],
+  "os_version": ["11"],
+  "distro": ["Ubuntu 24.04"],
+  "flavor": ["Kubuntu 24.04"] }
 ```
 
-Each string is split on the last space into `(name, version)` by
-[_parse_os()](../opp_ci/scheduler.py). The values are taken as a
-list — no further cross-product. Use this when the OS/version pairs
-you want are known, finite, and irregular.
+produces three cells (after the registry fills in parents):
 
-### Structured (cross-product) style
+| os | os_version | distro | distro_version | flavor | flavor_version |
+|---|---|---|---|---|---|
+| `Linux` | NULL | — | — | — | — |
+| `Windows` | `11` | — | — | — | — |
+| `Linux` | NULL | `ubuntu` | `24.04` | — | — |
+| `Linux` | NULL | `ubuntu` | NULL | `kubuntu` | `24.04` |
 
-```json
-{ "os": ["Ubuntu", "Fedora"], "os_version": ["24.04", "41"] }
-```
-
-The two lists are cross-producted, producing four jobs:
-Ubuntu 24.04, Ubuntu 41, Fedora 24.04, Fedora 41. Use this when every
-version is valid for every name (rare in practice — the combined style
-is usually more honest).
-
-Both styles populate the `os` and `os_version` columns of the
-resulting `TestRun`. Combined with `compiler`, they make up the
-`platform_desc` shown in the UI.
+`platform_desc` is built by [`platforms.build_platform_desc()`
+](../opp_ci/platforms.py); the most-specific name carries the version,
+and flavors get a `(Distro, arch)` parenthetical so an "Ubuntu"
+results-table reader notices the Kubuntu rows aren't plain Ubuntu.
 
 ### Worker dispatch
 
-When [`isolation == "none"`](#axis-isolation), the job is dispatched
-only to workers whose `os:<name>-<version>` capability tag matches —
-e.g. `os:ubuntu-24.04`. Workers can register either by hand
-(`--tags os:ubuntu-24.04`) or via `--auto-tags`, which detects the
-host OS automatically.
+Under [`isolation == "none"`](#axis-isolation), the dispatcher requires
+the most-specific level's capability tag:
 
-Under `isolation == "podman"`, the OS instead selects the container
-image: `opp_ci image build` produces images tagged
-`opp-ci-runner:host-ubuntu-24.04-gcc-14` etc., and the executor picks
-the image by exact match on `(os, os_version, compiler,
-compiler_version)`.
+| Run names | Required tag |
+|---|---|
+| flavor | `flavor:<flavor>-<flavor_version-or-distro_version>` |
+| distro (no flavor) | `distro:<distro>-<distro_version>` |
+| OS=Windows/MacOS + version | `os:<os>-<os_version>` |
+| OS only | `os:<os>` |
+
+Workers can register the tags by hand (`--tags
+flavor:kubuntu-24.04,distro:ubuntu-24.04,os:linux`) or via
+`--auto-tags`, which reads `/etc/os-release` (Linux), `platform.mac_ver()`
+(macOS), or `platform.release()` (Windows).
+
+Under `isolation == "podman"`, the platform instead selects the
+container image: `opp_ci image build` produces images tagged
+`opp-ci-runner:host-<platform-slug>-<compiler>-omnetpp-<ver>`, where
+`<platform-slug>` is `kubuntu-24.04` / `ubuntu-24.04` / `windows-11` /
+`macos-15` — the most-specific level.
 
 ---
 
@@ -522,16 +577,20 @@ jobs = |versions|
      × |refs|              (or len(ref_range))
      × |tests|
      × |modes|
-     × |os|     (× |os_version|     in structured style)
+     × |platform_cells|    (union over the os/distro/flavor levels)
      × |compiler| (× |compiler_version| in structured style)
      × |isolation|
      × |toolchain|
      × ∏ |deps[name]|
 ```
 
+`|platform_cells|` is the *sum* of cells from each named level (not the
+product) — `os: [Linux, Windows]` plus `distro: [Ubuntu]` contributes
+3 cells, not 4.
+
 It is easy to get this very large by accident. Defining
 `versions: 4`, `refs: 10` (via `ref_range`), `tests: 3`,
-`modes: 2`, `os: 2`, `compiler: 2`, `isolation: 2`, `toolchain: 2`
+`modes: 2`, `distro: 2`, `compiler: 2`, `isolation: 2`, `toolchain: 2`
 produces 3 840 jobs from a config that *looks* small. Cross-products
 are pure multiplication — there is no implicit filter to discard
 "obviously redundant" combinations.
@@ -565,8 +624,12 @@ axis and the special `name=v1,v2;name=v1` syntax for `--deps`.
 | `--ref-range` | `ref_range` | `base..head`; resolved at expansion. |
 | `--tests` | `tests` | Required. |
 | `--builds` | `modes` | |
-| `--os` | `os` | Combined style if `--os-version` is absent. |
-| `--os-version` | `os_version` | Triggers structured cross-product. |
+| `--os` | `os` | One of `Linux`, `Windows`, `MacOS`. |
+| `--os-version` | `os_version` | Windows/MacOS only. Triggers structured cross-product within the OS axis. |
+| `--distro` | `distro` | Combined style if `--distro-version` is absent. |
+| `--distro-version` | `distro_version` | Triggers structured cross-product within the distro axis. |
+| `--flavor` | `flavor` | Combined style if `--flavor-version` is absent. |
+| `--flavor-version` | `flavor_version` | Triggers structured cross-product within the flavor axis. |
 | `--compiler` | `compiler` | Combined style if `--compiler-version` is absent. |
 | `--compiler-version` | `compiler_version` | Triggers structured cross-product. |
 | `--deps` | `deps` | `name=ver1,ver2;name=ver` syntax. |

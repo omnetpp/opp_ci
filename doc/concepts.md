@@ -119,8 +119,8 @@ defaults, validation, and lifecycle), see
 [single_test_parameters.md](single_test_parameters.md).
 
 One row per queued/in-flight/finished job — the unit of work. Records
-the full coordinate (project, version, test, mode, os, compiler,
-isolation, toolchain, git_ref, commit_sha, resolved_deps), the
+the full coordinate (project, version, test, mode, os, distro, flavor,
+compiler, isolation, toolchain, git_ref, commit_sha, resolved_deps), the
 [TestRunStatus](#testrunstatus), the [Worker](#worker-model) that ran
 it, the [Trigger](#trigger) source, and any GitHub linkage fields
 (`github_owner`, `github_repo`, `github_commit_sha`,
@@ -286,9 +286,10 @@ opp_ci's database and generates default matrices for new entries.
 ### Isolation
 
 How the job's filesystem and OS are isolated from the host. `none` =
-direct subprocess on the worker; `podman` = inside a Podman container image
-chosen from the (os, os_version, compiler) coordinates. Image building
-is driven by `opp_ci image build` / `image build-matrix`.
+direct subprocess on the worker; `podman` = inside a Podman container
+image chosen by the most-specific platform level (`flavor`, else
+`distro`, else `os`) plus the compiler coordinates. Image building is
+driven by `opp_ci image build` / `image build-matrix`.
 
 ### Toolchain
 
@@ -301,8 +302,8 @@ giving a fully reproducible build environment. Orthogonal to
 
 A string on a [Worker](#worker-model) declaring what it can do. The
 dispatcher only honours a specific scheme — `podman`, `nix`,
-`os:<lc>-<ver>`, `compiler:<lc>-<ver>`, `arch:<lc>` — anything else is
-documentation. See
+`os:<lc>[-<ver>]`, `distro:<lc>-<ver>`, `flavor:<lc>-<ver>`,
+`compiler:<lc>-<ver>`, `arch:<lc>` — anything else is documentation. See
 [workers.md](workers.md#capability-tags) for the full table and
 dispatch rules. Set at registration time (`--tags` or `--auto-tags`).
 
@@ -486,10 +487,11 @@ a full cross-product (see
 ### Primary / extra dimensions
 
 A rollup distinction: **primary dimensions** (project, test, mode,
-os, os_version, compiler, compiler_version, git_ref) are always
-considered; **extra dimensions** (isolation, toolchain, commit_sha,
-version) participate in classification but only show as columns when
-they actually vary on the page.
+os, distro, distro_version, flavor, compiler, compiler_version,
+git_ref) are always considered; **extra dimensions** (os_version,
+flavor_version, isolation, toolchain, commit_sha, version)
+participate in classification but only show as columns when they
+actually vary on the page.
 
 ### ANSI-preserving storage
 
