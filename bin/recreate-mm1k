@@ -28,5 +28,5 @@ opp_ci create-matrix --name mm1k-master-ubuntu26.04-clang22-docker \
 
 opp_ci create-matrix --name mm1k-master-to-topic-native  "${COMMON[@]}" --tests build,smoke,opp --ref-range master..topic
 
-opp_ci rule create --project mm1k --type branch --pattern master --matrix mm1k-master --replace
-opp_ci rule create --project mm1k --type branch --pattern topic  --matrix mm1k-master-to-topic --replace
+opp_ci rule create --project mm1k --type branch --pattern master --matrix mm1k-master-native --replace
+opp_ci rule create --project mm1k --type branch --pattern topic  --matrix mm1k-master-to-topic-native --replace
