@@ -23,10 +23,14 @@ def query_opp_env_info(project_version):
         dict with project info including 'required_projects', or None on failure.
     """
     _logger.debug("Querying opp_env info for %s", project_version)
-    result = subprocess.run(
-        ["opp_env", "info", project_version, "--raw"],
-        capture_output=True, text=True
-    )
+    try:
+        result = subprocess.run(
+            ["opp_env", "info", project_version, "--raw"],
+            capture_output=True, text=True
+        )
+    except FileNotFoundError:
+        _logger.warning("opp_env not on PATH — cannot resolve %s", project_version)
+        return None
     if result.returncode != 0:
         _logger.warning("opp_env info %s failed: %s", project_version, result.stderr.strip())
         return None
@@ -54,10 +58,14 @@ def query_opp_env_versions(project_name):
         list of version strings, or empty list on failure.
     """
     _logger.debug("Querying opp_env versions for %s", project_name)
-    result = subprocess.run(
-        ["opp_env", "info", project_name, "--raw"],
-        capture_output=True, text=True
-    )
+    try:
+        result = subprocess.run(
+            ["opp_env", "info", project_name, "--raw"],
+            capture_output=True, text=True
+        )
+    except FileNotFoundError:
+        _logger.warning("opp_env not on PATH — cannot list versions for %s", project_name)
+        return []
     if result.returncode != 0:
         _logger.warning("opp_env info %s failed: %s", project_name, result.stderr.strip())
         return []

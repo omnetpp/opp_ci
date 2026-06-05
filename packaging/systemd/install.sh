@@ -68,9 +68,16 @@ if ! id -u "$OPP_CI_USER" >/dev/null 2>&1; then
     useradd --system \
         --gid "$OPP_CI_GROUP" \
         --home-dir "$STATE_DIR" \
-        --shell /usr/sbin/nologin \
+        --shell /bin/bash \
         --comment "opp_ci CI service" \
         "$OPP_CI_USER"
+else
+    # Upgrade existing nologin shell so `sudo -iu opp_ci` works and
+    # .profile gets sourced. Password remains locked (system account).
+    current_shell="$(getent passwd "$OPP_CI_USER" | cut -d: -f7)"
+    if [[ "$current_shell" != "/bin/bash" ]]; then
+        usermod --shell /bin/bash "$OPP_CI_USER"
+    fi
 fi
 
 echo "==> Creating directories"
@@ -193,6 +200,27 @@ if [[ "$WITH_POSTGRES" -eq 1 ]]; then
     fi
     POSTGRES_SOCKET_URL="postgresql:///${OPP_CI_DB}?host=/var/run/postgresql&port=${PG_PORT}"
     echo "    cluster on port ${PG_PORT}"
+fi
+
+echo "==> Configuring opp_ci user's shell environment"
+# Drop a .profile in /var/lib/opp_ci so any login shell (sudo -iu opp_ci,
+# bash -l, scripts with shebang `#!/bin/bash -l`) sources setenv and gets
+# the venv on PATH. systemd units don't read this — they set PATH via
+# Environment= in the unit. The two paths are intentionally independent.
+PROFILE="$STATE_DIR/.profile"
+if [[ ! -e "$PROFILE" ]]; then
+    cat > "$PROFILE" <<'EOF'
+# Auto-installed by packaging/systemd/install.sh.
+# Activates the opp_ci venv and puts its bin/ on PATH.
+if [ -f /opt/opp_ci/setenv ]; then
+    . /opt/opp_ci/setenv >/dev/null
+fi
+EOF
+    chown "$OPP_CI_USER:$OPP_CI_GROUP" "$PROFILE"
+    chmod 0644 "$PROFILE"
+    echo "    wrote $PROFILE"
+else
+    echo "    keeping existing $PROFILE"
 fi
 
 echo "==> Installing unit files into $SYSTEMD_DIR"

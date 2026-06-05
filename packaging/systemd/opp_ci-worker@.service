@@ -12,6 +12,10 @@ Group=opp_ci
 WorkingDirectory=/var/lib/opp_ci
 EnvironmentFile=/etc/opp_ci/opp_ci.env
 EnvironmentFile=/etc/opp_ci/workers/%i.env
+# Put the venv's bin/ on PATH so opp_env (called from the executor for
+# `opp_env install` / `opp_env run`) resolves without per-call-site path
+# tricks. Mirrors `source /opt/opp_ci/setenv` for an interactive shell.
+Environment="PATH=/opt/opp_ci/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ExecStart=/opt/opp_ci/.venv/bin/opp_ci worker start
 Restart=on-failure
 RestartSec=10s

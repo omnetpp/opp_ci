@@ -7,28 +7,10 @@ dependencies in a normalized format suitable for catalog sync.
 
 import json
 import logging
-import os
 import re
 import subprocess
-import sys
 
 _logger = logging.getLogger(__name__)
-
-
-def _opp_env_cmd():
-    """Resolve the opp_env executable.
-
-    Prefer the one next to the current Python — opp_env is installed
-    into the same venv as opp_ci by packaging/systemd/install.sh, so
-    that's where it lives in production. Falls back to a bare `opp_env`
-    PATH lookup for developer setups where the script is run from
-    outside a venv. This avoids the PATH-stripping footgun under
-    `sudo -u opp_ci`, where /opt/opp_ci/.venv/bin isn't on PATH.
-    """
-    venv_bin = os.path.join(os.path.dirname(sys.executable), "opp_env")
-    if os.path.isfile(venv_bin):
-        return venv_bin
-    return "opp_env"
 
 
 def list_all_projects():
@@ -52,14 +34,14 @@ def list_all_projects():
     """
     try:
         result = subprocess.run(
-            [_opp_env_cmd(), "info", "--raw"],
+            ["opp_env", "info", "--raw"],
             capture_output=True, text=True,
         )
     except FileNotFoundError:
         _logger.warning(
-            "opp_env not installed — skipping catalog sync. "
-            "Install it into the same venv (pip install -e /path/to/opp_env) "
-            "or via packaging/systemd/install.sh, which clones it as a sibling."
+            "opp_env not on PATH — skipping catalog sync. "
+            "Sourcing /opt/opp_ci/setenv (or running under the systemd unit) "
+            "puts the venv's bin/ on PATH where opp_env lives."
         )
         return []
     if result.returncode != 0:
@@ -106,10 +88,13 @@ def get_project_github_info(project_name):
 
     Returns (owner, repo) or (None, None) if not available.
     """
-    result = subprocess.run(
-        ["opp_env", "info", project_name, "--raw"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["opp_env", "info", project_name, "--raw"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return (None, None)
     if result.returncode != 0:
         return (None, None)
 
@@ -165,10 +150,14 @@ def list_platforms():
             "compilers": [{"name": "clang"}, {"name": "gcc", "version": "7"}],
         }
     """
-    result = subprocess.run(
-        ["opp_env", "info", "--raw"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["opp_env", "info", "--raw"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        _logger.warning("opp_env not installed — no platforms to list.")
+        return {"os": [], "compilers": []}
     if result.returncode != 0:
         _logger.error("opp_env info --raw failed: %s", result.stderr.strip())
         return {"os": [], "compilers": []}
