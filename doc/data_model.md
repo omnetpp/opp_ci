@@ -19,18 +19,38 @@ chain to chase.
 
 ## Tables at a glance
 
+Grouped by role; the detail sections below appear in the same order.
+
+**Catalog** — what can be tested:
+
 | Table | Purpose | Key relations |
 |---|---|---|
 | [`projects`](#project) | Project catalog (mirrors opp_env) | parent of `versions`, `auto_test_rules` |
 | [`versions`](#version) | Project version + pinned deps | child of `projects` |
 | [`os_entries`](#os) | Catalog of `(name, version, arch)` triples | referenced by matrix configs |
 | [`compilers`](#compiler) | Catalog of `(name, version)` pairs | referenced by matrix configs |
-| [`test_matrices`](#testmatrix) | Named cross-product configuration | referenced by `auto_test_rules`, `test_matrix_runs` |
-| [`auto_test_rules`](#autotestrule) | Event-pattern → matrix bindings | child of `projects` + `test_matrices` |
-| [`workers`](#worker) | Worker registrations | referenced by `test_runs` |
+
+**Test data model** — what was run and how it went (the four-entity
+model introduced by the phase-1 cutover):
+
+| Table | Purpose | Key relations |
+|---|---|---|
+| [`test_matrices`](#testmatrix) | Named cross-product configuration | parent of `test_matrix_runs`; referenced by `auto_test_rules` |
 | [`tests`](#test) | Deduped immutable coordinate row + editable metadata | parent of `test_runs` |
 | [`test_matrix_runs`](#testmatrixrun) | One row per submission of a `TestMatrix` — groups its children, owns the GitHub linkage | child of `test_matrices`; parent of `test_runs` |
 | [`test_runs`](#testrun) | One row per attempt to run a `Test` — carries lifecycle + outcome | child of `tests` + `test_matrix_runs` + `workers` |
+
+**Workers and automation** — what does the running, and what triggers it:
+
+| Table | Purpose | Key relations |
+|---|---|---|
+| [`workers`](#worker) | Worker registrations | referenced by `test_runs` |
+| [`auto_test_rules`](#autotestrule) | Event-pattern → matrix bindings | child of `projects` + `test_matrices` |
+
+**Auth** — who is allowed to do what:
+
+| Table | Purpose | Key relations |
+|---|---|---|
 | [`api_tokens`](#apitoken) | Bearer tokens for REST access | — |
 | [`users`](#user) | Web-UI human users (local + GitHub) | — |
 
@@ -38,20 +58,23 @@ chain to chase.
 
 ```
 projects ───┬─< versions
-            └─< auto_test_rules >── test_matrices ──< test_matrix_runs ──┐
+            ├─< auto_test_rules >── test_matrices ──< test_matrix_runs ──┐
+            │                                                            │
+            └── (referenced by name from tests)                          │
                                                                          │
-                            tests ──< test_runs >──────────────────-─────┘
+                            tests ──< test_runs >─────────────────-──────┘
                                           ▲
                                           │
                                        workers
 
 os_entries     compilers     api_tokens     users
-   (standalone catalog/auth tables)
+   (standalone catalog / auth tables)
 ```
 
-`<` = "has many", read left-to-right. `os_entries` and `compilers` are
-referenced by string value from `tests` and from matrix JSON configs,
-not by foreign key — see [Denormalised columns](#denormalised-columns).
+`<` = "has many", read left-to-right. `os_entries`, `compilers`, and
+`projects` are referenced by string value from `tests` and from matrix
+JSON configs, not by foreign key — see
+[Denormalised columns](#denormalised-columns).
 
 ---
 
@@ -144,49 +167,6 @@ scheduler into `Test` + `TestRun` rows under a `TestMatrixRun` umbrella.
 
 Axis semantics and JSON shape: see
 [test_matrix_dimensions.md](test_matrix_dimensions.md).
-
----
-
-## AutoTestRule
-
-`auto_test_rules` — "when this kind of GitHub event matching this
-pattern hits this project, run this matrix."
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | int PK | |
-| `project_id` | int FK → `projects.id`, not null | |
-| `rule_type` | string, not null | `branch`, `pr`, or `tag` |
-| `pattern` | string, not null | fnmatch glob (`master`, `topic/*`, `*`) |
-| `matrix_id` | int FK → `test_matrices.id`, nullable | Null = smoke-only baseline |
-| `enabled` | int, default `1` | `0`/`1` flag |
-
-Evaluated by the webhook receiver — see
-[github_integration.md](github_integration.md).
-
----
-
-## Worker
-
-`workers` — persistent registration record for a worker agent.
-Separate from the running worker *process*; the row is what the
-coordinator uses to dispatch jobs.
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | int PK | |
-| `name` | string, unique, not null | Worker identifier |
-| `token` | string, unique, not null | Auto-generated bearer token (`secrets.token_urlsafe(32)`) |
-| `tags` | JSON list | Capability tags (`["linux", "amd64", "podman", "nix"]`) |
-| `concurrency` | int, default `1` | Max simultaneous jobs |
-| `status` | string, default `"offline"` | `online` / `offline` / `busy` |
-| `last_heartbeat` | datetime, nullable | Updated by `/api/workers/heartbeat` |
-| `registered_at` | datetime, default now | |
-| `current_job_count` | int, default `0` | Live counter; not authoritative on restart |
-
-Helper: `Worker.is_available` returns true when `status == "online"`
-and `current_job_count < concurrency`. Tag semantics and dispatch
-rules: see [workers.md](workers.md#capability-tags).
 
 ---
 
@@ -390,6 +370,49 @@ Python `enum.Enum`, stored as the SQL `Enum` type on
 | `FAIL` | At least one sub-test failed |
 | `ERROR` | Infrastructure failure (build, env, worker crash) |
 | `SKIPPED` | The run was deliberately not executed (reserved) |
+
+---
+
+## Worker
+
+`workers` — persistent registration record for a worker agent.
+Separate from the running worker *process*; the row is what the
+coordinator uses to dispatch jobs.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `name` | string, unique, not null | Worker identifier |
+| `token` | string, unique, not null | Auto-generated bearer token (`secrets.token_urlsafe(32)`) |
+| `tags` | JSON list | Capability tags (`["linux", "amd64", "podman", "nix"]`) |
+| `concurrency` | int, default `1` | Max simultaneous jobs |
+| `status` | string, default `"offline"` | `online` / `offline` / `busy` |
+| `last_heartbeat` | datetime, nullable | Updated by `/api/workers/heartbeat` |
+| `registered_at` | datetime, default now | |
+| `current_job_count` | int, default `0` | Live counter; not authoritative on restart |
+
+Helper: `Worker.is_available` returns true when `status == "online"`
+and `current_job_count < concurrency`. Tag semantics and dispatch
+rules: see [workers.md](workers.md#capability-tags).
+
+---
+
+## AutoTestRule
+
+`auto_test_rules` — "when this kind of GitHub event matching this
+pattern hits this project, run this matrix."
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `project_id` | int FK → `projects.id`, not null | |
+| `rule_type` | string, not null | `branch`, `pr`, or `tag` |
+| `pattern` | string, not null | fnmatch glob (`master`, `topic/*`, `*`) |
+| `matrix_id` | int FK → `test_matrices.id`, nullable | Null = smoke-only baseline |
+| `enabled` | int, default `1` | `0`/`1` flag |
+
+Evaluated by the webhook receiver — see
+[github_integration.md](github_integration.md).
 
 ---
 
