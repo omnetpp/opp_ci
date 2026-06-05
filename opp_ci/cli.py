@@ -64,7 +64,7 @@ def reset_db(yes, preserve_tokens):
         finally:
             session.close()
 
-    Base.metadata.drop_all(engine)
+    _drop_everything(engine)
     Base.metadata.create_all(engine)
 
     if preserve_tokens and (saved_api_tokens or saved_workers):
@@ -84,6 +84,31 @@ def reset_db(yes, preserve_tokens):
             session.close()
     else:
         click.echo("Database reset.")
+
+
+def _drop_everything(engine):
+    """Drop every table in the live schema, not just those the current
+    models know about.
+
+    `Base.metadata.drop_all` walks current-model tables in FK order, but
+    legacy tables left over from a prior schema (e.g. `test_results`
+    from the pre-Phase-1 cutover) keep an FK on a model table and break
+    the drop. Reflecting + dropping with CASCADE is robust to whatever
+    is actually in the database. On Postgres we drop and recreate the
+    `public` schema in one stroke; on other backends we fall back to
+    SQLAlchemy reflection plus a per-table drop with CASCADE.
+    """
+    from sqlalchemy import MetaData, text
+
+    backend = engine.url.get_backend_name()
+    if backend == "postgresql":
+        with engine.begin() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+        return
+    existing = MetaData()
+    existing.reflect(bind=engine)
+    existing.drop_all(bind=engine)
 
 
 @main.command("run")
