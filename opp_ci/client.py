@@ -22,16 +22,24 @@ _logger = logging.getLogger(__name__)
 class OppCiClient:
     """Client for the opp_ci coordinator REST API."""
 
-    def __init__(self, url, token):
+    def __init__(self, url, token, *, verify=None, insecure=None):
         """
         Args:
             url: Coordinator API base URL (e.g. "https://ci.omnetpp.org/api")
             token: API token (submitter, admin, or readonly)
+            verify: Path to a CA bundle PEM (e.g. Cloudflare's Origin CA
+                root) used to verify the coordinator's certificate. If
+                None, falls back to `$OPP_CI_TLS_CA_BUNDLE`, otherwise
+                the system CA store.
+            insecure: If True, skip TLS verification entirely. Dev only.
+                If None, falls back to `$OPP_CI_TLS_INSECURE`.
         """
+        from opp_ci.http import configure_session
         self.url = url.rstrip("/")
         self.token = token
         self._session = requests.Session()
         self._session.headers["Authorization"] = f"Bearer {token}"
+        configure_session(self._session, ca_bundle=verify, insecure=insecure)
 
     def submit_run(self, project, test, mode=None, git_ref=None,
                    os=None, os_version=None,

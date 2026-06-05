@@ -29,19 +29,21 @@ class WorkerAgent:
     """
 
     def __init__(self, coordinator_url, token):
+        from opp_ci.http import configure_session
         self.coordinator_url = coordinator_url.rstrip("/")
         self.token = token
         self.name = None
         self.tags = []
         self.concurrency = 1
         self._running = True
-        self._headers = {"Authorization": f"Bearer {token}"}
+        self._session = requests.Session()
+        self._session.headers["Authorization"] = f"Bearer {token}"
+        configure_session(self._session)
 
     def fetch_config(self):
         """Fetch this worker's registered name/tags/concurrency from the coordinator."""
-        resp = requests.get(
+        resp = self._session.get(
             f"{self.coordinator_url}/api/workers/me",
-            headers=self._headers,
             timeout=10,
         )
         if resp.status_code != 200:
@@ -86,9 +88,8 @@ class WorkerAgent:
 
     def _heartbeat(self):
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 f"{self.coordinator_url}/api/workers/heartbeat",
-                headers=self._headers,
                 timeout=10,
             )
             if resp.status_code != 200:
@@ -99,9 +100,8 @@ class WorkerAgent:
     def _poll(self):
         """Poll the coordinator for a job. Returns the job dict or None."""
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 f"{self.coordinator_url}/api/workers/poll",
-                headers=self._headers,
                 timeout=10,
             )
             if resp.status_code != 200:
@@ -194,9 +194,8 @@ class WorkerAgent:
             payload["details"] = details
 
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 f"{self.coordinator_url}/api/workers/result",
-                headers=self._headers,
                 json=payload,
                 timeout=60,
             )
