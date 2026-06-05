@@ -17,7 +17,7 @@ with `opp_ci serve` (default `127.0.0.1:8080`).
 |---|---|
 | `/` | Dashboard — project health badges, recent activity, summary stats |
 | `/projects` | Project catalog list with last tested version and status |
-| `/projects/{name}` | Per-project summary, version history, run buttons |
+| `/projects/{name}` | Per-project summary, version history, run buttons. Carries a "Latest release run" card showing the most recent tag-triggered `TestMatrixRun` with its verdict (EXPECTED ⇒ release-ready), counters, and links to the matrix / matrix-run detail. |
 | `/runs` | Test runs list — filterable/sortable, cancel and re-run actions |
 | `/runs/new` | Submit form — single run or "Run from Matrix" |
 | `/runs/{run_id}` | Run detail — metadata, the outcome columns (`result_code`, `stdout`, `stderr`, `details`) off the same `TestRun` row, colored stdout (ANSI→HTML), re-run / cancel buttons |
@@ -26,6 +26,9 @@ with `opp_ci serve` (default `127.0.0.1:8080`).
 | `/queue` | Currently queued / running jobs |
 | `/matrices` | Matrix CRUD — create form, list, delete |
 | `/matrices/{id}` | Matrix detail and expansion preview |
+| `/matrix-runs` | Index of recent `TestMatrixRun` rows with their stored rollup verdict. Filters by project / verdict (EXPECTED / UNEXPECTED / UNKNOWN) / since. |
+| `/matrix-runs/{id}` | Rollup header + per-cell `TestVerdict` table for one matrix run. UNEXPECTED rows are highlighted; UNKNOWN rows carry an inline expectation editor (submitter+) that posts a new `ExpectedTestResult` for that cell's `Test`. `?unexpected_only=1` filters to diverged + undeclared cells. |
+| `/tests/{id}/expectations` | Per-Test expectation edit history (newest first) plus the "set expectation" form for submitters/admins. |
 | `/rules` | AutoTestRule CRUD for GitHub triggers |
 | `/rules/{id}` | Rule detail |
 | `/compatibility` | Project compatibility index |
@@ -73,6 +76,31 @@ inet 4.6 / statistical  — PASS (all 8 combinations)
 ```
 
 Rollup logic is in `opp_ci/web/rollup.py`.
+
+## Matrix runs and the release-readiness view
+
+The `/matrix-runs` and `/matrix-runs/{id}` pages answer the
+"is this release ready to publish?" question by reading the **stored**
+rollup columns on each `TestMatrixRun` — no fan-out across cells at
+render time. The verdict is the three-state grade
+([`TestVerdictKind`](data_model.md#testverdictkind)):
+
+- **EXPECTED** — every cell met its declared expectation; release-ready.
+- **UNEXPECTED** — at least one cell diverged (wrong outcome, or
+  unexpected ERROR).
+- **UNKNOWN** — no mismatches, but at least one cell ran without a
+  declared expectation. Declare an expectation on the cell (via the
+  inline editor) and re-run to flip it.
+
+Cells whose `TestVerdict.cache_hit` is true reuse a prior `TestRun`
+via the [content-addressable cache](data_model.md#cache-fingerprint)
+— the run column on the detail page links to the original observation.
+
+Expectations edited inline apply *forward only*: the historical
+verdict pins the specific `ExpectedTestResult` row that was in force
+at recording time (via `TestVerdict.expectation_id`), so old rollups
+stay reconstructible. The detail page surfaces this with a
+"future runs only" hint next to the editor.
 
 ## Admin actions
 
