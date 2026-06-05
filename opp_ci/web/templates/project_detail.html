@@ -9,6 +9,52 @@
     <div class="stat"><div class="value" style="color:var(--fail)">{{ failed }}</div><div class="label">Failed</div></div>
 </div>
 
+{% if latest_release %}
+{% set lr_run, lr_matrix = latest_release %}
+<div class="card" style="border-left: 4px solid var(--primary);">
+    <h2>Latest release run</h2>
+    <table>
+        <tr>
+            <th style="width:150px;">Tag</th>
+            <td><code>{{ lr_run.ref or "-" }}</code></td>
+        </tr>
+        <tr>
+            <th>Verdict</th>
+            <td>
+                {% if lr_run.verdict %}
+                    {% set v = lr_run.verdict.value %}
+                    <span class="badge badge-{{ 'passed' if v=='EXPECTED' else ('failed' if v=='UNEXPECTED' else 'queued') }}">{{ v }}</span>
+                    {% if v == 'EXPECTED' %}— release-ready{% endif %}
+                {% else %}
+                    <span class="badge badge-queued">pending</span>
+                {% endif %}
+            </td>
+        </tr>
+        <tr>
+            <th>Counters</th>
+            <td>
+                pass={{ lr_run.pass_count }} &middot;
+                fail={{ lr_run.fail_count }} &middot;
+                error={{ lr_run.error_count }} &middot;
+                total={{ lr_run.total_count }} &middot;
+                cache_hits={{ lr_run.cache_hit_count }}
+            </td>
+        </tr>
+        <tr>
+            <th>Matrix</th>
+            <td><a href="/matrices/{{ lr_matrix.id }}">{{ lr_matrix.name }}</a></td>
+        </tr>
+        <tr>
+            <th>Run</th>
+            <td><a href="/matrix-runs/{{ lr_run.id }}">#{{ lr_run.id }}</a>
+                &middot; created {{ lr_run.created_at.strftime("%Y-%m-%d %H:%M") if lr_run.created_at else "-" }}
+                {% if lr_run.completed_at %} &middot; completed {{ lr_run.completed_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
+            </td>
+        </tr>
+    </table>
+</div>
+{% endif %}
+
 <div class="card">
     <h2>Details</h2>
     <table>

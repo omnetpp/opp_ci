@@ -896,6 +896,18 @@ def project_detail(request: Request, name: str, current_user: User = Depends(req
             .order_by(TestRun.id.desc()).limit(30)
         ).scalars().all()
 
+        # The "Latest release run" card answers Q1 — release readiness.
+        latest_release = session.execute(
+            select(TestMatrixRun, TestMatrix)
+            .join(TestMatrix, TestMatrixRun.matrix_id == TestMatrix.id)
+            .where(
+                TestMatrix.project == name,
+                TestMatrixRun.trigger == "tag",
+            )
+            .order_by(TestMatrixRun.id.desc())
+            .limit(1)
+        ).first()
+
         # Stats
         total = session.execute(
             select(func.count(TestRun.id))
@@ -920,6 +932,7 @@ def project_detail(request: Request, name: str, current_user: User = Depends(req
             "total": total,
             "passed": passed,
             "failed": failed,
+            "latest_release": latest_release,
             **_template_globals(request, current_user),
         })
     finally:

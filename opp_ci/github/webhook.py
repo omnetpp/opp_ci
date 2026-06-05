@@ -144,8 +144,12 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
                      pr_number=None):
     """
     Look up matching AutoTestRules for this repo and event, expand matrices,
-    and queue test runs.
+    and queue test runs. Tag pushes set TestMatrixRun.trigger="tag" and
+    TestMatrixRun.ref to the tag name; branch / PR events keep the existing
+    "webhook" trigger and leave ref empty.
     """
+    matrix_trigger = "tag" if rule_type == "tag" else "webhook"
+    matrix_ref = ref_name if rule_type == "tag" else None
     session = SessionLocal()
     try:
         # Find the project
@@ -211,7 +215,8 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
                 matrix_run = create_matrix_run(
                     session,
                     matrix_id=matrix_id,
-                    trigger="webhook",
+                    trigger=matrix_trigger,
+                    ref=matrix_ref,
                     github_owner=owner,
                     github_repo=repo,
                     github_commit_sha=commit_sha,
