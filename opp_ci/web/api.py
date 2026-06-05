@@ -179,15 +179,22 @@ async def submit_matrix_run(
             github_repo=proj.github_repo if proj else None,
         )
 
+        from opp_ci.fingerprint import compute_cache_fingerprint
+
         jobs = expand_matrix(matrix.project, matrix.config)
         run_ids = []
         for job in jobs:
+            fp = compute_cache_fingerprint(
+                job, project=matrix.project, opp_file=matrix.opp_file,
+            )
             run, _ = enqueue_job(
                 session,
                 job,
                 project=matrix.project,
                 opp_file=matrix.opp_file,
                 matrix_run_id=matrix_run.id,
+                use_cache=True,
+                cache_fingerprint=fp,
             )
             run_ids.append(run.id)
         session.commit()
@@ -892,7 +899,8 @@ class InlineMatrixRunRequest(BaseModel):
 
     Either `matrix_name` (an existing matrix) OR `project` plus axis
     fields (anonymous matrix). When axis fields are present, a synthetic
-    `TestMatrix` row is persisted with a generated name.
+    `TestMatrix` row is persisted with a generated name. `no_cache`
+    forces a fresh TestRun per cell.
     """
     matrix_name: str | None = None
     project: str | None = None
@@ -914,6 +922,7 @@ class InlineMatrixRunRequest(BaseModel):
     isolation: list[str] | None = None
     toolchain: list[str] | None = None
     deps: dict | None = None
+    no_cache: bool = False
 
 
 def _spec_to_config(req: "InlineMatrixRunRequest"):
@@ -984,21 +993,29 @@ async def submit_matrix_run(
             github_repo=proj.github_repo if proj else None,
         )
 
+        from opp_ci.fingerprint import compute_cache_fingerprint
+
         jobs = expand_matrix(matrix.project, matrix.config)
         run_ids = []
         for job in jobs:
+            fp = None if req.no_cache else compute_cache_fingerprint(
+                job, project=matrix.project, opp_file=matrix.opp_file,
+            )
             run, _ = enqueue_job(
                 session,
                 job,
                 project=matrix.project,
                 opp_file=matrix.opp_file,
                 matrix_run_id=matrix_run.id,
+                use_cache=not req.no_cache,
+                cache_fingerprint=fp,
             )
             run_ids.append(run.id)
         session.commit()
         _logger.info(
-            "Matrix '%s' queued %d jobs (matrix_run=%d) by %s",
+            "Matrix '%s' queued %d jobs (matrix_run=%d) by %s%s",
             matrix.name, len(run_ids), matrix_run.id, identity.get("name"),
+            " (cache disabled)" if req.no_cache else "",
         )
         return {
             "matrix": matrix.name,

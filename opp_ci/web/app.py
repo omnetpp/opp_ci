@@ -681,14 +681,21 @@ def run_new_matrix(request: Request,
             github_repo=proj.github_repo if proj else None,
         )
 
+        from opp_ci.fingerprint import compute_cache_fingerprint
+
         jobs = expand_matrix(matrix.project, matrix.config)
         queued = 0
         for job in jobs:
+            fp = compute_cache_fingerprint(
+                job, project=matrix.project, opp_file=matrix.opp_file,
+            )
             enqueue_job(
                 session, job,
                 project=matrix.project,
                 opp_file=matrix.opp_file,
                 matrix_run_id=matrix_run.id,
+                use_cache=True,
+                cache_fingerprint=fp,
             )
             queued += 1
         session.commit()

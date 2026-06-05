@@ -188,6 +188,25 @@ class GitHubClient:
         resp.raise_for_status()
         return resp.json()
 
+    def resolve_ref(self, owner, repo, ref):
+        """Resolve a git ref (branch, tag, or partial SHA) to a full commit SHA.
+
+        `ref` may be:
+          * "heads/<branch>" — branch ref
+          * "tags/<tag>"     — tag ref
+          * "<name>"         — try branch, then tag, then commit lookup
+
+        Returns the full SHA on success or None on failure (404 / network).
+        """
+        url = f"{self.base_url}/repos/{owner}/{repo}/commits/{ref}"
+        try:
+            resp = self._session.get(url, timeout=10)
+        except requests.RequestException:
+            return None
+        if resp.status_code == 200:
+            return resp.json().get("sha")
+        return None
+
     def list_commits_in_range(self, owner, repo, base, head, max_commits=250):
         """
         Enumerate commits between two refs using the compare API.

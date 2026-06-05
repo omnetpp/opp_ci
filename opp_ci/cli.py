@@ -1208,16 +1208,44 @@ def run_matrix(matrix_name, spec_file, project, kinds, modes, refs, single_ref,
         matrix_run = create_matrix_run(session, matrix_id=matrix.id, trigger="cli")
         session.commit()
 
+        from opp_ci.fingerprint import compute_cache_fingerprint
+
         passed = 0
         failed = 0
         errors = 0
+        cache_hits = 0
         for i, job in enumerate(jobs, 1):
-            test_run, _ = enqueue_job(
+            fp = None if no_cache else compute_cache_fingerprint(
+                job, project=matrix.project, opp_file=matrix.opp_file,
+                # CLI runs typically lack a github token; skip the round-trip
+                # so the fingerprint stays deterministic and the run starts
+                # promptly.
+                resolve_refs=False,
+            )
+            test_run, verdict_cell = enqueue_job(
                 session, job,
                 project=matrix.project,
                 opp_file=matrix.opp_file,
                 matrix_run_id=matrix_run.id,
+                use_cache=not no_cache,
+                cache_fingerprint=fp,
             )
+            if verdict_cell is not None and verdict_cell.cache_hit:
+                cache_hits += 1
+                session.commit()
+                parts = [job["project"], job["kind"], job.get("mode", "")]
+                if job.get("git_ref"):
+                    parts.append(f"@{job['git_ref']}")
+                actual = test_run.result_code.value if test_run.result_code else "?"
+                click.echo(f"  [{i}/{len(jobs)}] {' × '.join(parts)} → CACHED {actual}")
+                if actual == "PASS":
+                    passed += 1
+                elif actual == "FAIL":
+                    failed += 1
+                elif actual == "ERROR":
+                    errors += 1
+                continue
+
             test_run.lifecycle = TestRunLifecycle.running
             test_run.started_at = datetime.datetime.utcnow()
             try:
@@ -1274,7 +1302,8 @@ def run_matrix(matrix_name, spec_file, project, kinds, modes, refs, single_ref,
                 failed += 1
                 click.echo(f" → FAIL ({outcome['duration_seconds']:.1f}s)")
 
-        click.echo(f"\nMatrix complete: {passed} passed, {failed} failed, {errors} errors")
+        click.echo(f"\nMatrix complete: {passed} passed, {failed} failed, "
+                   f"{errors} errors ({cache_hits} cache hit(s))")
         click.echo(f"Matrix run #{matrix_run.id} — opp_ci show-matrix-run {matrix_run.id}")
 
         # Trigger GitHub Action notes sync once for the whole matrix

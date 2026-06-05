@@ -218,15 +218,24 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
                     github_pr_number=pr_number,
                 )
 
+            from opp_ci.fingerprint import compute_cache_fingerprint
+
             for job in jobs:
                 job_ref = job.get("git_ref") or git_ref
                 job_with_ref = dict(job)
                 job_with_ref["git_ref"] = job_ref
+                fp = compute_cache_fingerprint(
+                    job_with_ref,
+                    project=job.get("project", project.name),
+                    opp_file=opp_file,
+                )
                 run, _ = enqueue_job(
                     session, job_with_ref,
                     project=job.get("project", project.name),
                     opp_file=opp_file,
                     matrix_run_id=matrix_run.id if matrix_run else None,
+                    use_cache=True,
+                    cache_fingerprint=fp,
                 )
                 run_ids.append(run.id)
                 total_queued += 1
