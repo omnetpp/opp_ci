@@ -82,6 +82,34 @@ install -d -o "$OPP_CI_USER" -g "$OPP_CI_GROUP" -m 0750 "$STATE_DIR"
 # (Cloudflare Origin Cert, Let's Encrypt copy, or `opp_ci tls-selfsign`).
 install -d -o root         -g "$OPP_CI_GROUP" -m 0750 "$TLS_DIR"
 
+sync_sibling_repo() {
+    # Sync a sibling git checkout (or clone it from github if missing) into
+    # /opt/<name>, matching the dev workflow where opp_ci, opp_env, and
+    # opp_repl all live next to each other in ~/workspace/.
+    local name="$1"
+    local clone_url="$2"
+    local src="$REPO_ROOT/../$name"
+    local dest="/opt/$name"
+
+    if [[ -d "$src/.git" ]]; then
+        echo "    syncing $src → $dest"
+        if command -v rsync >/dev/null 2>&1; then
+            rsync -a --delete \
+                --exclude='.venv/' --exclude='__pycache__/' --exclude='*.pyc' \
+                "$src/" "$dest/"
+        else
+            mkdir -p "$dest"
+            cp -a "$src/." "$dest/"
+        fi
+    elif [[ -d "$dest/.git" ]]; then
+        echo "    keeping existing $dest (no sibling source — \`cd $dest && git pull\` to upgrade)"
+    else
+        echo "    cloning $clone_url → $dest"
+        git clone --depth 1 "$clone_url" "$dest"
+    fi
+    chown -R root:root "$dest"
+}
+
 echo "==> Syncing source tree to $INSTALL_DIR"
 # Use rsync if available, otherwise cp -a. Excludes the venv (rebuilt below)
 # and any local sqlite DB the developer may have in their checkout. Keeps
@@ -100,6 +128,10 @@ else
 fi
 chown -R root:root "$INSTALL_DIR"
 
+echo "==> Syncing sibling repos (opp_env, opp_repl)"
+sync_sibling_repo opp_env  https://github.com/omnetpp/opp_env.git
+sync_sibling_repo opp_repl https://github.com/omnetpp/opp_repl.git
+
 echo "==> Creating Python venv and installing opp_ci (editable)"
 if [[ ! -x "$INSTALL_DIR/.venv/bin/python" ]]; then
     python3 -m venv "$INSTALL_DIR/.venv"
@@ -110,10 +142,19 @@ fi
 # podman-isolation jobs). Postgres extra is added by default but is
 # innocuous (just psycopg2-binary) even if you point at SQLite or a remote DB.
 EXTRAS="web,client,podman,postgres"
+# Install opp_env and opp_repl editable from their checkouts *first*, so
+# that opp_ci's dependency on `opp_repl` resolves to the local sibling
+# rather than pulling a published version from PyPI. The opp_ci install
+# then layers on top.
+for sib in /opt/opp_env /opt/opp_repl; do
+    if [[ -f "$sib/pyproject.toml" ]]; then
+        "$INSTALL_DIR/.venv/bin/pip" install -e "$sib"
+    fi
+done
 "$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR[$EXTRAS]"
 
 # The venv needs to be readable & executable by the opp_ci user, but the
-# rest of /opt/opp_ci can stay root-owned.
+# rest of /opt/opp_ci (and siblings) can stay root-owned.
 chown -R "$OPP_CI_USER:$OPP_CI_GROUP" "$INSTALL_DIR/.venv"
 
 if [[ "$WITH_POSTGRES" -eq 1 ]]; then

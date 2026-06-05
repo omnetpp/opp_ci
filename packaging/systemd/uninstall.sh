@@ -43,6 +43,8 @@ opp_ci systemd units removed.
 
 Preserved (delete manually if you also want them gone):
   $INSTALL_DIR              (source + venv)
+  /opt/opp_env              (sibling repo, if installed)
+  /opt/opp_repl             (sibling repo, if installed)
   /etc/opp_ci/              (config, including worker tokens and tls/)
   /var/lib/opp_ci/          (sqlite DB, caches)
   user/group 'opp_ci'       (run: sudo userdel opp_ci && sudo groupdel opp_ci)
