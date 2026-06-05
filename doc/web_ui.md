@@ -20,7 +20,7 @@ with `opp_ci serve` (default `127.0.0.1:8080`).
 | `/projects/{name}` | Per-project summary, version history, run buttons |
 | `/runs` | Test runs list — filterable/sortable, cancel and re-run actions |
 | `/runs/new` | Submit form — single run or "Run from Matrix" |
-| `/runs/{run_id}` | Run detail — metadata, per-test results table, colored stdout (ANSI→HTML), re-run / cancel buttons |
+| `/runs/{run_id}` | Run detail — metadata, the outcome columns (`result_code`, `stdout`, `stderr`, `details`) off the same `TestRun` row, colored stdout (ANSI→HTML), re-run / cancel buttons |
 | `/results` | Multi-dimensional results search — Detailed and Summary modes, CSV export |
 | `/compare` | Side-by-side diff of two runs or two branches |
 | `/queue` | Currently queued / running jobs |
@@ -48,8 +48,8 @@ can be independently constrained:
 | OS / OS version | Ubuntu 24.04, Fedora 41, macOS 15 |
 | Compiler / compiler version | gcc-14, clang-18 |
 | Build mode | release, debug |
-| Test | smoke, fingerprint, statistical, … |
-| Result status | PASS, FAIL, ERROR, SKIP |
+| Kind | smoke, fingerprint, statistical, … |
+| Result status | PASS, FAIL, ERROR, SKIPPED |
 
 Dimensions left unset act as wildcards.
 
@@ -89,6 +89,8 @@ groups and the REST API.
 ## ANSI handling
 
 opp_repl stdout contains ANSI escape codes. They are stored **raw** in
-`TestResult.stdout` and `TestResult.stderr`, then converted to colored
-HTML at render time via a Jinja filter. Don't strip ANSI codes before
-storage — downstream tools and the comparison view depend on them.
+`TestRun.stdout` and `TestRun.stderr` (on the same row as the
+lifecycle and outcome — there is no separate `TestResult` table after
+the phase-1 schema cutover), then converted to colored HTML at render
+time via a Jinja filter. Don't strip ANSI codes before storage —
+downstream tools and the comparison view depend on them.

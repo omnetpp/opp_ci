@@ -100,8 +100,12 @@ fresh. To use Postgres instead, set
 
 ### Schema drift after pulling new code
 
-opp_ci uses Alembic migrations (`opp_ci/db/migrations/`). For local
-development the simplest reset is:
+The phase-1 test data model cutover (Test / TestMatrix /
+TestMatrixRun / TestRun split, `test` → `kind` rename, outcome
+columns on `TestRun`) was applied by wiping and recreating the
+database — there is no migration chain that turns a pre-cutover DB
+into a post-cutover one. For local development the simplest reset
+is:
 
 ```bash
 rm -f opp_ci.db
@@ -109,8 +113,11 @@ opp_ci init-db
 opp_ci seed-projects
 ```
 
-For Postgres deployments, run the Alembic upgrade via the configured
-`alembic.ini`.
+For Postgres deployments the equivalent is to drop and recreate the
+schema (or run `opp_ci reset-db --yes`, optionally with
+`--preserve-tokens` to keep `api_tokens` / `workers` rows for
+external systems). Subsequent schema changes are expected to land via
+Alembic under `opp_ci/db/migrations/`.
 
 ## Web UI and API
 

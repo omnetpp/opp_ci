@@ -20,7 +20,11 @@ The webhook receiver, status updater, and API client live in
 3. Looks up the `Project` by `github_owner` / `github_repo`.
 4. Matches the event's branch / tag / PR head against `AutoTestRule`
    patterns using `fnmatch` glob.
-5. Expands each matched rule's linked matrix and queues `TestRun` rows.
+5. For each matched rule, creates one `TestMatrixRun` carrying the
+   event's GitHub linkage fields (`github_owner`, `github_repo`,
+   `github_commit_sha`, `github_pr_number`, `github_status_url`),
+   then expands the linked matrix and queues a child `TestRun` per
+   job.
 6. Posts a `pending` commit status to the head SHA.
 
 Webhook secret configuration: see [configuration.md](configuration.md).
@@ -72,13 +76,19 @@ verifying rule patterns without hitting GitHub.
 `/api/workers/result` once a worker finishes a job. It posts the final
 commit status and refreshes the PR comment.
 
-GitHub fields stored on each `TestRun`:
+GitHub fields stored on the parent `TestMatrixRun` (and exposed on
+each child `TestRun` via proxy properties):
 
 - `github_owner`, `github_repo`
 - `github_commit_sha`
 - `github_pr_number` (null for push events)
 - `github_status_url` — link back to the run's web page, used in the
   status's `target_url`
+
+For ad-hoc submissions (`opp_ci run` / `POST /api/runs`) the TestRun
+has no parent `TestMatrixRun` and these fields read back as `None`.
+Reading them from Python uses `run.github_owner`, `run.github_repo`,
+etc. — the property delegates through `run.matrix_run`.
 
 ## Token model
 
