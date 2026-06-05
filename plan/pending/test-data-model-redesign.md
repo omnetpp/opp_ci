@@ -1,19 +1,31 @@
 # Plan: redesign the test data model
 
-Goal: replace the current `TestRun` + `TestResult` pair
-([opp_ci/db/models.py:179](../opp_ci/db/models.py#L179)) with a model
+Goal: replace the legacy `TestRun` + `TestResult` pair with a model
 that cleanly separates *what is being tested* from *each attempt to
-test it*. The current schema conflates both on the legacy `TestRun`
-row and uses `TestResult` as a 1:N child of questionable purpose. The
-new model reuses the `TestRun` name for the per-attempt entity, with
-materially different semantics from today's row, and folds the
-outcome columns onto `TestRun` directly (no separate `TestResult`
-table — they're always 1:0..1). The expectation, which is also 1:0..1
-with `Test`, similarly lives as nullable columns on `Test` rather
-than in a separate table.
+test it*. The legacy schema conflated both on a single `TestRun` row
+and used `TestResult` as a 1:N child of questionable purpose. The new
+model reuses the `TestRun` name for the per-attempt entity (with
+materially different semantics from the legacy row) and folds the
+outcome columns onto `TestRun` directly — no separate `TestResult`
+table, they were always 1:0..1. The expectation, also 1:0..1 with
+`Test`, similarly lives as nullable columns on `Test` rather than in a
+separate table.
 
 Backward compatibility is **not** a concern: the database is wiped as
 part of this change. Migrations are not in scope.
+
+## Phase 1 status — shipped
+
+The cutover to this model is implemented and merged. Schema lives in
+[`opp_ci/db/models.py`](../opp_ci/db/models.py) (`Test` at L229,
+`TestMatrixRun` at L266, `TestRun` at L293); persistence helpers in
+[`opp_ci/persistence.py`](../opp_ci/persistence.py). The phase-1
+cutover plan, with the exact phase-1 picks for the non-blocking
+defaults, is in [done](../done/test-data-model-phase-1-schema.md).
+
+This parent plan is the long-form design doc. Below: locked decisions
+(what's already committed in code), then the still-open questions for
+future phases.
 
 ## The new entities
 
@@ -45,6 +57,12 @@ Defined in dependency order — each row depends only on rows above it.
 | Cache / "should we actually re-execute?" | Whether a rerun request *re-executes* on the worker, or returns a cached prior outcome for the same `(Test, commit_sha, …)`, is a separate execution-time concern (a "forced" rerun would bypass any such cache). Not in scope for this schema redesign. |
 | Single-`Test` runs without a matrix | A `TestRun` may exist with `matrix_run_id = NULL`. Running a single `Test` (whether a first-time invocation or a one-off rerun) creates a `TestRun` parented to no `TestMatrixRun`. (Resolves open question 6.) |
 | Mutable columns on `Test` and `TestMatrix` | `TestMatrix` has exactly one mutable column: `name` (optional, nullable, user-editable label). `Test` has three: `name`, `expected_result_code`, `expected_result_description`. Every other column on either row is fixed at creation time — to change a coordinate or matrix dimension you create a new row. All three `Test` mutables are excluded from `Test.coord_hash` so editing them never affects dedup. |
+| Name for the suite-kind column | The legacy `Test.test` column (kind of test — `"smoke"`, `"fingerprint"`, `"statistical"`, …) is renamed to `kind`. Applied consistently across **every** surface — column, matrix axis (`kinds:`), job dict key, form fields, CLI flags (`--kind` / `--kinds`), API fields, URL query params, local variables, template labels. (`Test.test` is awkward in Python and once the column is renamed there's no reason to keep `test` as the external word.) |
+| `coord_hash` field list | Closed list: `project, kind, mode, os, os_version, distro, distro_version, flavor, flavor_version, arch, compiler, compiler_version, isolation, toolchain, opp_file`. Sorted-keys canonical JSON → SHA-256 hex. Adding/removing a field re-keys every existing `Test`; treat as bump-and-rebuild. |
+| Anonymous matrices: persistence | Anonymous matrices still get a persisted `TestMatrix` row with an auto-generated name, so `TestMatrixRun.matrix_id` is `NOT NULL` and the join is uniform. (Resolves former open question 3.) |
+| Worker assignment timing | `TestRun.worker_id` is nullable while `lifecycle=queued` and set at claim time inside the dequeue transaction. No pre-assignment. (Resolves former open question 6.) |
+| Matrix rerun scope (phase 1) | "Rerun a `TestMatrixRun`" always re-expands the matrix and runs all children — no filtered "rerun only the failed ones" yet. A filtered variant is a future feature decision (see open questions). |
+| `TestMatrixRun` lifecycle column (phase 1) | No own column; status is rolled up from child `TestRun.lifecycle` in app code. Promote to a column later only if the roll-up query becomes the bottleneck. |
 
 ## Field placement: coordinate vs. run context
 
@@ -52,7 +70,7 @@ Defined in dependency order — each row depends only on rows above it.
 |---|---|---|
 | `name` (nullable, editable) | `Test`, `TestMatrix` | Optional user-editable label. Excluded from `Test.coord_hash`. |
 | `expected_result_code`, `expected_result_description` (both nullable, editable) | `Test` | Human-controlled expectation. `NULL` `expected_result_code` means "no expectation set". Excluded from `Test.coord_hash`. |
-| `project`, `test`, `mode` | `Test` | Identity of what's being tested. |
+| `project`, `kind`, `mode` | `Test` | Identity of what's being tested. (`kind` is the renamed legacy `test` column.) |
 | `os`, `os_version`, `distro`, `distro_version`, `flavor`, `flavor_version`, `arch` | `Test` | Platform coordinates. See [distro-and-flavor-dimensions.md](distro-and-flavor-dimensions.md). |
 | `compiler`, `compiler_version` | `Test` | Toolchain coordinate. |
 | `isolation`, `toolchain` | `Test` | Run-environment coordinate. |
@@ -135,24 +153,57 @@ common query target, promote it to its own column later.
 
 ## Open questions
 
-These are the items still to resolve before we write the schema.
+Schema-blocking questions are all resolved (see locked decisions above
+and [phase-1 plan in done](../done/test-data-model-phase-1-schema.md)).
+What remains is future-phase work — operational policies, feature
+extensions, and granularity refinements.
 
-1. **`TestMatrixRun` lifecycle and aggregate status.** Does a `TestMatrixRun` carry its own lifecycle column (e.g. `queued`/`running`/`finished`/`cancelled`), or is its status purely a roll-up over its child `TestRun`s? If it's a roll-up, where is it computed (DB view? application code? denormalized + refreshed)?
+1. **Promote `TestMatrixRun.lifecycle` to a real column?** Phase 1 rolls
+   up child `TestRun.lifecycle` in app code. Worth promoting once we see
+   real query patterns where the roll-up is the bottleneck (dashboards
+   over many matrix runs, "list active matrix runs" filtered queries).
+   If promoted: who keeps it in sync — a trigger on `TestRun`, a
+   write-time recompute in the persistence helpers, or a periodic
+   reconciler?
 
-2. **Scope of a matrix rerun.** Is "rerun a `TestMatrixRun`" always "re-expand the matrix and run all children", or can the user filter (e.g. only the failed/errored children)? If filtered, what determines the child set of the new `TestMatrixRun` — re-expand the matrix and pick a subset, or copy the surviving subset of `Test`s from the old `TestMatrixRun` directly?
+2. **Filtered matrix rerun.** Phase 1 only supports "rerun every child"
+   when a `TestMatrixRun` is re-submitted. Add "rerun only the
+   failed/errored children" as a UI/CLI option? If so, does the new
+   `TestMatrixRun` re-expand the (possibly evolved) `TestMatrix` and
+   pick a subset, or copy the surviving subset of `Test`s from the old
+   `TestMatrixRun` directly? Both produce different semantics when the
+   matrix has been edited between attempts.
 
-3. **Anonymous matrices: what gets stored?** When the matrix is anonymous, do we still persist a `TestMatrix` row (with a generated name) so `TestMatrixRun.matrix_id` is never null? Or is `matrix_id` nullable and the `TestMatrixRun` stands on its own?
+3. **Audit / history for mutable columns on `Test`.** `Test` has three
+   mutables (`name`, `expected_result_code`,
+   `expected_result_description`). A silent overwrite of
+   `expected_result_code` changes how every past `TestRun` grades, and a
+   silent rename loses context. Do we want a single audit mechanism
+   covering all three (audit table, trigger, or `updated_at`/`updated_by`
+   columns), or nothing at all? Phase 1 has nothing.
 
-4. **Exactly which fields go into `Test.coord_hash`?** The table above lists the candidates. We need a closed, ordered list — adding/removing a field later changes every hash.
+4. **`TestRun.details` JSON schema.** Phase 1 stores it as a free-form
+   blob. If a particular field becomes a common query target (e.g.
+   per-subtest breakdown for a comparison view, fingerprint mismatch
+   data for triage), promote it to its own column or codify a JSON
+   schema. Risk of becoming a junk drawer otherwise.
 
-5. **Audit / history for mutable columns on `Test`.** `Test` has three mutable columns (`name`, `expected_result_code`, `expected_result_description`). A silent overwrite of `expected_result_code` changes how every past `TestRun` grades, and a silent rename loses context. Do we want a single audit mechanism (table or trigger) covering all three, minimal per-column `updated_at`/`updated_by`, or nothing at all in v1?
+5. **`system_snapshot` retention policy.** Pruning is `UPDATE … SET
+   system_snapshot = NULL WHERE …` — operationally cheap, semantically
+   safe (lifecycle row + outcome stay). The policy is open: drop after
+   N months, drop above a size threshold, drop only for
+   `result_code=PASS` runs, never drop? Likely a deployment-config
+   question rather than a code one.
 
-6. **Worker assignment.** Is `worker_id` set when the `TestRun` is dequeued (i.e. nullable while `lifecycle=queued`), or are queued rows pre-assigned to workers? Affects the queue-claim transaction.
+6. **Cancel / abort for running `TestRun`s.** Phase 1 lets running runs
+   finish — cancel only transitions queued rows. If we ever want a real
+   abort (worker-side signal, polling flag), it lands here. Out of
+   scope until there's a concrete need.
 
-7. **`TestRun.details` JSON.** Free-form blob, or a defined schema? If free-form, what populates it today and what queries does it need to support? Risk of becoming a junk drawer.
-
-8. **System snapshot retention policy.** Pruning is `UPDATE … SET system_snapshot = NULL WHERE …`, but the policy itself isn't decided: drop after N months, drop above a size threshold, drop only for `result_code=PASS` runs, never drop?
-
-9. **`Test.test` column name clash.** Resolved: rename to `kind` (the kind of test — `"smoke"`, `"fingerprint"`, `"statistical"`, …) consistently across **every** surface — column, matrix axis (`kinds:`), job dict key, form fields, CLI flags, API fields, URL query params, local variables, template labels. `Test.test` is awkward in Python and once the column is renamed there is no reason to keep `test` as the external word.
-
-10. **Suite-internal granularity.** Confirmed deferred: a `Test` represents a *full suite* at coordinates, and the suite's internal per-test results collapse into one aggregate outcome on `TestRun`. When we eventually want per-individual-test results, the path is to add a per-individual-test entity below `Test` and split the outcome accordingly (re-introducing a child outcome table is one option). Not in scope here, but the names should not block it.
+7. **Suite-internal granularity.** Deferred: a `Test` represents a
+   *full suite* at coordinates, and the suite's internal per-test
+   results collapse into one aggregate outcome on `TestRun`. When we
+   eventually want per-individual-test results, the path is to add a
+   per-individual-test entity below `Test` and split the outcome
+   accordingly (re-introducing a child outcome table is one option).
+   The names should not block this future split.
