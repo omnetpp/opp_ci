@@ -3,7 +3,7 @@ Matrix expansion and job scheduling.
 
 A TestMatrix config is a JSON dict with axes to cross-product:
 {
-    "tests": ["smoke", "fingerprint"],
+    "kinds": ["smoke", "fingerprint"],
     "modes": ["release", "debug"],
     "versions": ["inet-4.5", "inet-4.4"],
     "refs": ["master", "topic/my-feature"],
@@ -314,7 +314,7 @@ def expand_matrix(project, config):
         {
             "project": "inet",
             "version": "inet-4.5",
-            "test": "smoke",
+            "kind": "smoke",
             "mode": "release",
             "git_ref": "master",
             "os": "Linux",
@@ -335,7 +335,7 @@ def expand_matrix(project, config):
     ``version`` comes from the ``versions`` axis and identifies which version
     record of the project to build (parallels TestRun.version for single runs).
     """
-    tests = config.get("tests", ["smoke"])
+    kinds = config.get("kinds", ["smoke"])
     modes = config.get("modes", ["release"])
     versions = config.get("versions", [None])
     if "refs" in config:
@@ -352,9 +352,9 @@ def expand_matrix(project, config):
     arches = _resolve_arch_axis(config)
 
     jobs = []
-    for (version, ref, test, mode, platform_cell, arch,
+    for (version, ref, kind, mode, platform_cell, arch,
          (comp_name, comp_ver), dep_pins, isolation, toolchain) in itertools.product(
-            versions, refs, tests, modes, platform_cells, arches, compiler_tuples,
+            versions, refs, kinds, modes, platform_cells, arches, compiler_tuples,
             dep_combos, isolations, toolchains):
         if toolchain == "nix":
             _validate_nix_compiler(comp_name, comp_ver)
@@ -362,7 +362,7 @@ def expand_matrix(project, config):
         jobs.append({
             "project": project,
             "version": version,
-            "test": test,
+            "kind": kind,
             "mode": mode,
             "git_ref": ref,
             "os": os_name,
@@ -392,7 +392,7 @@ DEFAULT_MATRICES = {
     "inet-default": {
         "project": "inet",
         "config": {
-            "tests": ["smoke", "fingerprint", "statistical"],
+            "kinds": ["smoke", "fingerprint", "statistical"],
             "modes": ["release", "debug"],
             "distro": ["Ubuntu 24.04"],
             "compiler": ["gcc-14", "clang-18"],
@@ -401,7 +401,7 @@ DEFAULT_MATRICES = {
     "omnetpp-default": {
         "project": "omnetpp",
         "config": {
-            "tests": ["smoke", "build"],
+            "kinds": ["smoke", "build"],
             "modes": ["release", "debug"],
             "distro": ["Ubuntu 24.04"],
             "arch": ["amd64", "aarch64"],
@@ -413,7 +413,7 @@ DEFAULT_MATRICES = {
     "omnetpp-platforms": {
         "project": "omnetpp",
         "config": {
-            "tests": ["smoke"],
+            "kinds": ["smoke"],
             "modes": ["release"],
             "distro": ["Ubuntu 26.04", "Fedora 42"],
             "compiler": ["clang-22"],

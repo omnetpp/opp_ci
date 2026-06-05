@@ -18,11 +18,9 @@ from sqlalchemy import select
 
 from opp_ci.config import GITHUB_WEBHOOK_SECRET, COORDINATOR_URL
 from opp_ci.db.connection import SessionLocal
-from opp_ci.db.models import (
-    Project, AutoTestRule, TestMatrix, TestRun, TestRunStatus,
-)
+from opp_ci.db.models import AutoTestRule, Project, TestMatrix
 from opp_ci.github.client import GitHubClient
-from opp_ci.executor import find_existing_run
+from opp_ci.persistence import create_matrix_run, enqueue_job
 from opp_ci.scheduler import expand_matrix
 
 _logger = logging.getLogger(__name__)
@@ -186,71 +184,50 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
         run_ids = []
 
         for rule in matched_rules:
+            matrix = None
             if rule.matrix_id:
                 matrix = session.execute(
                     select(TestMatrix).where(TestMatrix.id == rule.matrix_id)
                 ).scalar_one_or_none()
                 if matrix is None:
-                    _logger.warning("Rule %d references missing matrix %d", rule.id, rule.matrix_id)
+                    _logger.warning("Rule %d references missing matrix %d",
+                                    rule.id, rule.matrix_id)
                     continue
-
                 jobs = expand_matrix(matrix.project, matrix.config)
+                matrix_id = matrix.id
+                opp_file = matrix.opp_file
             else:
-                # No matrix linked — create a single smoke test job
-                jobs = [{"project": project.name, "test": "smoke"}]
+                # No matrix linked — synthesize a single smoke-test job
+                # against the project. The webhook still needs a
+                # TestMatrixRun to group it; we treat the absence of a
+                # matrix as "synthetic", so skip the matrix_run grouping
+                # by leaving matrix_run_id NULL for these.
+                jobs = [{"project": project.name, "kind": "smoke"}]
+                matrix_id = None
+                opp_file = None
 
-            opp_file = matrix.opp_file if matrix else None
-            for job in jobs:
-                job_ref = job.get("git_ref") or git_ref
-                existing = find_existing_run(
+            matrix_run = None
+            if matrix_id is not None:
+                matrix_run = create_matrix_run(
                     session,
-                    project=job.get("project", project.name),
-                    test=job.get("test", "smoke"),
-                    mode=job.get("mode"),
-                    git_ref=job_ref,
-                    os=job.get("os"),
-                    os_version=job.get("os_version"),
-                    distro=job.get("distro"),
-                    distro_version=job.get("distro_version"),
-                    flavor=job.get("flavor"),
-                    flavor_version=job.get("flavor_version"),
-                    arch=job.get("arch"),
-                    compiler=job.get("compiler"),
-                    compiler_version=job.get("compiler_version"),
-                )
-                if existing:
-                    continue
-                # Use the job's own ref as the GitHub status SHA when it
-                # looks like a commit hash (from ref-range expansion).
-                # Otherwise fall back to the push HEAD.
-                job_sha = job_ref if job_ref and len(job_ref) >= 40 else commit_sha
-                run = TestRun(
-                    project=job.get("project", project.name),
-                    test=job.get("test", "smoke"),
-                    mode=job.get("mode"),
-                    git_ref=job_ref,
-                    opp_file=opp_file,
-                    os=job.get("os"),
-                    os_version=job.get("os_version"),
-                    distro=job.get("distro"),
-                    distro_version=job.get("distro_version"),
-                    flavor=job.get("flavor"),
-                    flavor_version=job.get("flavor_version"),
-                    arch=job.get("arch"),
-                    compiler=job.get("compiler"),
-                    compiler_version=job.get("compiler_version"),
-                    platform_desc=job.get("platform_desc"),
-                    resolved_deps=job.get("resolved_deps"),
-                    matrix_id=rule.matrix_id,
-                    status=TestRunStatus.queued,
+                    matrix_id=matrix_id,
                     trigger="webhook",
                     github_owner=owner,
                     github_repo=repo,
-                    github_commit_sha=job_sha,
+                    github_commit_sha=commit_sha,
                     github_pr_number=pr_number,
                 )
-                session.add(run)
-                session.flush()
+
+            for job in jobs:
+                job_ref = job.get("git_ref") or git_ref
+                job_with_ref = dict(job)
+                job_with_ref["git_ref"] = job_ref
+                run = enqueue_job(
+                    session, job_with_ref,
+                    project=job.get("project", project.name),
+                    opp_file=opp_file,
+                    matrix_run_id=matrix_run.id if matrix_run else None,
+                )
                 run_ids.append(run.id)
                 total_queued += 1
 

@@ -4,7 +4,7 @@ from html import escape as html_escape
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, Form, Request, Query
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 from sqlalchemy import select, func
@@ -13,7 +13,12 @@ from starlette.middleware.sessions import SessionMiddleware
 from opp_ci import config as cfg
 from opp_ci.auth import get_csrf_token, require_csrf, require_user
 from opp_ci.db.connection import SessionLocal
-from opp_ci.db.models import Project, Version, OS, Compiler, TestMatrix, AutoTestRule, TestRun, TestRunStatus, TestResult, Worker, ApiToken, User
+from opp_ci.db.models import (
+    ApiToken, AutoTestRule, Compiler, OS, Project, Test, TestMatrix,
+    TestMatrixRun, TestResultCode, TestRun, TestRunLifecycle, User, Version,
+    Worker,
+)
+from opp_ci.persistence import create_matrix_run, enqueue_job, get_or_create_test, create_test_run
 
 _ANSI_RE = re.compile(r'\x1b\[([0-9;]*)m')
 
@@ -120,6 +125,20 @@ from opp_ci.web.login import router as login_router
 app.include_router(api_router)
 app.include_router(login_router)
 
+
+_FAVICON_SVG = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
+    b'<rect width="16" height="16" rx="3" fill="#1f6feb"/>'
+    b'<text x="8" y="12" font-family="monospace" font-size="10" '
+    b'font-weight="bold" text-anchor="middle" fill="#fff">CI</text>'
+    b'</svg>'
+)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
+
 templates_dir = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 templates.env.filters["ansi_to_html"] = _ansi_to_html
@@ -148,9 +167,15 @@ def dashboard(request: Request, current_user: User = Depends(require_user())):
         ).scalars().all()
 
         total_runs = session.execute(select(func.count(TestRun.id))).scalar()
-        passed = session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.PASS)).scalar()
-        failed = session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.FAIL)).scalar()
-        errored = session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.ERROR)).scalar()
+        passed = session.execute(
+            select(func.count(TestRun.id)).where(TestRun.result_code == TestResultCode.PASS)
+        ).scalar()
+        failed = session.execute(
+            select(func.count(TestRun.id)).where(TestRun.result_code == TestResultCode.FAIL)
+        ).scalar()
+        errored = session.execute(
+            select(func.count(TestRun.id)).where(TestRun.result_code == TestResultCode.ERROR)
+        ).scalar()
 
         return templates.TemplateResponse(request, "dashboard.html", {
             "recent_runs": recent_runs,
@@ -170,10 +195,14 @@ def queue_page(request: Request, current_user: User = Depends(require_user()),
     session = SessionLocal()
     try:
         running = session.execute(
-            select(TestRun).where(TestRun.status == TestRunStatus.running).order_by(TestRun.started_at.desc())
+            select(TestRun)
+            .where(TestRun.lifecycle == TestRunLifecycle.running)
+            .order_by(TestRun.started_at.desc())
         ).scalars().all()
         queued = session.execute(
-            select(TestRun).where(TestRun.status == TestRunStatus.queued).order_by(TestRun.id)
+            select(TestRun)
+            .where(TestRun.lifecycle == TestRunLifecycle.queued)
+            .order_by(TestRun.id)
         ).scalars().all()
 
         return templates.TemplateResponse(request, "queue.html", {
@@ -192,30 +221,35 @@ def runs_list(
     request: Request,
     current_user: User = Depends(require_user()),
     project: str = Query(default=None),
-    test: str = Query(default=None),
+    kind: str = Query(default=None),
     git_ref: str = Query(default=None),
     status: str = Query(default=None),
     limit: int = Query(default=50),
 ):
     session = SessionLocal()
     try:
-        query = select(TestRun).order_by(TestRun.id.desc()).limit(limit)
+        query = (
+            select(TestRun)
+            .join(Test, TestRun.test_id == Test.id)
+            .order_by(TestRun.id.desc())
+            .limit(limit)
+        )
         if project:
-            query = query.where(TestRun.project == project)
-        if test:
-            query = query.where(TestRun.test == test)
+            query = query.where(Test.project == project)
+        if kind:
+            query = query.where(Test.kind == kind)
         if git_ref:
             query = query.where(
                 (TestRun.git_ref == git_ref) | (TestRun.commit_sha.startswith(git_ref))
             )
         if status:
-            query = query.where(TestRun.status == TestRunStatus(status))
+            query = query.where(_status_filter(status))
 
         runs = session.execute(query).scalars().all()
         return templates.TemplateResponse(request, "runs.html", {
             "runs": runs,
             "filter_project": project or "",
-            "filter_test": test or "",
+            "filter_kind": kind or "",
             "filter_git_ref": git_ref or "",
             "filter_status": status or "",
             **_template_globals(request, current_user),
@@ -224,12 +258,30 @@ def runs_list(
         session.close()
 
 
+def _status_filter(status):
+    """Translate a status filter string into a WHERE-clause expression.
+
+    A status string is either a lifecycle value (queued/running/cancelled/
+    timed_out) — match TestRun.lifecycle — or an outcome value
+    (PASS/FAIL/ERROR/SKIPPED) — match TestRun.result_code on finished rows.
+    """
+    try:
+        return TestRun.lifecycle == TestRunLifecycle(status)
+    except ValueError:
+        pass
+    try:
+        return TestRun.result_code == TestResultCode(status)
+    except ValueError:
+        pass
+    return TestRun.lifecycle == TestRunLifecycle.queued  # no-op fallback that returns no rows
+
+
 @web_router.get("/results", response_class=HTMLResponse)
 def results_page(
     request: Request,
     current_user: User = Depends(require_user()),
     project: str = Query(default=None),
-    test: str = Query(default=None),
+    kind: str = Query(default=None),
     mode: str = Query(default=None),
     os: str = Query(default=None, alias="os"),
     os_version: str = Query(default=None),
@@ -249,34 +301,39 @@ def results_page(
 
     session = SessionLocal()
     try:
-        query = select(TestRun).order_by(TestRun.id.desc()).limit(limit)
+        query = (
+            select(TestRun)
+            .join(Test, TestRun.test_id == Test.id)
+            .order_by(TestRun.id.desc())
+            .limit(limit)
+        )
         if run_ids:
             ids = [int(x) for x in run_ids.split(",") if x.strip().isdigit()]
             query = query.where(TestRun.id.in_(ids))
         if project:
-            query = query.where(TestRun.project == project)
-        if test:
-            query = query.where(TestRun.test == test)
+            query = query.where(Test.project == project)
+        if kind:
+            query = query.where(Test.kind == kind)
         if mode:
-            query = query.where(TestRun.mode == mode)
+            query = query.where(Test.mode == mode)
         if os:
-            query = query.where(TestRun.os == os)
+            query = query.where(Test.os == os)
         if os_version:
-            query = query.where(TestRun.os_version == os_version)
+            query = query.where(Test.os_version == os_version)
         if distro:
-            query = query.where(TestRun.distro == distro.lower())
+            query = query.where(Test.distro == distro.lower())
         if distro_version:
-            query = query.where(TestRun.distro_version == distro_version)
+            query = query.where(Test.distro_version == distro_version)
         if flavor:
-            query = query.where(TestRun.flavor == flavor.lower())
+            query = query.where(Test.flavor == flavor.lower())
         if flavor_version:
-            query = query.where(TestRun.flavor_version == flavor_version)
+            query = query.where(Test.flavor_version == flavor_version)
         if compiler:
-            query = query.where(TestRun.compiler == compiler)
+            query = query.where(Test.compiler == compiler)
         if compiler_version:
-            query = query.where(TestRun.compiler_version == compiler_version)
+            query = query.where(Test.compiler_version == compiler_version)
         if status:
-            query = query.where(TestRun.status == TestRunStatus(status))
+            query = query.where(_status_filter(status))
 
         runs = session.execute(query).scalars().all()
 
@@ -290,7 +347,7 @@ def results_page(
             "view": view,
             "grouping": grouping,
             "filter_project": project or "",
-            "filter_test": test or "",
+            "filter_kind": kind or "",
             "filter_mode": mode or "",
             "filter_os": os or "",
             "filter_os_version": os_version or "",
@@ -316,7 +373,7 @@ def compare_page(
     project: str = Query(default=None),
     ref_a: str = Query(default=None, description="Git ref for side A"),
     ref_b: str = Query(default=None, description="Git ref for side B"),
-    test: str = Query(default=None),
+    kind: str = Query(default=None),
 ):
     """Compare two runs or two refs side-by-side."""
     session = SessionLocal()
@@ -325,31 +382,26 @@ def compare_page(
         right_runs = []
         left_label = ""
         right_label = ""
-        left_results = []
-        right_results = []
 
         if run_a and run_b:
-            # Compare two specific runs
             left_run = session.execute(select(TestRun).where(TestRun.id == run_a)).scalar_one_or_none()
             right_run = session.execute(select(TestRun).where(TestRun.id == run_b)).scalar_one_or_none()
             if left_run:
                 left_runs = [left_run]
                 left_label = f"Run #{left_run.id} ({left_run.project}{'@' + left_run.git_ref if left_run.git_ref else ''})"
-                left_results = session.execute(
-                    select(TestResult).where(TestResult.test_run_id == left_run.id)
-                ).scalars().all()
             if right_run:
                 right_runs = [right_run]
                 right_label = f"Run #{right_run.id} ({right_run.project}{'@' + right_run.git_ref if right_run.git_ref else ''})"
-                right_results = session.execute(
-                    select(TestResult).where(TestResult.test_run_id == right_run.id)
-                ).scalars().all()
 
         elif project and ref_a and ref_b:
-            # Compare by branch/ref — find most recent runs for each ref
-            query_base = select(TestRun).where(TestRun.project == project).order_by(TestRun.id.desc())
-            if test:
-                query_base = query_base.where(TestRun.test == test)
+            query_base = (
+                select(TestRun)
+                .join(Test, TestRun.test_id == Test.id)
+                .where(Test.project == project)
+                .order_by(TestRun.id.desc())
+            )
+            if kind:
+                query_base = query_base.where(Test.kind == kind)
 
             left_runs = session.execute(
                 query_base.where(TestRun.git_ref == ref_a).limit(20)
@@ -360,17 +412,7 @@ def compare_page(
             left_label = f"{project}@{ref_a}"
             right_label = f"{project}@{ref_b}"
 
-            if left_runs:
-                left_results = session.execute(
-                    select(TestResult).where(TestResult.test_run_id.in_([r.id for r in left_runs]))
-                ).scalars().all()
-            if right_runs:
-                right_results = session.execute(
-                    select(TestResult).where(TestResult.test_run_id.in_([r.id for r in right_runs]))
-                ).scalars().all()
-
-        # Build comparison data: match tests by name/type
-        diff = _build_comparison_diff(left_runs, left_results, right_runs, right_results)
+        diff = _build_comparison_diff(left_runs, right_runs)
 
         return templates.TemplateResponse(request, "compare.html", {
             "left_label": left_label,
@@ -383,34 +425,25 @@ def compare_page(
             "filter_project": project or "",
             "ref_a": ref_a or "",
             "ref_b": ref_b or "",
-            "filter_test": test or "",
+            "filter_kind": kind or "",
             **_template_globals(request, current_user),
         })
     finally:
         session.close()
 
 
-def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
+def _build_comparison_diff(left_runs, right_runs):
+    """Build a list of comparison rows.
+
+    Each row: {kind_key, left_status, right_status, changed,
+               left_duration, right_duration}
+
+    Two-run comparison drills into `TestRun.details["results"]`. The
+    multi-run (branch) comparison just groups by `Test.kind`.
     """
-    Build a list of comparison rows.
-
-    Each row: {test_key, left_status, right_status, changed, left_duration, right_duration}
-    """
-    def _result_key(result):
-        # Use test_run's test + result parameters as key
-        return result.result_code  # fallback
-
-    def _results_by_run(runs, results):
-        """Map run_id → results list."""
-        by_run = {}
-        for r in results:
-            by_run.setdefault(r.test_run_id, []).append(r)
-        return by_run
-
-    # For simple two-run comparison
     if len(left_runs) == 1 and len(right_runs) == 1:
-        left_detail = left_results[0].details if left_results else None
-        right_detail = right_results[0].details if right_results else None
+        left_detail = left_runs[0].details
+        right_detail = right_runs[0].details
 
         left_tests = {}
         right_tests = {}
@@ -435,7 +468,7 @@ def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
             left_dur = lt.get("elapsed_wall_time") if lt else None
             right_dur = rt.get("elapsed_wall_time") if rt else None
             rows.append({
-                "test_key": key or "(unnamed)",
+                "kind_key": key or "(unnamed)",
                 "left_status": left_status,
                 "right_status": right_status,
                 "changed": left_status != right_status,
@@ -444,25 +477,26 @@ def _build_comparison_diff(left_runs, left_results, right_runs, right_results):
             })
         return rows
 
-    # For multi-run (branch) comparison: compare by test
-    left_by_type = {}
-    right_by_type = {}
+    left_by_kind = {}
+    right_by_kind = {}
     for r in left_runs:
-        left_by_type.setdefault(r.test, []).append(r)
+        left_by_kind.setdefault(r.kind, []).append(r)
     for r in right_runs:
-        right_by_type.setdefault(r.test, []).append(r)
+        right_by_kind.setdefault(r.kind, []).append(r)
 
-    all_types = list(dict.fromkeys(list(left_by_type.keys()) + list(right_by_type.keys())))
+    all_kinds = list(dict.fromkeys(list(left_by_kind.keys()) + list(right_by_kind.keys())))
     rows = []
-    for tt in all_types:
-        l_runs = left_by_type.get(tt, [])
-        r_runs = right_by_type.get(tt, [])
-        l_statuses = set(r.status.value for r in l_runs)
-        r_statuses = set(r.status.value for r in r_runs)
-        left_status = l_statuses.pop() if len(l_statuses) == 1 else "/".join(sorted(l_statuses)) if l_statuses else "-"
-        right_status = r_statuses.pop() if len(r_statuses) == 1 else "/".join(sorted(r_statuses)) if r_statuses else "-"
+    for kk in all_kinds:
+        l_runs = left_by_kind.get(kk, [])
+        r_runs = right_by_kind.get(kk, [])
+        l_statuses = set(r.effective_status for r in l_runs if r.effective_status)
+        r_statuses = set(r.effective_status for r in r_runs if r.effective_status)
+        left_status = (l_statuses.pop() if len(l_statuses) == 1
+                       else "/".join(sorted(l_statuses)) if l_statuses else "-")
+        right_status = (r_statuses.pop() if len(r_statuses) == 1
+                        else "/".join(sorted(r_statuses)) if r_statuses else "-")
         rows.append({
-            "test_key": tt,
+            "kind_key": kk,
             "left_status": left_status,
             "right_status": right_status,
             "changed": left_status != right_status,
@@ -547,7 +581,7 @@ def run_new_submit(
     request: Request,
     current_user: User = Depends(require_user("submitter")),
     project: str = Form(...),
-    test: str = Form(...),
+    kind: str = Form(...),
     mode: str = Form(default=""),
     git_ref: str = Form(default=""),
     version: str = Form(default=""),
@@ -564,9 +598,7 @@ def run_new_submit(
     isolation: str = Form(default="none"),
     toolchain: str = Form(default="none"),
 ):
-    import datetime
     from opp_ci import platforms
-    from opp_ci.scheduler import _build_platform_desc
 
     session = SessionLocal()
     try:
@@ -586,34 +618,31 @@ def run_new_submit(
         os_ver_clean = (os_version or None) if os_canon and os_canon != "Linux" else None
         distro_ver_clean = (distro_version or None) if r_distro else None
         flavor_ver_clean = (flavor_version or None) if r_flavor else None
-        run = TestRun(
-            project=project,
-            test=test,
-            mode=mode or None,
+        coord = {
+            "project": project,
+            "kind": kind,
+            "mode": mode or None,
+            "os": os_canon,
+            "os_version": os_ver_clean,
+            "distro": r_distro,
+            "distro_version": distro_ver_clean,
+            "flavor": r_flavor,
+            "flavor_version": flavor_ver_clean,
+            "arch": arch or None,
+            "compiler": compiler or None,
+            "compiler_version": compiler_version or None,
+            "isolation": isolation or None,
+            "toolchain": toolchain or None,
+            "opp_file": None,
+        }
+        test = get_or_create_test(session, coord)
+        run = create_test_run(
+            session,
+            test_id=test.id,
             git_ref=git_ref or None,
             version=version or None,
             resolved_deps=resolved_deps,
-            os=os_canon,
-            os_version=os_ver_clean,
-            distro=r_distro,
-            distro_version=distro_ver_clean,
-            flavor=r_flavor,
-            flavor_version=flavor_ver_clean,
-            arch=arch or None,
-            compiler=compiler or None,
-            compiler_version=compiler_version or None,
-            isolation=isolation or None,
-            toolchain=toolchain or None,
-            platform_desc=_build_platform_desc(
-                os_canon, os_ver_clean, arch or None, compiler or None, compiler_version or None,
-                distro=r_distro, distro_version=distro_ver_clean,
-                flavor=r_flavor, flavor_version=flavor_ver_clean,
-            ),
-            status=TestRunStatus.queued,
-            trigger="web",
-            started_at=datetime.datetime.utcnow(),
         )
-        session.add(run)
         session.commit()
         return RedirectResponse(url=f"/runs/{run.id}", status_code=303)
     finally:
@@ -624,9 +653,7 @@ def run_new_submit(
 def run_new_matrix(request: Request,
                    current_user: User = Depends(require_user("submitter")),
                    matrix_name: str = Form(...)):
-    import datetime
     from opp_ci.scheduler import expand_matrix
-    from opp_ci.executor import find_existing_run
 
     session = SessionLocal()
     try:
@@ -639,73 +666,29 @@ def run_new_matrix(request: Request,
                 status_code=303,
             )
 
-        jobs = expand_matrix(matrix.project, matrix.config)
-
-        # Resolve GitHub info from the project record
         proj = session.execute(
             select(Project).where(Project.name == matrix.project)
         ).scalar_one_or_none()
-        gh_owner = proj.github_owner if proj else None
-        gh_repo = proj.github_repo if proj else None
+        matrix_run = create_matrix_run(
+            session,
+            matrix_id=matrix.id,
+            trigger="web",
+            github_owner=proj.github_owner if proj else None,
+            github_repo=proj.github_repo if proj else None,
+        )
 
+        jobs = expand_matrix(matrix.project, matrix.config)
         queued = 0
-        skipped = 0
         for job in jobs:
-            existing = find_existing_run(
-                session,
-                project=job.get("project", matrix.project),
-                version=job.get("version"),
-                test=job.get("test", "smoke"),
-                mode=job.get("mode"),
-                git_ref=job.get("git_ref"),
-                os=job.get("os"),
-                os_version=job.get("os_version"),
-                distro=job.get("distro"),
-                distro_version=job.get("distro_version"),
-                flavor=job.get("flavor"),
-                flavor_version=job.get("flavor_version"),
-                arch=job.get("arch"),
-                compiler=job.get("compiler"),
-                compiler_version=job.get("compiler_version"),
-                isolation=job.get("isolation"),
-                toolchain=job.get("toolchain"),
-            )
-            if existing:
-                skipped += 1
-                continue
-
-            run = TestRun(
-                project=job.get("project", matrix.project),
-                version=job.get("version"),
-                test=job.get("test", "smoke"),
-                mode=job.get("mode"),
-                git_ref=job.get("git_ref"),
-                os=job.get("os"),
-                os_version=job.get("os_version"),
-                distro=job.get("distro"),
-                distro_version=job.get("distro_version"),
-                flavor=job.get("flavor"),
-                flavor_version=job.get("flavor_version"),
-                arch=job.get("arch"),
-                compiler=job.get("compiler"),
-                compiler_version=job.get("compiler_version"),
-                isolation=job.get("isolation"),
-                toolchain=job.get("toolchain"),
-                platform_desc=job.get("platform_desc"),
-                resolved_deps=job.get("resolved_deps"),
+            enqueue_job(
+                session, job,
+                project=matrix.project,
                 opp_file=matrix.opp_file,
-                matrix_id=matrix.id,
-                github_owner=gh_owner,
-                github_repo=gh_repo,
-                status=TestRunStatus.queued,
-                trigger="web",
+                matrix_run_id=matrix_run.id,
             )
-            session.add(run)
             queued += 1
         session.commit()
         msg = f"Queued+{queued}+jobs+from+matrix+{matrix_name}"
-        if skipped:
-            msg += f"+(skipped+{skipped}+already+completed)"
         return RedirectResponse(
             url=f"/queue?message={msg}&message_type=success",
             status_code=303,
@@ -716,7 +699,6 @@ def run_new_matrix(request: Request,
 
 @web_router.post("/runs/{run_id}/rerun", dependencies=[Depends(require_csrf)])
 def run_rerun(run_id: int, current_user: User = Depends(require_user("submitter"))):
-    import datetime
     session = SessionLocal()
     try:
         original = session.execute(
@@ -725,30 +707,15 @@ def run_rerun(run_id: int, current_user: User = Depends(require_user("submitter"
         if original is None:
             return RedirectResponse(url="/runs", status_code=303)
 
-        new_run = TestRun(
-            project=original.project,
-            version=original.version,
-            test=original.test,
-            mode=original.mode,
+        # Same Test (coord), fresh TestRun row. matrix_run_id stays NULL —
+        # an ad-hoc rerun is not part of any matrix run.
+        new_run = create_test_run(
+            session,
+            test_id=original.test_id,
             git_ref=original.git_ref,
-            os=original.os,
-            os_version=original.os_version,
-            distro=original.distro,
-            distro_version=original.distro_version,
-            flavor=original.flavor,
-            flavor_version=original.flavor_version,
-            arch=original.arch,
-            compiler=original.compiler,
-            compiler_version=original.compiler_version,
-            platform_desc=original.platform_desc,
-            opp_file=original.opp_file,
-            matrix_id=original.matrix_id,
-            github_owner=original.github_owner,
-            github_repo=original.github_repo,
-            status=TestRunStatus.queued,
-            trigger="rerun",
+            version=original.version,
+            resolved_deps=original.resolved_deps,
         )
-        session.add(new_run)
         session.commit()
         return RedirectResponse(url=f"/runs/{new_run.id}", status_code=303)
     finally:
@@ -757,20 +724,17 @@ def run_rerun(run_id: int, current_user: User = Depends(require_user("submitter"
 
 @web_router.post("/runs/{run_id}/cancel", dependencies=[Depends(require_csrf)])
 def run_cancel(run_id: int, current_user: User = Depends(require_user("submitter"))):
+    """Cancel a queued run. Running runs are left to finish — see the
+    locked decision in plan/pending/test-data-model-redesign.md."""
     import datetime
     session = SessionLocal()
     try:
         run = session.execute(
             select(TestRun).where(TestRun.id == run_id)
         ).scalar_one_or_none()
-        if run and run.status in (TestRunStatus.queued, TestRunStatus.running):
-            run.status = TestRunStatus.ERROR
+        if run and run.lifecycle == TestRunLifecycle.queued:
+            run.lifecycle = TestRunLifecycle.cancelled
             run.finished_at = datetime.datetime.utcnow()
-            session.add(TestResult(
-                test_run_id=run.id,
-                result_code="CANCELLED",
-                stderr="Cancelled from web UI",
-            ))
             session.commit()
         return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
     finally:
@@ -787,13 +751,8 @@ def run_detail(request: Request, run_id: int, current_user: User = Depends(requi
         if run is None:
             return HTMLResponse("<h1>Not found</h1>", status_code=404)
 
-        results = session.execute(
-            select(TestResult).where(TestResult.test_run_id == run_id)
-        ).scalars().all()
-
         return templates.TemplateResponse(request, "run_detail.html", {
             "run": run,
-            "results": results,
             **_template_globals(request, current_user),
         })
     finally:
@@ -817,16 +776,20 @@ def projects_list(
         last_status = {}
         for p in projects:
             count = session.execute(
-                select(func.count(TestRun.id)).where(TestRun.project == p.name)
+                select(func.count(TestRun.id))
+                .join(Test, TestRun.test_id == Test.id)
+                .where(Test.project == p.name)
             ).scalar()
             run_counts[p.name] = count
             last_run = session.execute(
-                select(TestRun).where(
-                    TestRun.project == p.name,
-                    TestRun.status.in_([TestRunStatus.PASS, TestRunStatus.FAIL, TestRunStatus.ERROR]),
+                select(TestRun)
+                .join(Test, TestRun.test_id == Test.id)
+                .where(
+                    Test.project == p.name,
+                    TestRun.lifecycle == TestRunLifecycle.finished,
                 ).order_by(TestRun.id.desc()).limit(1)
             ).scalar_one_or_none()
-            last_status[p.name] = last_run.status.value if last_run else None
+            last_status[p.name] = last_run.effective_status if last_run else None
 
         return templates.TemplateResponse(request, "projects.html", {
             "projects": projects,
@@ -914,13 +877,28 @@ def project_detail(request: Request, name: str, current_user: User = Depends(req
         ).scalars().all()
 
         recent_runs = session.execute(
-            select(TestRun).where(TestRun.project == name).order_by(TestRun.id.desc()).limit(30)
+            select(TestRun)
+            .join(Test, TestRun.test_id == Test.id)
+            .where(Test.project == name)
+            .order_by(TestRun.id.desc()).limit(30)
         ).scalars().all()
 
         # Stats
-        total = session.execute(select(func.count(TestRun.id)).where(TestRun.project == name)).scalar()
-        passed = session.execute(select(func.count(TestRun.id)).where(TestRun.project == name, TestRun.status == TestRunStatus.PASS)).scalar()
-        failed = session.execute(select(func.count(TestRun.id)).where(TestRun.project == name, TestRun.status == TestRunStatus.FAIL)).scalar()
+        total = session.execute(
+            select(func.count(TestRun.id))
+            .join(Test, TestRun.test_id == Test.id)
+            .where(Test.project == name)
+        ).scalar()
+        passed = session.execute(
+            select(func.count(TestRun.id))
+            .join(Test, TestRun.test_id == Test.id)
+            .where(Test.project == name, TestRun.result_code == TestResultCode.PASS)
+        ).scalar()
+        failed = session.execute(
+            select(func.count(TestRun.id))
+            .join(Test, TestRun.test_id == Test.id)
+            .where(Test.project == name, TestRun.result_code == TestResultCode.FAIL)
+        ).scalar()
 
         return templates.TemplateResponse(request, "project_detail.html", {
             "project": project,
@@ -941,10 +919,10 @@ def commit_detail(request: Request, project: str, sha: str,
     session = SessionLocal()
     try:
         runs = session.execute(
-            select(TestRun).where(
-                TestRun.project == project,
-                TestRun.commit_sha == sha,
-            ).order_by(TestRun.id.desc())
+            select(TestRun)
+            .join(Test, TestRun.test_id == Test.id)
+            .where(Test.project == project, TestRun.commit_sha == sha)
+            .order_by(TestRun.id.desc())
         ).scalars().all()
         return templates.TemplateResponse(request, "commit_detail.html", {
             "project": project,
@@ -1009,7 +987,9 @@ def matrices_list(
         run_counts = {}
         for m in matrices:
             count = session.execute(
-                select(func.count(TestRun.id)).where(TestRun.matrix_id == m.id)
+                select(func.count(TestRun.id))
+                .join(TestMatrixRun, TestRun.matrix_run_id == TestMatrixRun.id)
+                .where(TestMatrixRun.matrix_id == m.id)
             ).scalar()
             run_counts[m.id] = count
 
@@ -1097,7 +1077,10 @@ def matrix_detail(request: Request, matrix_id: int,
         jobs = expand_matrix(matrix.project, matrix.config)
 
         recent_runs = session.execute(
-            select(TestRun).where(TestRun.matrix_id == matrix_id).order_by(TestRun.id.desc()).limit(50)
+            select(TestRun)
+            .join(TestMatrixRun, TestRun.matrix_run_id == TestMatrixRun.id)
+            .where(TestMatrixRun.matrix_id == matrix_id)
+            .order_by(TestRun.id.desc()).limit(50)
         ).scalars().all()
 
         return templates.TemplateResponse(request, "matrix_detail.html", {
@@ -1122,7 +1105,7 @@ def matrix_create(
     current_user: User = Depends(require_user("submitter")),
     name: str = Form(...),
     project: str = Form(...),
-    tests: str = Form(default=""),
+    kinds: str = Form(default=""),
     modes: str = Form(default=""),
     versions: str = Form(default=""),
     omnetpp_versions: str = Form(default=""),
@@ -1154,7 +1137,7 @@ def matrix_create(
 
         config = {}
         axes = {
-            "tests": _split_csv(tests),
+            "kinds": _split_csv(kinds),
             "modes": _split_csv(modes),
             "versions": _split_csv(versions),
             "refs": _split_csv(refs),
@@ -1580,13 +1563,15 @@ def admin_page(request: Request, current_user: User = Depends(require_user("admi
             "os_entries": session.execute(select(func.count(OS.id))).scalar(),
             "compilers": session.execute(select(func.count(Compiler.id))).scalar(),
             "matrices": session.execute(select(func.count(TestMatrix.id))).scalar(),
+            "tests": session.execute(select(func.count(Test.id))).scalar(),
+            "matrix_runs": session.execute(select(func.count(TestMatrixRun.id))).scalar(),
             "runs_total": session.execute(select(func.count(TestRun.id))).scalar(),
-            "runs_passed": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.PASS)).scalar(),
-            "runs_failed": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.FAIL)).scalar(),
-            "runs_error": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.ERROR)).scalar(),
-            "runs_running": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.running)).scalar(),
-            "runs_queued": session.execute(select(func.count(TestRun.id)).where(TestRun.status == TestRunStatus.queued)).scalar(),
-            "results": session.execute(select(func.count(TestResult.id))).scalar(),
+            "runs_passed": session.execute(select(func.count(TestRun.id)).where(TestRun.result_code == TestResultCode.PASS)).scalar(),
+            "runs_failed": session.execute(select(func.count(TestRun.id)).where(TestRun.result_code == TestResultCode.FAIL)).scalar(),
+            "runs_error": session.execute(select(func.count(TestRun.id)).where(TestRun.result_code == TestResultCode.ERROR)).scalar(),
+            "runs_running": session.execute(select(func.count(TestRun.id)).where(TestRun.lifecycle == TestRunLifecycle.running)).scalar(),
+            "runs_queued": session.execute(select(func.count(TestRun.id)).where(TestRun.lifecycle == TestRunLifecycle.queued)).scalar(),
+            "runs_cancelled": session.execute(select(func.count(TestRun.id)).where(TestRun.lifecycle == TestRunLifecycle.cancelled)).scalar(),
             "workers_total": session.execute(select(func.count(Worker.id))).scalar(),
             "workers_online": session.execute(select(func.count(Worker.id)).where(Worker.status == "online")).scalar(),
             "tokens": session.execute(select(func.count(ApiToken.id))).scalar(),
@@ -1598,7 +1583,7 @@ def admin_page(request: Request, current_user: User = Depends(require_user("admi
         ).scalars().all()
 
         recent_errors = session.execute(
-            select(TestRun).where(TestRun.status == TestRunStatus.ERROR).order_by(TestRun.id.desc()).limit(10)
+            select(TestRun).where(TestRun.result_code == TestResultCode.ERROR).order_by(TestRun.id.desc()).limit(10)
         ).scalars().all()
 
         tokens = session.execute(

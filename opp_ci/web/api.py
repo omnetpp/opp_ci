@@ -2,7 +2,7 @@
 REST API for opp_ci — remote workers, job submission, and GitHub integration.
 
 Endpoints:
-    POST /api/runs              — submit a test run (submitter+)
+    POST /api/runs              — submit a single test run (submitter+)
     POST /api/runs/matrix       — submit a matrix run (submitter+)
     GET  /api/runs              — list runs (readonly+)
     GET  /api/runs/{run_id}     — get run detail (readonly+)
@@ -35,8 +35,12 @@ from sqlalchemy import func, select
 from opp_ci.auth import require_role, require_worker_token
 from opp_ci.db.connection import SessionLocal
 from opp_ci.db.models import (
-    Base, Worker, ApiToken, TestRun, TestRunStatus, TestResult, TestMatrix,
-    Project, AutoTestRule,
+    ApiToken, AutoTestRule, Project, Test, TestMatrix, TestMatrixRun,
+    TestResultCode, TestRun, TestRunLifecycle, Worker,
+)
+from opp_ci.persistence import (
+    create_matrix_run, create_test_run, enqueue_job, get_or_create_test,
+    job_to_coord,
 )
 
 _logger = logging.getLogger(__name__)
@@ -48,9 +52,10 @@ router = APIRouter(prefix="/api")
 
 class SubmitRunRequest(BaseModel):
     project: str
-    test: str
+    kind: str                       # smoke, fingerprint, statistical, build, …
     mode: str | None = None
     git_ref: str | None = None
+    version: str | None = None
     os: str | None = None           # "Linux" | "Windows" | "MacOS"
     os_version: str | None = None   # Windows/MacOS only
     distro: str | None = None       # Linux only — "ubuntu", "fedora", ...
@@ -62,7 +67,6 @@ class SubmitRunRequest(BaseModel):
     compiler_version: str | None = None
     isolation: str | None = None    # "none" | "podman"
     toolchain: str | None = None    # "none" | "nix"
-    force: bool = False
 
 class SubmitMatrixRequest(BaseModel):
     matrix_name: str
@@ -71,6 +75,10 @@ class WorkerRegisterRequest(BaseModel):
     name: str
     tags: list[str] = Field(default_factory=list)
     concurrency: int = 1
+
+class WorkerSnapshotRequest(BaseModel):
+    run_id: int
+    snapshot: dict
 
 class WorkerResultRequest(BaseModel):
     run_id: int
@@ -85,34 +93,6 @@ class CreateTokenRequest(BaseModel):
     name: str
     role: str = "readonly"
 
-class RunResponse(BaseModel):
-    id: int
-    project: str
-    test: str
-    mode: str | None
-    git_ref: str | None
-    status: str
-    trigger: str | None
-    started_at: str | None
-    finished_at: str | None
-    duration_seconds: float | None
-    worker_id: int | None
-
-    class Config:
-        from_attributes = True
-
-class WorkerResponse(BaseModel):
-    id: int
-    name: str
-    tags: list[str]
-    concurrency: int
-    status: str
-    last_heartbeat: str | None
-    current_job_count: int
-
-    class Config:
-        from_attributes = True
-
 
 # ── Run submission ─────────────────────────────────────────────────────
 
@@ -121,9 +101,11 @@ async def submit_run(
     req: SubmitRunRequest,
     identity: dict = Depends(require_role("submitter")),
 ):
-    """Submit a single test run to the queue."""
-    from opp_ci.executor import find_existing_run
+    """Submit a single test run to the queue.
 
+    Always creates a new TestRun (and a new Test on first occurrence of
+    the coordinate); there is no result-cache dedup at submission time.
+    """
     session = SessionLocal()
     try:
         from opp_ci import platforms
@@ -134,65 +116,37 @@ async def submit_run(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         os_canon = platforms._os_canonical(resolved_os) if resolved_os else None
-        distro_value = resolved_distro
-        flavor_value = resolved_flavor
         os_ver = req.os_version if os_canon and os_canon != "Linux" else None
-        distro_ver = req.distro_version if distro_value else None
-        flavor_ver = req.flavor_version if flavor_value else None
+        distro_ver = req.distro_version if resolved_distro else None
+        flavor_ver = req.flavor_version if resolved_flavor else None
 
-        if not req.force:
-            existing = find_existing_run(
-                session,
-                project=req.project,
-                test=req.test,
-                mode=req.mode,
-                git_ref=req.git_ref,
-                os=os_canon,
-                os_version=os_ver,
-                distro=distro_value,
-                distro_version=distro_ver,
-                flavor=flavor_value,
-                flavor_version=flavor_ver,
-                arch=req.arch,
-                compiler=req.compiler,
-                compiler_version=req.compiler_version,
-                isolation=req.isolation,
-                toolchain=req.toolchain,
-            )
-            if existing:
-                return {"id": existing.id, "status": existing.status.value, "skipped": True}
-
-        from opp_ci.scheduler import _build_platform_desc
-        platform_desc = _build_platform_desc(
-            os_canon, os_ver, req.arch, req.compiler, req.compiler_version,
-            distro=distro_value, distro_version=distro_ver,
-            flavor=flavor_value, flavor_version=flavor_ver,
-        )
-
-        run = TestRun(
-            project=req.project,
-            test=req.test,
-            mode=req.mode,
+        coord = {
+            "project": req.project,
+            "kind": req.kind,
+            "mode": req.mode,
+            "os": os_canon,
+            "os_version": os_ver,
+            "distro": resolved_distro,
+            "distro_version": distro_ver,
+            "flavor": resolved_flavor,
+            "flavor_version": flavor_ver,
+            "arch": req.arch,
+            "compiler": req.compiler,
+            "compiler_version": req.compiler_version,
+            "isolation": req.isolation,
+            "toolchain": req.toolchain,
+            "opp_file": None,
+        }
+        test = get_or_create_test(session, coord)
+        run = create_test_run(
+            session,
+            test_id=test.id,
             git_ref=req.git_ref,
-            os=os_canon,
-            os_version=os_ver,
-            distro=distro_value,
-            distro_version=distro_ver,
-            flavor=flavor_value,
-            flavor_version=flavor_ver,
-            arch=req.arch,
-            compiler=req.compiler,
-            compiler_version=req.compiler_version,
-            isolation=req.isolation,
-            toolchain=req.toolchain,
-            platform_desc=platform_desc,
-            status=TestRunStatus.queued,
-            trigger="remote",
+            version=req.version,
         )
-        session.add(run)
         session.commit()
         _logger.info("Run #%d submitted by %s", run.id, identity.get("name"))
-        return {"id": run.id, "status": "queued"}
+        return {"id": run.id, "status": run.lifecycle.value}
     finally:
         session.close()
 
@@ -202,9 +156,8 @@ async def submit_matrix_run(
     req: SubmitMatrixRequest,
     identity: dict = Depends(require_role("submitter")),
 ):
-    """Expand a matrix and queue all jobs."""
+    """Expand a matrix and queue all jobs as a single TestMatrixRun."""
     from opp_ci.scheduler import expand_matrix
-    from opp_ci.executor import find_existing_run
 
     session = SessionLocal()
     try:
@@ -214,62 +167,37 @@ async def submit_matrix_run(
         if matrix is None:
             raise HTTPException(status_code=404, detail=f"Matrix '{req.matrix_name}' not found")
 
+        proj = session.execute(
+            select(Project).where(Project.name == matrix.project)
+        ).scalar_one_or_none()
+        matrix_run = create_matrix_run(
+            session,
+            matrix_id=matrix.id,
+            trigger="remote",
+            github_owner=proj.github_owner if proj else None,
+            github_repo=proj.github_repo if proj else None,
+        )
+
         jobs = expand_matrix(matrix.project, matrix.config)
         run_ids = []
-        skipped = 0
         for job in jobs:
-            existing = find_existing_run(
+            run = enqueue_job(
                 session,
-                project=job["project"],
-                test=job["test"],
-                mode=job.get("mode"),
-                git_ref=job.get("git_ref"),
-                os=job.get("os"),
-                os_version=job.get("os_version"),
-                distro=job.get("distro"),
-                distro_version=job.get("distro_version"),
-                flavor=job.get("flavor"),
-                flavor_version=job.get("flavor_version"),
-                arch=job.get("arch"),
-                compiler=job.get("compiler"),
-                compiler_version=job.get("compiler_version"),
-                isolation=job.get("isolation"),
-                toolchain=job.get("toolchain"),
-            )
-            if existing:
-                skipped += 1
-                continue
-
-            run = TestRun(
-                project=job["project"],
-                version=job.get("version"),
-                test=job["test"],
-                mode=job.get("mode"),
-                git_ref=job.get("git_ref"),
-                os=job.get("os"),
-                os_version=job.get("os_version"),
-                distro=job.get("distro"),
-                distro_version=job.get("distro_version"),
-                flavor=job.get("flavor"),
-                flavor_version=job.get("flavor_version"),
-                arch=job.get("arch"),
-                compiler=job.get("compiler"),
-                compiler_version=job.get("compiler_version"),
-                isolation=job.get("isolation"),
-                toolchain=job.get("toolchain"),
-                platform_desc=job.get("platform_desc"),
-                resolved_deps=job.get("resolved_deps"),
+                job,
+                project=matrix.project,
                 opp_file=matrix.opp_file,
-                matrix_id=matrix.id,
-                status=TestRunStatus.queued,
-                trigger="remote",
+                matrix_run_id=matrix_run.id,
             )
-            session.add(run)
-            session.flush()
             run_ids.append(run.id)
         session.commit()
-        _logger.info("Matrix '%s' queued %d jobs (%d skipped) by %s", req.matrix_name, len(run_ids), skipped, identity.get("name"))
-        return {"matrix": req.matrix_name, "jobs_queued": len(run_ids), "jobs_skipped": skipped, "run_ids": run_ids}
+        _logger.info("Matrix '%s' queued %d jobs (matrix_run=%d) by %s",
+                     req.matrix_name, len(run_ids), matrix_run.id, identity.get("name"))
+        return {
+            "matrix": req.matrix_name,
+            "matrix_run_id": matrix_run.id,
+            "jobs_queued": len(run_ids),
+            "run_ids": run_ids,
+        }
     finally:
         session.close()
 
@@ -277,7 +205,7 @@ async def submit_matrix_run(
 @router.get("/runs")
 async def list_runs(
     project: str | None = None,
-    test: str | None = None,
+    kind: str | None = None,
     status: str | None = None,
     os: str | None = None,
     os_version: str | None = None,
@@ -291,25 +219,30 @@ async def list_runs(
     """List test runs."""
     session = SessionLocal()
     try:
-        query = select(TestRun).order_by(TestRun.id.desc()).limit(limit)
+        query = (
+            select(TestRun)
+            .join(Test, TestRun.test_id == Test.id)
+            .order_by(TestRun.id.desc())
+            .limit(limit)
+        )
         if project:
-            query = query.where(TestRun.project == project)
-        if test:
-            query = query.where(TestRun.test == test)
+            query = query.where(Test.project == project)
+        if kind:
+            query = query.where(Test.kind == kind)
         if status:
-            query = query.where(TestRun.status == TestRunStatus(status))
+            query = query.where(TestRun.lifecycle == TestRunLifecycle(status))
         if os:
-            query = query.where(TestRun.os == os)
+            query = query.where(Test.os == os)
         if os_version:
-            query = query.where(TestRun.os_version == os_version)
+            query = query.where(Test.os_version == os_version)
         if distro:
-            query = query.where(TestRun.distro == distro.lower())
+            query = query.where(Test.distro == distro.lower())
         if distro_version:
-            query = query.where(TestRun.distro_version == distro_version)
+            query = query.where(Test.distro_version == distro_version)
         if flavor:
-            query = query.where(TestRun.flavor == flavor.lower())
+            query = query.where(Test.flavor == flavor.lower())
         if flavor_version:
-            query = query.where(TestRun.flavor_version == flavor_version)
+            query = query.where(Test.flavor_version == flavor_version)
 
         runs = session.execute(query).scalars().all()
         return [_run_to_dict(r) for r in runs]
@@ -322,7 +255,7 @@ async def get_run(
     run_id: int,
     _identity: dict = Depends(require_role("readonly")),
 ):
-    """Get details of a specific test run including results."""
+    """Get details of a specific test run including its outcome."""
     session = SessionLocal()
     try:
         run = session.execute(
@@ -330,22 +263,10 @@ async def get_run(
         ).scalar_one_or_none()
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
-
-        results = session.execute(
-            select(TestResult).where(TestResult.test_run_id == run_id)
-        ).scalars().all()
-
         d = _run_to_dict(run)
-        d["results"] = [
-            {
-                "id": r.id,
-                "result_code": r.result_code,
-                "stdout": r.stdout,
-                "stderr": r.stderr,
-                "details": r.details,
-            }
-            for r in results
-        ]
+        d["stdout"] = run.stdout
+        d["stderr"] = run.stderr
+        d["details"] = run.details
         return d
     finally:
         session.close()
@@ -414,15 +335,15 @@ async def worker_heartbeat(
             select(Worker).where(Worker.id == worker_info["worker_id"])
         ).scalar_one_or_none()
         if worker:
-            # Reconcile job count with actual running jobs
             actual = session.execute(
                 select(func.count(TestRun.id)).where(
                     TestRun.worker_id == worker.id,
-                    TestRun.status == TestRunStatus.running,
+                    TestRun.lifecycle == TestRunLifecycle.running,
                 )
             ).scalar() or 0
             if worker.current_job_count != actual:
-                _logger.info("Reconciling worker '%s' job count: %d -> %d", worker.name, worker.current_job_count, actual)
+                _logger.info("Reconciling worker '%s' job count: %d -> %d",
+                             worker.name, worker.current_job_count, actual)
                 worker.current_job_count = actual
                 worker.status = "busy" if actual >= worker.concurrency else "online"
                 session.commit()
@@ -438,8 +359,8 @@ async def worker_poll(
     """
     Worker polls for the next available job.
 
-    Assigns a queued TestRun to this worker, sets status to 'running',
-    and returns the job spec. Returns null job if nothing is queued.
+    Assigns a queued TestRun to this worker, sets lifecycle=running, and
+    returns the job spec. Returns null job if nothing is queued.
     """
     session = SessionLocal()
     try:
@@ -452,118 +373,132 @@ async def worker_poll(
         if not worker.is_available:
             return {"job": None, "reason": "worker at capacity"}
 
-        # Find the oldest queued run this worker is eligible to claim.
-        # Eligibility is based on the worker's capability tags vs. the
-        # run's required execution environment (isolation, toolchain, os,
-        # compiler). See _worker_can_run() for the rule.
         worker_tags = set(worker.tags or [])
-        run = None
+        claimed_run = None
         for candidate in session.execute(
             select(TestRun)
-            .where(TestRun.status == TestRunStatus.queued)
+            .where(TestRun.lifecycle == TestRunLifecycle.queued)
             .order_by(TestRun.id)
         ).scalars():
-            if _worker_can_run(worker_tags, candidate):
-                run = candidate
+            if _worker_can_run(worker_tags, candidate.test):
+                claimed_run = candidate
                 break
 
-        if run is None:
+        if claimed_run is None:
             return {"job": None, "reason": "no queued jobs"}
 
-        # Assign to this worker
-        run.status = TestRunStatus.running
-        run.worker_id = worker.id
-        run.started_at = datetime.datetime.utcnow()
+        claimed_run.lifecycle = TestRunLifecycle.running
+        claimed_run.worker_id = worker.id
+        claimed_run.started_at = datetime.datetime.utcnow()
         worker.current_job_count += 1
         if worker.current_job_count >= worker.concurrency:
             worker.status = "busy"
         session.commit()
 
-        _logger.info("Assigned run #%d to worker '%s'", run.id, worker.name)
+        test = claimed_run.test
+        _logger.info("Assigned run #%d to worker '%s'", claimed_run.id, worker.name)
         return {
             "job": {
-                "run_id": run.id,
-                "project": run.project,
-                "version": run.version,
-                "test": run.test,
-                "mode": run.mode,
-                "git_ref": run.git_ref,
-                "os": run.os,
-                "os_version": run.os_version,
-                "distro": run.distro,
-                "distro_version": run.distro_version,
-                "flavor": run.flavor,
-                "flavor_version": run.flavor_version,
-                "arch": run.arch,
-                "compiler": run.compiler,
-                "compiler_version": run.compiler_version,
-                "isolation": run.isolation,
-                "toolchain": run.toolchain,
-                "opp_file": run.opp_file,
-                "resolved_deps": run.resolved_deps,
+                "run_id": claimed_run.id,
+                "project": test.project,
+                "version": claimed_run.version,
+                "kind": test.kind,
+                "mode": test.mode,
+                "git_ref": claimed_run.git_ref,
+                "os": test.os,
+                "os_version": test.os_version,
+                "distro": test.distro,
+                "distro_version": test.distro_version,
+                "flavor": test.flavor,
+                "flavor_version": test.flavor_version,
+                "arch": test.arch,
+                "compiler": test.compiler,
+                "compiler_version": test.compiler_version,
+                "isolation": test.isolation,
+                "toolchain": test.toolchain,
+                "opp_file": test.opp_file,
+                "resolved_deps": claimed_run.resolved_deps,
             }
         }
     finally:
         session.close()
 
 
-def _platform_required_tag(run):
+def _platform_required_tag(test):
     """Return the most-specific platform capability tag a worker must
-    advertise to claim *run*, or None when the run doesn't pin a platform.
+    advertise to claim a TestRun targeting *test*, or None when the test
+    doesn't pin a platform.
 
     Rules:
-      - run names a flavor   →  flavor:<flavor>-<flavor_version-or-distro_version>
-      - run names a distro   →  distro:<distro>-<distro_version>
-      - run names Windows/MacOS with a version → os:<os>-<ver>
-      - run names just an OS family → os:<os>
+      - test names a flavor   →  flavor:<flavor>-<flavor_version-or-distro_version>
+      - test names a distro   →  distro:<distro>-<distro_version>
+      - test names Windows/MacOS with a version → os:<os>-<ver>
+      - test names just an OS family → os:<os>
     """
-    if run.flavor:
-        ver = run.flavor_version or run.distro_version
-        return f"flavor:{run.flavor.lower()}-{ver}" if ver else f"flavor:{run.flavor.lower()}"
-    if run.distro:
-        return (f"distro:{run.distro.lower()}-{run.distro_version}"
-                if run.distro_version else f"distro:{run.distro.lower()}")
-    if run.os:
-        os_lower = run.os.lower()
-        if os_lower != "linux" and run.os_version:
-            return f"os:{os_lower}-{run.os_version}"
+    if test.flavor:
+        ver = test.flavor_version or test.distro_version
+        return f"flavor:{test.flavor.lower()}-{ver}" if ver else f"flavor:{test.flavor.lower()}"
+    if test.distro:
+        return (f"distro:{test.distro.lower()}-{test.distro_version}"
+                if test.distro_version else f"distro:{test.distro.lower()}")
+    if test.os:
+        os_lower = test.os.lower()
+        if os_lower != "linux" and test.os_version:
+            return f"os:{os_lower}-{test.os_version}"
         return f"os:{os_lower}"
     return None
 
 
-def _worker_can_run(worker_tags, run):
-    """Return True if a worker with *worker_tags* may claim *run*.
+def _worker_can_run(worker_tags, test):
+    """Return True if a worker with *worker_tags* may claim a TestRun
+    targeting *test*.
 
     Required tags by execution environment:
       - isolation=podman             →  {"podman"}
       - isolation=none, toolchain=nix → {"nix", "<platform>", "compiler:<c>-<cv>"}
       - isolation=none, toolchain=none → {"<platform>", "compiler:<c>-<cv>"}
-
-    ``<platform>`` is the most-specific level the run pins (see
-    [`_platform_required_tag()`](#_platform_required_tag)).
-
-    When ``run.arch`` is set, the worker must additionally advertise
-    ``arch:<arch>`` regardless of isolation — the host kernel architecture
-    matters for both bare-metal and podman runs.
-
-    Tags derived from run fields that aren't set are skipped.
     """
-    isolation = run.isolation or "none"
-    toolchain = run.toolchain or "none"
+    isolation = test.isolation or "none"
+    toolchain = test.toolchain or "none"
     required = set()
     if isolation == "podman":
         required.add("podman")
     else:
         if toolchain == "nix":
             required.add("nix")
-        platform_tag = _platform_required_tag(run)
+        platform_tag = _platform_required_tag(test)
         if platform_tag:
             required.add(platform_tag)
-        if run.compiler and run.compiler_version:
-            required.add(f"compiler:{run.compiler.lower()}-{run.compiler_version}")
-    if run.arch:
-        required.add(f"arch:{run.arch.lower()}")
+        if test.compiler and test.compiler_version:
+            required.add(f"compiler:{test.compiler.lower()}-{test.compiler_version}")
+    if test.arch:
+        required.add(f"arch:{test.arch.lower()}")
     return required.issubset(worker_tags)
+
+
+@router.post("/workers/snapshot")
+async def worker_report_snapshot(
+    req: WorkerSnapshotRequest,
+    worker_info: dict = Depends(require_worker_token()),
+):
+    """Worker reports the system snapshot captured at run start.
+
+    Optional — workers that don't capture a snapshot simply skip this call.
+    """
+    session = SessionLocal()
+    try:
+        run = session.execute(
+            select(TestRun).where(TestRun.id == req.run_id)
+        ).scalar_one_or_none()
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Run #{req.run_id} not found")
+        if run.worker_id != worker_info["worker_id"]:
+            raise HTTPException(status_code=403, detail="Run not assigned to this worker")
+        run.system_snapshot = req.snapshot
+        session.commit()
+        return {"status": "ok"}
+    finally:
+        session.close()
 
 
 @router.post("/workers/result")
@@ -571,7 +506,14 @@ async def worker_report_result(
     req: WorkerResultRequest,
     worker_info: dict = Depends(require_worker_token()),
 ):
-    """Worker reports the result of a completed job."""
+    """Worker reports the result of a completed job.
+
+    Writes the outcome columns directly onto the same `TestRun` row and
+    flips lifecycle to `finished`. Cancelled runs (lifecycle already set
+    to `cancelled`) are not overwritten — the worker is finishing a run
+    that the coordinator gave up on, and the outcome is recorded but the
+    cancel takes precedence at the lifecycle level.
+    """
     session = SessionLocal()
     try:
         run = session.execute(
@@ -582,23 +524,23 @@ async def worker_report_result(
         if run.worker_id != worker_info["worker_id"]:
             raise HTTPException(status_code=403, detail="Run not assigned to this worker")
 
-        run.status = TestRunStatus.PASS if req.result_code == "PASS" else TestRunStatus.FAIL
+        try:
+            result_code = TestResultCode(req.result_code)
+        except ValueError:
+            raise HTTPException(status_code=400,
+                                detail=f"Invalid result_code: {req.result_code!r}")
+
+        if run.lifecycle != TestRunLifecycle.cancelled:
+            run.lifecycle = TestRunLifecycle.finished
         run.finished_at = datetime.datetime.utcnow()
         run.duration_seconds = req.duration_seconds
+        run.result_code = result_code
+        run.stdout = req.stdout
+        run.stderr = req.stderr
+        run.details = req.details
         if req.commit_sha:
             run.commit_sha = req.commit_sha
-            if run.github_owner and run.github_repo and not run.github_commit_sha:
-                run.github_commit_sha = req.commit_sha
 
-        session.add(TestResult(
-            test_run_id=run.id,
-            result_code=req.result_code,
-            stdout=req.stdout,
-            stderr=req.stderr,
-            details=req.details,
-        ))
-
-        # Update worker job count
         worker = session.execute(
             select(Worker).where(Worker.id == worker_info["worker_id"])
         ).scalar_one_or_none()
@@ -608,33 +550,37 @@ async def worker_report_result(
                 worker.status = "online"
 
         session.commit()
-        _logger.info("Run #%d result: %s (worker '%s')", run.id, req.result_code, worker_info["worker_name"])
+        _logger.info("Run #%d result: %s (worker '%s')", run.id, req.result_code,
+                     worker_info["worker_name"])
 
-        # Post GitHub commit status if this was a webhook-triggered run
         try:
             from opp_ci.github.status import update_github_status
             update_github_status(run.id)
         except Exception as e:
             _logger.warning("GitHub status update failed for run #%d: %s", run.id, e)
 
-        # Trigger git notes sync — once per matrix (when all runs finish),
-        # or immediately for non-matrix runs.
+        # Trigger git notes sync — once per matrix run when all its children
+        # finish, or immediately for ad-hoc (matrix_run=None) runs.
         should_sync = True
-        if run.matrix_id:
+        gh_owner = gh_repo = None
+        if run.matrix_run_id:
             pending = session.execute(
                 select(TestRun).where(
-                    TestRun.matrix_id == run.matrix_id,
-                    TestRun.status.in_([TestRunStatus.queued, TestRunStatus.running]),
+                    TestRun.matrix_run_id == run.matrix_run_id,
+                    TestRun.lifecycle.in_(
+                        [TestRunLifecycle.queued, TestRunLifecycle.running]),
                 )
             ).first()
             should_sync = pending is None
+            mr = run.matrix_run
+            if mr:
+                gh_owner = mr.github_owner
+                gh_repo = mr.github_repo
 
         if should_sync:
-            gh_owner = run.github_owner
-            gh_repo = run.github_repo
             if not gh_owner or not gh_repo:
                 proj = session.execute(
-                    select(Project).where(Project.name == run.project)
+                    select(Project).where(Project.name == run.test.project)
                 ).scalar_one_or_none()
                 if proj:
                     gh_owner = gh_owner or proj.github_owner
@@ -971,9 +917,7 @@ async def ack_notes(
 ):
     """
     Acknowledge that the ci-notes.yml workflow has written git notes for
-    the listed commit SHAs. Currently a no-op (logged only): the GET
-    endpoint always re-emits all finished commits, and the workflow is
-    expected to de-dupe idempotently before pushing.
+    the listed commit SHAs. Currently a no-op (logged only).
     """
     _logger.info("Notes ack from %s/%s: %d sha(s)", owner, repo, len(req.shas))
     return None
@@ -982,31 +926,40 @@ async def ack_notes(
 # ── Helpers ────────────────────────────────────────────────────────────
 
 def _run_to_dict(run):
+    """Render a TestRun (with its joined Test row) into a serialisable dict."""
+    test = run.test
+    matrix_run = run.matrix_run
     return {
         "id": run.id,
-        "project": run.project,
-        "test": run.test,
-        "mode": run.mode,
+        "test_id": run.test_id,
+        "project": test.project,
+        "kind": test.kind,
+        "mode": test.mode,
+        "os": test.os,
+        "os_version": test.os_version,
+        "distro": test.distro,
+        "distro_version": test.distro_version,
+        "flavor": test.flavor,
+        "flavor_version": test.flavor_version,
+        "arch": test.arch,
+        "compiler": test.compiler,
+        "compiler_version": test.compiler_version,
+        "isolation": test.isolation,
+        "toolchain": test.toolchain,
+        "opp_file": test.opp_file,
         "git_ref": run.git_ref,
-        "os": run.os,
-        "os_version": run.os_version,
-        "distro": run.distro,
-        "distro_version": run.distro_version,
-        "flavor": run.flavor,
-        "flavor_version": run.flavor_version,
-        "arch": run.arch,
-        "compiler": run.compiler,
-        "compiler_version": run.compiler_version,
-        "platform_desc": run.platform_desc,
-        "status": run.status.value,
-        "trigger": run.trigger,
+        "version": run.version,
+        "commit_sha": run.commit_sha,
+        "lifecycle": run.lifecycle.value,
+        "result_code": run.result_code.value if run.result_code else None,
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "duration_seconds": run.duration_seconds,
         "worker_id": run.worker_id,
-        "matrix_id": run.matrix_id,
-        "github_owner": run.github_owner,
-        "github_repo": run.github_repo,
-        "github_commit_sha": run.github_commit_sha,
-        "github_pr_number": run.github_pr_number,
+        "matrix_run_id": run.matrix_run_id,
+        "matrix_id": matrix_run.matrix_id if matrix_run else None,
+        "github_owner": matrix_run.github_owner if matrix_run else None,
+        "github_repo": matrix_run.github_repo if matrix_run else None,
+        "github_commit_sha": matrix_run.github_commit_sha if matrix_run else None,
+        "github_pr_number": matrix_run.github_pr_number if matrix_run else None,
     }

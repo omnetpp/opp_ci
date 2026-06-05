@@ -17,16 +17,19 @@ from collections import defaultdict
 from sqlalchemy import select
 
 from opp_ci.config import COORDINATOR_URL
-from opp_ci.db.models import TestRun, TestRunStatus
+from opp_ci.db.models import TestMatrixRun, TestResultCode, TestRun, TestRunLifecycle
 
 _logger = logging.getLogger(__name__)
 
 _STATUS_ICONS = {
-    TestRunStatus.PASS: "\u2705",
-    TestRunStatus.FAIL: "\u274c",
-    TestRunStatus.ERROR: "\u26a0\ufe0f",
-    TestRunStatus.running: "\u23f3",
-    TestRunStatus.queued: "\u23f3",
+    "PASS": "\u2705",
+    "FAIL": "\u274c",
+    "ERROR": "\u26a0\ufe0f",
+    "SKIPPED": "\u2796",
+    "running": "\u23f3",
+    "queued": "\u23f3",
+    "cancelled": "\u23f9",
+    "timed_out": "\u23f1",
 }
 
 
@@ -49,9 +52,9 @@ def format_note(runs, run_url_base=None):
 
     # ── Summary line ────────────────────────────────────────────────
     total_runs = len(runs)
-    total_passed = sum(1 for r in runs if r.status == TestRunStatus.PASS)
-    total_failed = sum(1 for r in runs if r.status == TestRunStatus.FAIL)
-    total_errored = sum(1 for r in runs if r.status == TestRunStatus.ERROR)
+    total_passed = sum(1 for r in runs if r.result_code == TestResultCode.PASS)
+    total_failed = sum(1 for r in runs if r.result_code == TestResultCode.FAIL)
+    total_errored = sum(1 for r in runs if r.result_code == TestResultCode.ERROR)
 
     if total_passed == total_runs:
         summary = f"\u2705 PASS {total_passed}/{total_runs}"
@@ -71,11 +74,11 @@ def format_note(runs, run_url_base=None):
     # ── Per-run detail lines ──────────────────────────────────────────
     detail_lines = []
     for run in sorted(runs, key=lambda r: r.id):
-        icon = _STATUS_ICONS.get(run.status, "?")
-        label = run.test
+        status = run.effective_status
+        icon = _STATUS_ICONS.get(status, "?")
+        label = run.kind
         if run.mode:
             label += f"/{run.mode}"
-        status = run.status.value
         duration = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
         detail_lines.append(f"  {icon} {label}  {status}  {duration}  #{run.id}")
 
@@ -83,6 +86,7 @@ def format_note(runs, run_url_base=None):
     first_run = runs[0]
     sha = first_run.commit_sha or first_run.github_commit_sha or ""
     url = f"{run_url_base}/commits/{first_run.project}/{sha}"
+    _ = first_run  # silence unused-warning on linters when sha is empty
 
     return "\n".join([summary] + detail_lines + ["", url])
 
@@ -92,23 +96,25 @@ def get_notes_for_repo(session, owner, repo):
     Return all pending notes for a given GitHub repo.
 
     Returns a list of dicts: [{"sha": <commit_sha>, "note": <formatted_line>}]
-    Only includes commits that have at least one finished run (PASS/FAIL/ERROR).
-    """
-    finished = (TestRunStatus.PASS, TestRunStatus.FAIL, TestRunStatus.ERROR)
+    Only includes commits that have at least one finished run.
 
+    GitHub identity (owner/repo/commit_sha) lives on TestMatrixRun, so we
+    join through it.
+    """
     runs = session.execute(
-        select(TestRun).where(
-            TestRun.github_owner == owner,
-            TestRun.github_repo == repo,
-            TestRun.github_commit_sha.isnot(None),
-            TestRun.status.in_(finished),
+        select(TestRun)
+        .join(TestMatrixRun, TestRun.matrix_run_id == TestMatrixRun.id)
+        .where(
+            TestMatrixRun.github_owner == owner,
+            TestMatrixRun.github_repo == repo,
+            TestMatrixRun.github_commit_sha.isnot(None),
+            TestRun.lifecycle == TestRunLifecycle.finished,
         ).order_by(TestRun.id)
     ).scalars().all()
 
     if not runs:
         return []
 
-    # Group by commit SHA
     by_sha = defaultdict(list)
     for run in runs:
         by_sha[run.github_commit_sha].append(run)

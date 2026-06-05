@@ -11,7 +11,7 @@ from collections import defaultdict
 
 from sqlalchemy import select
 
-from opp_ci.db.models import Project, TestRun, TestRunStatus, Version
+from opp_ci.db.models import Project, Test, TestResultCode, TestRun, TestRunLifecycle, Version
 
 _logger = logging.getLogger(__name__)
 
@@ -160,11 +160,12 @@ def _collect_test_overlays(session, project_name, versions):
         if v.label:
             project_keys.add(v.label)
 
-    finished = (TestRunStatus.PASS, TestRunStatus.FAIL, TestRunStatus.ERROR)
     runs = session.execute(
-        select(TestRun).where(
-            TestRun.project.in_(project_keys),
-            TestRun.status.in_(finished),
+        select(TestRun)
+        .join(Test, TestRun.test_id == Test.id)
+        .where(
+            Test.project.in_(project_keys),
+            TestRun.lifecycle == TestRunLifecycle.finished,
         )
     ).scalars().all()
 
@@ -198,29 +199,22 @@ def _collect_test_overlays(session, project_name, versions):
         if run.resolved_deps:
             for dep_name, dep_ver in run.resolved_deps.items():
                 if isinstance(dep_ver, str):
-                    overlays[(vlabel, dep_name, dep_ver)].append(run.status)
+                    overlays[(vlabel, dep_name, dep_ver)].append(run.result_code)
         elif declared_deps:
             for dep_name, dep_val in declared_deps.items():
                 if isinstance(dep_val, str):
-                    overlays[(vlabel, dep_name, dep_val)].append(run.status)
+                    overlays[(vlabel, dep_name, dep_val)].append(run.result_code)
                 elif isinstance(dep_val, list) and len(dep_val) == 1:
-                    overlays[(vlabel, dep_name, dep_val[0])].append(run.status)
+                    overlays[(vlabel, dep_name, dep_val[0])].append(run.result_code)
 
     return overlays
 
 
-def _aggregate_status(statuses):
-    """
-    Aggregate a list of TestRunStatus values into a single summary string.
-
-    Rules:
-    - If all passed -> "PASS"
-    - If any failed -> "FAIL"
-    - If any error (and no fail) -> "ERROR"
-    """
-    has_fail = any(s == TestRunStatus.FAIL for s in statuses)
-    has_error = any(s == TestRunStatus.ERROR for s in statuses)
-    all_pass = all(s == TestRunStatus.PASS for s in statuses)
+def _aggregate_status(codes):
+    """Aggregate a list of TestResultCode values into a single summary string."""
+    has_fail = any(c == TestResultCode.FAIL for c in codes)
+    has_error = any(c == TestResultCode.ERROR for c in codes)
+    all_pass = all(c == TestResultCode.PASS for c in codes)
 
     if all_pass:
         return "PASS"

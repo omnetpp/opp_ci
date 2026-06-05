@@ -20,7 +20,7 @@
         <input type="text" name="ref_a" placeholder="Ref A (e.g. master)" value="{{ ref_a }}" style="width:140px;">
         <span style="color:var(--muted)">vs</span>
         <input type="text" name="ref_b" placeholder="Ref B (e.g. topic/fix)" value="{{ ref_b }}" style="width:140px;">
-        <input type="text" name="test" placeholder="Test (opt)" value="{{ filter_test }}" style="width:120px;">
+        <input type="text" name="kind" placeholder="Kind (opt)" value="{{ filter_kind }}" style="width:120px;">
         <button type="submit">Compare</button>
     </form>
 </div>
@@ -33,7 +33,7 @@
     <table>
         <thead>
             <tr>
-                <th>Test</th>
+                <th>Kind</th>
                 <th>{{ left_label }}</th>
                 <th>{{ right_label }}</th>
                 <th>Duration (A)</th>
@@ -43,7 +43,7 @@
         <tbody>
             {% for row in diff %}
             <tr style="{{ 'background:#fff3cd;' if row.changed else '' }}">
-                <td>{{ row.test_key }}</td>
+                <td>{{ row.kind_key }}</td>
                 <td>
                     {% if row.left_status == "PASS" %}
                     <span class="badge badge-passed">{{ row.left_status }}</span>

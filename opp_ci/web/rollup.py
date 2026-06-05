@@ -9,7 +9,7 @@ cross-product.  A separate "repetitions" value reports k when each cell
 is filled exactly k times; the UI shows a Reps column only when some row
 has k>1.
 
-Primary dimensions: project, test, mode, os, distro, distro_version,
+Primary dimensions: project, kind, mode, os, distro, distro_version,
 flavor, compiler, compiler_version, git_ref.
 
 Extra dimensions (os_version, flavor_version, isolation, toolchain,
@@ -22,7 +22,7 @@ from functools import reduce
 from operator import mul
 
 PRIMARY_DIMENSIONS = [
-    "project", "test", "mode", "os", "distro", "distro_version",
+    "project", "kind", "mode", "os", "distro", "distro_version",
     "flavor", "compiler", "compiler_version", "git_ref",
 ]
 
@@ -73,7 +73,7 @@ def rollup_runs(runs, grouping="any"):
     # Group by status
     by_status = defaultdict(list)
     for run in runs:
-        by_status[run.status.value].append(run)
+        by_status[run.effective_status].append(run)
 
     cartesian_only = (grouping == "cartesian")
 
@@ -328,7 +328,7 @@ def _make_summary(runs):
     breakdown = defaultdict(int)
     run_ids = []
     for r in runs:
-        breakdown[r.status.value] += 1
+        breakdown[r.effective_status] += 1
         run_ids.append(r.id)
 
     total = len(runs)

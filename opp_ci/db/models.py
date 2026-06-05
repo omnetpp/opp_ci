@@ -1,9 +1,11 @@
 import datetime
+import enum
+import hashlib
+import json
 import secrets
 
 from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Text, Enum, JSON, Boolean
 from sqlalchemy.orm import declarative_base, relationship
-import enum
 
 Base = declarative_base()
 
@@ -81,6 +83,7 @@ class TestMatrix(Base):
     project = Column(String, nullable=False)
     opp_file = Column(String, nullable=True)
     config = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
 class Worker(Base):
@@ -168,69 +171,274 @@ class AutoTestRule(Base):
         return f"<AutoTestRule(id={self.id}, rule_type={self.rule_type!r}, pattern={self.pattern!r})>"
 
 
-class TestRunStatus(enum.Enum):
-    queued = "queued"
-    running = "running"
+# ── Test data model (phase 1) ──────────────────────────────────────────
+#
+# See plan/pending/test-data-model-redesign.md and
+# plan/pending/test-data-model-phase-1-schema.md.
+#
+# Test       — deduped coordinate row + editable metadata
+# TestMatrix — matrix definition (above)
+# TestRun    — per-attempt lifecycle + outcome row
+# TestMatrixRun — first-class grouping of TestRuns from one matrix submission
+
+
+# Closed field list that goes into Test.coord_hash. Order matters only
+# in that the JSON serializer sorts keys; what matters is the set of
+# fields. Adding or removing one re-keys every Test.
+TEST_COORD_FIELDS = (
+    "project", "kind", "mode",
+    "os", "os_version",
+    "distro", "distro_version",
+    "flavor", "flavor_version",
+    "arch",
+    "compiler", "compiler_version",
+    "isolation", "toolchain",
+    "opp_file",
+)
+
+
+def compute_test_coord_hash(coord):
+    """SHA-256 hex of sorted-keys canonical JSON over `TEST_COORD_FIELDS`.
+
+    Unknown keys in `coord` are ignored; missing keys are treated as None
+    so the hash is stable regardless of whether the caller passed every
+    field explicitly. The mutable columns (`name`,
+    `expected_result_code`, `expected_result_description`) are
+    deliberately excluded.
+    """
+    payload = {field: coord.get(field) for field in TEST_COORD_FIELDS}
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+class TestResultCode(enum.Enum):
     PASS = "PASS"
     FAIL = "FAIL"
     ERROR = "ERROR"
+    SKIPPED = "SKIPPED"
 
 
-class TestRun(Base):
-    __tablename__ = "test_runs"
+class TestRunLifecycle(enum.Enum):
+    queued = "queued"
+    running = "running"
+    finished = "finished"
+    cancelled = "cancelled"
+    timed_out = "timed_out"
+
+
+class Test(Base):
+    __tablename__ = "tests"
 
     id = Column(Integer, primary_key=True)
+
+    # Editable metadata — the only mutable columns on a Test row.
+    # Excluded from coord_hash so renaming/expectation-edits never affect dedup.
+    name = Column(String, nullable=True)
+    expected_result_code = Column(Enum(TestResultCode), nullable=True)
+    expected_result_description = Column(Text, nullable=True)
+
+    # Coordinate fields (immutable after creation; see TEST_COORD_FIELDS).
     project = Column(String, nullable=False)
-    test = Column(String, nullable=False)
+    kind = Column(String, nullable=False)             # was "test" in legacy schema
     mode = Column(String, nullable=True)
-    os = Column(String, nullable=True)          # "Linux" | "Windows" | "MacOS"
-    os_version = Column(String, nullable=True)  # only for Windows/MacOS; None for Linux
-    distro = Column(String, nullable=True)      # Linux only — "ubuntu", "fedora", ...
+    os = Column(String, nullable=True)                # "Linux" | "Windows" | "MacOS"
+    os_version = Column(String, nullable=True)        # only Windows/MacOS
+    distro = Column(String, nullable=True)            # Linux only
     distro_version = Column(String, nullable=True)
-    flavor = Column(String, nullable=True)      # Linux only — "kubuntu", "xubuntu", ...
-    flavor_version = Column(String, nullable=True)  # falls back to distro_version when null
-    arch = Column(String, nullable=True)        # CPU architecture, e.g. "amd64", "aarch64"
+    flavor = Column(String, nullable=True)            # Linux only
+    flavor_version = Column(String, nullable=True)
+    arch = Column(String, nullable=True)
     compiler = Column(String, nullable=True)
     compiler_version = Column(String, nullable=True)
-    isolation = Column(String, nullable=True)   # "none" | "podman"; None == "none"
-    toolchain = Column(String, nullable=True)   # "none" | "nix";    None == "none"
-    platform_desc = Column(String, nullable=True)
-    git_ref = Column(String, nullable=True)
-    commit_sha = Column(String, nullable=True)
-    version = Column(String, nullable=True)
-    resolved_deps = Column(JSON, nullable=True)
+    isolation = Column(String, nullable=True)         # "none" | "podman"
+    toolchain = Column(String, nullable=True)         # "none" | "nix"
     opp_file = Column(String, nullable=True)
-    matrix_id = Column(Integer, ForeignKey("test_matrices.id"), nullable=True)
-    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=True)
-    status = Column(Enum(TestRunStatus), nullable=False, default=TestRunStatus.queued)
-    started_at = Column(DateTime, default=datetime.datetime.utcnow)
-    finished_at = Column(DateTime, nullable=True)
-    duration_seconds = Column(Float, nullable=True)
-    trigger = Column(String, default="manual")  # manual, webhook, schedule, remote
+
+    coord_hash = Column(String(64), unique=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    runs = relationship("TestRun", back_populates="test", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Test(id={self.id}, project={self.project!r}, kind={self.kind!r})>"
+
+
+class TestMatrixRun(Base):
+    """One row per submission of a TestMatrix.
+
+    Groups the per-Test `TestRun`s spawned from one expansion so they can
+    be tracked, cancelled, or queried as a unit. The matrix's own
+    aggregate status is computed by querying child `TestRun.lifecycle` —
+    there is no own `lifecycle` column in phase 1.
+    """
+    __tablename__ = "test_matrix_runs"
+
+    id = Column(Integer, primary_key=True)
+    matrix_id = Column(Integer, ForeignKey("test_matrices.id"), nullable=False)
+    trigger = Column(String, default="manual")  # manual, web, remote, webhook, schedule, rerun
     github_owner = Column(String, nullable=True)
     github_repo = Column(String, nullable=True)
     github_commit_sha = Column(String, nullable=True)
     github_pr_number = Column(Integer, nullable=True)
     github_status_url = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
-    results = relationship("TestResult", back_populates="test_run", cascade="all, delete-orphan")
-    worker = relationship("Worker", backref="test_runs")
+    matrix = relationship("TestMatrix", backref="matrix_runs")
+    test_runs = relationship("TestRun", back_populates="matrix_run")
 
     def __repr__(self):
-        return f"<TestRun(id={self.id}, project={self.project!r}, test={self.test!r}, status={self.status.value!r})>"
+        return f"<TestMatrixRun(id={self.id}, matrix_id={self.matrix_id}, trigger={self.trigger!r})>"
 
 
-class TestResult(Base):
-    __tablename__ = "test_results"
+class TestRun(Base):
+    """One row per attempt to run a Test.
+
+    Carries the per-attempt context (commit_sha, git_ref, version,
+    resolved_deps, worker_id, timing), the lifecycle state, and, once the
+    lifecycle reaches `finished`, the outcome columns
+    (`result_code`/`stdout`/`stderr`/`details`). `system_snapshot` is a
+    nullable JSON blob captured at run start — Postgres TOAST keeps it
+    out-of-line and lazy-loaded.
+    """
+    __tablename__ = "test_runs"
 
     id = Column(Integer, primary_key=True)
-    test_run_id = Column(Integer, ForeignKey("test_runs.id"), nullable=False)
-    result_code = Column(String, nullable=False)
+    test_id = Column(Integer, ForeignKey("tests.id"), nullable=False)
+    matrix_run_id = Column(Integer, ForeignKey("test_matrix_runs.id"), nullable=True)
+    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=True)
+
+    # Per-attempt context
+    commit_sha = Column(String, nullable=True)
+    git_ref = Column(String, nullable=True)
+    version = Column(String, nullable=True)
+    resolved_deps = Column(JSON, nullable=True)
+
+    # Lifecycle (always set)
+    lifecycle = Column(Enum(TestRunLifecycle), nullable=False, default=TestRunLifecycle.queued)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+
+    # Outcome (populated iff lifecycle == finished)
+    result_code = Column(Enum(TestResultCode), nullable=True)
     stdout = Column(Text, nullable=True)
     stderr = Column(Text, nullable=True)
     details = Column(JSON, nullable=True)
 
-    test_run = relationship("TestRun", back_populates="results")
+    # Best-effort system facts captured at run start.
+    system_snapshot = Column(JSON, nullable=True)
+
+    test = relationship("Test", back_populates="runs")
+    matrix_run = relationship("TestMatrixRun", back_populates="test_runs")
+    worker = relationship("Worker", backref="test_runs")
 
     def __repr__(self):
-        return f"<TestResult(id={self.id}, test_run_id={self.test_run_id}, result_code={self.result_code!r})>"
+        lc = self.lifecycle.value if self.lifecycle else "?"
+        rc = self.result_code.value if self.result_code else "-"
+        return f"<TestRun(id={self.id}, test_id={self.test_id}, lifecycle={lc!r}, result={rc!r})>"
+
+    # ── View-side accessors ───────────────────────────────────────────
+    #
+    # Coordinate fields live on the joined `Test` row; templates, the
+    # rollup module, and helpers read them off the TestRun directly
+    # (`run.project`, `run.kind`, `run.mode`, …). Note `run.test` is
+    # the SQLAlchemy relationship returning the Test row, not the test
+    # kind — use `run.kind` (or `run.test.kind`) for the kind string.
+
+    @property
+    def project(self):
+        return self.test.project if self.test else None
+
+    @property
+    def kind(self):
+        return self.test.kind if self.test else None
+
+    @property
+    def mode(self):
+        return self.test.mode if self.test else None
+
+    @property
+    def os(self):
+        return self.test.os if self.test else None
+
+    @property
+    def os_version(self):
+        return self.test.os_version if self.test else None
+
+    @property
+    def distro(self):
+        return self.test.distro if self.test else None
+
+    @property
+    def distro_version(self):
+        return self.test.distro_version if self.test else None
+
+    @property
+    def flavor(self):
+        return self.test.flavor if self.test else None
+
+    @property
+    def flavor_version(self):
+        return self.test.flavor_version if self.test else None
+
+    @property
+    def arch(self):
+        return self.test.arch if self.test else None
+
+    @property
+    def compiler(self):
+        return self.test.compiler if self.test else None
+
+    @property
+    def compiler_version(self):
+        return self.test.compiler_version if self.test else None
+
+    @property
+    def isolation(self):
+        return self.test.isolation if self.test else None
+
+    @property
+    def toolchain(self):
+        return self.test.toolchain if self.test else None
+
+    @property
+    def opp_file(self):
+        return self.test.opp_file if self.test else None
+
+    @property
+    def matrix_id(self):
+        return self.matrix_run.matrix_id if self.matrix_run else None
+
+    @property
+    def github_owner(self):
+        return self.matrix_run.github_owner if self.matrix_run else None
+
+    @property
+    def github_repo(self):
+        return self.matrix_run.github_repo if self.matrix_run else None
+
+    @property
+    def github_commit_sha(self):
+        return self.matrix_run.github_commit_sha if self.matrix_run else None
+
+    @property
+    def github_pr_number(self):
+        return self.matrix_run.github_pr_number if self.matrix_run else None
+
+    @property
+    def trigger(self):
+        return self.matrix_run.trigger if self.matrix_run else None
+
+    @property
+    def effective_status(self):
+        """Single-string label combining lifecycle and outcome.
+
+        Returns one of: "queued", "running", "cancelled", "timed_out",
+        or the outcome value ("PASS"/"FAIL"/"ERROR"/"SKIPPED") when the
+        run is finished. Used by templates and rollup that grew up
+        around the legacy single-enum status.
+        """
+        if self.lifecycle == TestRunLifecycle.finished and self.result_code:
+            return self.result_code.value
+        return self.lifecycle.value if self.lifecycle else None

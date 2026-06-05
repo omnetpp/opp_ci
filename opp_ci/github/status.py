@@ -12,30 +12,22 @@ from sqlalchemy import select
 
 from opp_ci.config import COORDINATOR_URL
 from opp_ci.db.connection import SessionLocal
-from opp_ci.db.models import TestRun
+from opp_ci.db.models import TestMatrixRun, TestRun
 from opp_ci.github.client import GitHubClient
 
 _logger = logging.getLogger(__name__)
 
 
 def format_results_comment(runs):
-    """
-    Format a Markdown PR comment body summarizing a set of test runs.
-
-    Args:
-        runs: list of TestRun objects (with results loaded)
-
-    Returns:
-        Markdown string
-    """
+    """Format a Markdown PR comment body summarizing a set of test runs."""
     if not runs:
         return "**opp_ci**: No test results yet."
 
     total = len(runs)
-    passed = sum(1 for r in runs if r.status.value == "PASS")
-    failed = sum(1 for r in runs if r.status.value == "FAIL")
-    errors = sum(1 for r in runs if r.status.value == "ERROR")
-    running = sum(1 for r in runs if r.status.value in ("running", "queued"))
+    passed = sum(1 for r in runs if r.effective_status == "PASS")
+    failed = sum(1 for r in runs if r.effective_status == "FAIL")
+    errors = sum(1 for r in runs if r.effective_status == "ERROR")
+    running = sum(1 for r in runs if r.effective_status in ("running", "queued"))
 
     if failed == 0 and errors == 0 and running == 0:
         header = f"✅ **opp_ci**: All {total} tests passed"
@@ -44,14 +36,14 @@ def format_results_comment(runs):
     else:
         header = f"❌ **opp_ci**: {passed}/{total} passed, {failed} failed, {errors} errors"
 
-    lines = [header, "", "| Test | Project | Status | Duration |", "|---|---|---|---|"]
+    lines = [header, "", "| Kind | Project | Status | Duration |", "|---|---|---|---|"]
     for run in runs:
         status_emoji = {
             "PASS": "✅", "FAIL": "❌", "ERROR": "⚠️",
             "running": "🔄", "queued": "⏳",
-        }.get(run.status.value, "❓")
+        }.get(run.effective_status, "❓")
         dur = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
-        lines.append(f"| {run.test} | {run.project} | {status_emoji} {run.status.value} | {dur} |")
+        lines.append(f"| {run.kind} | {run.project} | {status_emoji} {run.effective_status} | {dur} |")
 
     return "\n".join(lines)
 
@@ -82,20 +74,18 @@ def update_github_status(run_id):
 
         target_url = f"{COORDINATOR_URL}/runs/{run.id}"
 
-        # Post commit status
         try:
             client.set_status_from_run(
                 owner=run.github_owner,
                 repo=run.github_repo,
                 sha=run.github_commit_sha,
                 run_id=run.id,
-                run_status=run.status.value,
+                run_status=run.effective_status,
                 target_url=target_url,
             )
         except Exception as e:
             _logger.error("Failed to post commit status for run #%d: %s", run.id, e)
 
-        # Update PR comment if this is a PR run
         if run.github_pr_number:
             _update_pr_comment(session, client, run)
 
@@ -104,15 +94,20 @@ def update_github_status(run_id):
 
 
 def _update_pr_comment(session, client, run):
-    """Update or create the PR comment summarizing all runs for this PR."""
+    """Update or create the PR comment summarizing all runs for this PR.
+
+    Runs are grouped through TestMatrixRun; GitHub identity (owner/repo/PR
+    number/commit SHA) lives on that row, so we filter by joining on it.
+    """
     try:
-        # Find all runs for this PR (same owner/repo/pr_number)
         pr_runs = session.execute(
-            select(TestRun).where(
-                TestRun.github_owner == run.github_owner,
-                TestRun.github_repo == run.github_repo,
-                TestRun.github_pr_number == run.github_pr_number,
-                TestRun.github_commit_sha == run.github_commit_sha,
+            select(TestRun)
+            .join(TestMatrixRun, TestRun.matrix_run_id == TestMatrixRun.id)
+            .where(
+                TestMatrixRun.github_owner == run.github_owner,
+                TestMatrixRun.github_repo == run.github_repo,
+                TestMatrixRun.github_pr_number == run.github_pr_number,
+                TestMatrixRun.github_commit_sha == run.github_commit_sha,
             ).order_by(TestRun.id)
         ).scalars().all()
 

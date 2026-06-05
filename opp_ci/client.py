@@ -7,7 +7,7 @@ Usage:
     from opp_ci.client import OppCiClient
 
     ci = OppCiClient(url="https://ci.omnetpp.org/api", token="...")
-    run = ci.submit_run(project="inet", test="smoke")
+    run = ci.submit_run(project="inet", kind="smoke")
     ci.get_run(run["id"])
     results = ci.list_runs(project="inet", status="FAIL")
 """
@@ -41,15 +41,15 @@ class OppCiClient:
         self._session.headers["Authorization"] = f"Bearer {token}"
         configure_session(self._session, ca_bundle=verify, insecure=insecure)
 
-    def submit_run(self, project, test, mode=None, git_ref=None,
+    def submit_run(self, project, kind, mode=None, git_ref=None,
                    os=None, os_version=None,
                    distro=None, distro_version=None,
                    flavor=None, flavor_version=None,
                    arch=None,
                    compiler=None, compiler_version=None,
-                   isolation=None, toolchain=None, force=False):
+                   isolation=None, toolchain=None):
         """Submit a single test run. Returns {"id": ..., "status": "queued"}."""
-        payload = {"project": project, "test": test}
+        payload = {"project": project, "kind": kind}
         for key, value in (
             ("mode", mode), ("git_ref", git_ref),
             ("os", os), ("os_version", os_version),
@@ -61,8 +61,6 @@ class OppCiClient:
         ):
             if value:
                 payload[key] = value
-        if force:
-            payload["force"] = True
         return self._post("/runs", payload)
 
     def submit_matrix(self, matrix_name):
@@ -73,12 +71,12 @@ class OppCiClient:
         """Get full details of a run including results."""
         return self._get(f"/runs/{run_id}")
 
-    def list_runs(self, project=None, test=None, status=None,
+    def list_runs(self, project=None, kind=None, status=None,
                   os=None, distro=None, flavor=None, limit=50):
         """List test runs with optional filters."""
         params = {"limit": limit}
         for key, value in (
-            ("project", project), ("test", test), ("status", status),
+            ("project", project), ("kind", kind), ("status", status),
             ("os", os), ("distro", distro), ("flavor", flavor),
         ):
             if value:

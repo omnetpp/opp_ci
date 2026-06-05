@@ -3,17 +3,16 @@
 {% block content %}
 <h2 style="margin-bottom: 1rem;">
     Run #{{ run.id }}
-    <span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span>
+    <span class="badge badge-{{ run.effective_status }}">{{ run.effective_status }}</span>
 </h2>
 
 <div class="card">
     <table>
         <tr><th style="width:150px;">Project</th><td>{{ run.project }}</td></tr>
-        <tr><th>Test</th><td>{{ run.test }}</td></tr>
+        <tr><th>Kind</th><td>{{ run.kind }}</td></tr>
         <tr><th>Mode</th><td>{{ run.mode or "-" }}</td></tr>
         <tr><th>Version</th><td>{{ run.version or "-" }}</td></tr>
         <tr><th>Resolved deps</th><td>{% if run.resolved_deps %}{% for k, v in run.resolved_deps.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}-{% endif %}</td></tr>
-        <tr><th>Platform</th><td>{{ run.platform_desc or "-" }}</td></tr>
         <tr><th>OS</th><td>{% if run.os %}{{ run.os }}{% if run.os_version %} {{ run.os_version }}{% endif %}{% else %}-{% endif %}</td></tr>
         <tr><th>Distro</th><td>{% if run.distro %}{{ run.distro|title }}{% if run.distro_version %} {{ run.distro_version }}{% endif %}{% else %}-{% endif %}</td></tr>
         <tr><th>Flavor</th><td>{% if run.flavor %}{{ run.flavor|title }}{% if run.flavor_version or run.distro_version %} {{ run.flavor_version or run.distro_version }}{% endif %}{% else %}-{% endif %}</td></tr>
@@ -24,13 +23,14 @@
         <tr><th>Git ref</th><td>{{ run.git_ref or "-" }}</td></tr>
         <tr><th>Commit</th><td><code>{{ run.commit_sha or "-" }}</code></td></tr>
         <tr><th>opp file</th><td>{{ run.opp_file or "-" }}</td></tr>
-        <tr><th>Matrix</th><td>{% if run.matrix_id %}<a href="/matrices/{{ run.matrix_id }}">#{{ run.matrix_id }}</a>{% else %}-{% endif %}</td></tr>
+        <tr><th>Matrix run</th><td>{% if run.matrix_run_id %}#{{ run.matrix_run_id }}{% if run.matrix_id %} (matrix <a href="/matrices/{{ run.matrix_id }}">#{{ run.matrix_id }}</a>){% endif %}{% else %}-{% endif %}</td></tr>
         <tr><th>Worker</th><td>{% if run.worker %}{{ run.worker.name }}{% elif run.worker_id %}#{{ run.worker_id }}{% else %}-{% endif %}</td></tr>
-        <tr><th>Status</th><td>{{ run.status.value }}</td></tr>
+        <tr><th>Lifecycle</th><td>{{ run.lifecycle.value }}</td></tr>
+        <tr><th>Result</th><td>{{ run.result_code.value if run.result_code else "-" }}</td></tr>
         <tr><th>Duration</th><td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td></tr>
         <tr><th>Started</th><td>{{ run.started_at.strftime("%Y-%m-%d %H:%M:%S") if run.started_at else "-" }}</td></tr>
         <tr><th>Finished</th><td>{{ run.finished_at.strftime("%Y-%m-%d %H:%M:%S") if run.finished_at else "-" }}</td></tr>
-        <tr><th>Trigger</th><td>{{ run.trigger }}</td></tr>
+        <tr><th>Trigger</th><td>{{ run.trigger or "-" }}</td></tr>
         {% if run.github_owner %}
         <tr><th>GitHub</th><td><a href="https://github.com/{{ run.github_owner }}/{{ run.github_repo }}">{{ run.github_owner }}/{{ run.github_repo }}</a></td></tr>
         {% endif %}
@@ -43,23 +43,23 @@
     </table>
 </div>
 
-{% for result in results %}
+{% if run.result_code %}
 <div class="card">
-    <h2>Result: {{ result.result_code }}</h2>
+    <h2>Result: {{ run.result_code.value }}</h2>
 
-    {% if result.details and result.details.results %}
-    <h3 style="margin-top:1rem;">Test Details</h3>
+    {% if run.details and run.details.results %}
+    <h3 style="margin-top:1rem;">Detail breakdown</h3>
     <table>
         <thead>
             <tr>
-                <th>Test</th>
+                <th>Parameters</th>
                 <th>Result</th>
                 <th>Duration</th>
                 <th>Reason</th>
             </tr>
         </thead>
         <tbody>
-            {% for r in result.details.results %}
+            {% for r in run.details.results %}
             <tr>
                 <td>{{ r.parameters or "-" }}</td>
                 <td><span class="badge badge-{{ r.result|lower }}">{{ r.result }}</span></td>
@@ -69,35 +69,33 @@
             {% endfor %}
         </tbody>
     </table>
-    {% if result.details.elapsed_wall_time %}
-    <p style="margin-top:0.5rem; font-size:0.85rem;">Total: {{ "%.3f"|format(result.details.elapsed_wall_time) }}s</p>
+    {% if run.details.elapsed_wall_time %}
+    <p style="margin-top:0.5rem; font-size:0.85rem;">Total: {{ "%.3f"|format(run.details.elapsed_wall_time) }}s</p>
     {% endif %}
     {% endif %}
 
-    {% if result.stdout %}
+    {% if run.stdout %}
     <details open>
         <summary style="cursor:pointer; font-weight:600; margin-bottom:0.5rem;">stdout</summary>
-        <pre>{{ result.stdout|ansi_to_html }}</pre>
+        <pre>{{ run.stdout|ansi_to_html }}</pre>
     </details>
     {% endif %}
-    {% if result.stderr %}
+    {% if run.stderr %}
     <details open>
         <summary style="cursor:pointer; font-weight:600; margin-bottom:0.5rem;">stderr</summary>
-        <pre>{{ result.stderr|ansi_to_html }}</pre>
+        <pre>{{ run.stderr|ansi_to_html }}</pre>
     </details>
     {% endif %}
 </div>
-{% endfor %}
+{% endif %}
 
 <div class="actions">
     <form method="post" action="/runs/{{ run.id }}/rerun" class="inline-form">
-
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-primary btn-sm">Re-run</button>
     </form>
-    {% if run.status.value in ("queued", "running") %}
+    {% if run.lifecycle.value == "queued" %}
     <form method="post" action="/runs/{{ run.id }}/cancel" class="inline-form">
-
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Cancel this run?')">Cancel</button>
     </form>

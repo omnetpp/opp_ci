@@ -115,12 +115,14 @@ class WorkerAgent:
 
     def _execute(self, job):
         """Execute a job and report the result back to the coordinator."""
+        from opp_ci.persistence import capture_system_snapshot
+
         run_id = job["run_id"]
         # If the run has a specific version (e.g. "inet-4.5"), use it as the
         # opp_env project identifier; otherwise fall back to the bare project
         # name (e.g. "mm1k") for projects with a single version.
         project = job.get("version") or job["project"]
-        test = job["test"]
+        kind = job["kind"]
         git_ref = job.get("git_ref")
         opp_file = job.get("opp_file")
         mode = job.get("mode")
@@ -146,8 +148,15 @@ class WorkerAgent:
 
         _logger.info(
             "Executing run #%d: %s / %s (ref=%s, isolation=%s, toolchain=%s)",
-            run_id, project, test, git_ref, isolation, toolchain,
+            run_id, project, kind, git_ref, isolation, toolchain,
         )
+
+        # Best-effort: capture system snapshot before running.
+        try:
+            snapshot = capture_system_snapshot()
+            self._report_snapshot(run_id, snapshot)
+        except Exception as e:
+            _logger.warning("Snapshot capture failed for run #%d: %s", run_id, e)
 
         try:
             install_project(project, git_ref=git_ref,
@@ -158,7 +167,7 @@ class WorkerAgent:
             return
 
         try:
-            outcome = run_test(project, test, **run_kwargs)
+            outcome = run_test(project, kind, **run_kwargs)
         except Exception as e:
             _logger.error("Test execution failed for run #%d: %s", run_id, e)
             self._report_result(run_id, "ERROR", stderr=str(e))
@@ -174,6 +183,19 @@ class WorkerAgent:
             details=outcome.get("details"),
         )
         _logger.info("Run #%d completed: %s (%.1fs)", run_id, outcome["result_code"], outcome["duration_seconds"])
+
+    def _report_snapshot(self, run_id, snapshot):
+        try:
+            resp = self._session.post(
+                f"{self.coordinator_url}/api/workers/snapshot",
+                json={"run_id": run_id, "snapshot": snapshot},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                _logger.warning("Snapshot report failed for run #%d: %s %s",
+                                run_id, resp.status_code, resp.text)
+        except requests.RequestException as e:
+            _logger.warning("Snapshot report error for run #%d: %s", run_id, e)
 
     def _report_result(self, run_id, result_code, duration_seconds=None,
                        commit_sha=None, stdout=None, stderr=None, details=None):
