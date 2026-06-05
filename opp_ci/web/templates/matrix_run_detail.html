@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Matrix run #{{ mr.id }}{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Matrix run #{{ mr.id }}
+    {% if matrix %}— <a href="/matrices/{{ matrix.id }}">{{ matrix.name }}</a>{% endif %}
+</h2>
+
+<div class="card">
+    <h2>Rollup</h2>
+    <table>
+        <tr><th style="width:170px;">Verdict</th><td>
+            {% if mr.verdict %}
+                {% set v = mr.verdict.value %}
+                <span class="badge badge-{{ 'passed' if v=='EXPECTED' else ('failed' if v=='UNEXPECTED' else 'queued') }}">{{ v }}</span>
+                {% if v == 'EXPECTED' %}
+                    — release-ready: every cell met its declared expectation.
+                {% elif v == 'UNEXPECTED' %}
+                    — at least one cell diverged from its expectation.
+                {% else %}
+                    — no mismatches, but some cells have no declared expectation.
+                {% endif %}
+            {% else %}
+                <span class="badge badge-queued">pending</span>
+            {% endif %}
+        </td></tr>
+        <tr><th>Actual summary</th><td>
+            {% if mr.actual_summary %}
+                {% set a = mr.actual_summary.value %}
+                <span class="badge badge-{{ 'passed' if a=='PASS' else ('failed' if a=='FAIL' else 'error') }}">{{ a }}</span>
+            {% else %}-{% endif %}
+        </td></tr>
+        <tr><th>Trigger</th><td>{{ mr.trigger or "-" }}</td></tr>
+        <tr><th>Ref</th><td>{{ mr.ref or "-" }}</td></tr>
+        <tr><th>Counters</th><td>
+            pass={{ mr.pass_count }} &middot; fail={{ mr.fail_count }} &middot; error={{ mr.error_count }} &middot; total={{ mr.total_count }}
+        </td></tr>
+        <tr><th>Verdict counters</th><td>
+            expected={{ mr.expected_count }} &middot; unexpected={{ mr.unexpected_count }} &middot; unknown={{ mr.unknown_count }}
+        </td></tr>
+        <tr><th>Cache hits</th><td>{{ mr.cache_hit_count }}</td></tr>
+        <tr><th>Created at</th><td>{{ mr.created_at }}</td></tr>
+        <tr><th>Completed at</th><td>{{ mr.completed_at or "(in progress)" }}</td></tr>
+        {% if mr.github_owner and mr.github_repo %}
+        <tr><th>GitHub</th><td>{{ mr.github_owner }}/{{ mr.github_repo }}{% if mr.github_pr_number %} &middot; PR #{{ mr.github_pr_number }}{% endif %}{% if mr.github_commit_sha %} &middot; <code>{{ mr.github_commit_sha[:8] }}</code>{% endif %}</td></tr>
+        {% endif %}
+    </table>
+</div>
+
+<div class="actions">
+    {% if unexpected_only %}
+        <a href="/matrix-runs/{{ mr.id }}" class="btn btn-secondary btn-sm">Show all cells</a>
+    {% else %}
+        <a href="/matrix-runs/{{ mr.id }}?unexpected_only=1" class="btn btn-secondary btn-sm">Show diverged + unknown only</a>
+    {% endif %}
+    <a href="/matrix-runs" class="btn btn-secondary btn-sm">&larr; Back to matrix runs</a>
+</div>
+
+<div class="card">
+    <h2>Cells ({{ cells|length }})</h2>
+    {% if cells %}
+    <p style="color:var(--muted); font-size:0.85rem;">
+        Note: cell verdicts pin the expectation that was in force at recording time
+        — editing an expectation only affects future matrix runs.
+    </p>
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Run</th>
+                <th>Kind</th>
+                <th>Mode</th>
+                <th>OS</th>
+                <th>Compiler</th>
+                <th>Isolation/Toolchain</th>
+                <th>Actual</th>
+                <th>Expected</th>
+                <th>Verdict</th>
+                <th>Cache</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in cells %}
+            {% set v = c.verdict.verdict.value if c.verdict.verdict else None %}
+            <tr {% if v == 'UNEXPECTED' %}style="background:#fff5f5;"{% elif v == 'UNKNOWN' %}style="background:#fff8e6;"{% endif %}>
+                <td>#{{ c.verdict.id }}</td>
+                <td><a href="/runs/{{ c.run.id }}">#{{ c.run.id }}</a></td>
+                <td>{{ c.test.kind }}</td>
+                <td>{{ c.test.mode or "-" }}</td>
+                <td>
+                    {{ c.test.os or "" }}{% if c.test.os_version %} {{ c.test.os_version }}{% endif %}
+                    {% if c.test.distro %} / {{ c.test.distro }}{% if c.test.distro_version %} {{ c.test.distro_version }}{% endif %}{% endif %}
+                </td>
+                <td>
+                    {{ c.test.compiler or "-" }}{% if c.test.compiler_version %}-{{ c.test.compiler_version }}{% endif %}
+                </td>
+                <td>{{ (c.test.isolation or "none") }} / {{ (c.test.toolchain or "none") }}</td>
+                <td>
+                    {% set actual = c.run.result_code.value if c.run.result_code else c.run.lifecycle.value %}
+                    <span class="badge badge-{{ 'passed' if actual=='PASS' else ('failed' if actual=='FAIL' else ('error' if actual=='ERROR' else 'queued')) }}">{{ actual }}</span>
+                </td>
+                <td>
+                    {% if c.expected_code %}
+                        <span class="badge badge-{{ 'passed' if c.expected_code.value=='PASS' else ('failed' if c.expected_code.value=='FAIL' else 'error') }}">{{ c.expected_code.value }}</span>
+                    {% elif c.verdict.expectation_id %}
+                        <span class="badge badge-queued">retracted</span>
+                    {% else %}
+                        <span style="color:var(--muted);">none</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if v %}
+                        <span class="badge badge-{{ 'passed' if v=='EXPECTED' else ('failed' if v=='UNEXPECTED' else 'queued') }}">{{ v }}</span>
+                    {% else %}
+                        <span class="badge badge-queued">pending</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if c.verdict.cache_hit %}
+                        <span title="Cached from TestRun #{{ c.run.id }} (finished at {{ c.run.finished_at }})" style="color:var(--primary);">hit</span>
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+            </tr>
+            {% if current_user.role in ("submitter", "admin") and v in (None, "UNKNOWN", "UNEXPECTED") %}
+            <tr>
+                <td colspan="11" style="padding:0.3rem 0.8rem;">
+                    <form method="post" action="/tests/{{ c.test.id }}/expectations" class="inline-form" style="display:flex; gap:0.5rem; align-items:center;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="return_to" value="/matrix-runs/{{ mr.id }}">
+                        <label style="font-size:0.8rem; color:var(--muted);">Set expectation for this Test:</label>
+                        <select name="expected_result_code" style="font-size:0.8rem;">
+                            <option value="">(retract)</option>
+                            <option value="PASS">PASS</option>
+                            <option value="FAIL">FAIL</option>
+                            <option value="ERROR">ERROR</option>
+                        </select>
+                        <input type="text" name="reason" placeholder="reason (issue link)" style="font-size:0.8rem; flex:1;">
+                        <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                        <span style="color:var(--muted); font-size:0.75rem;">applies to future runs only</span>
+                    </form>
+                </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No cells {% if unexpected_only %}diverged from expectation{% endif %}.</p>
+    {% endif %}
+</div>
+{% endblock %}

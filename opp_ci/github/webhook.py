@@ -222,7 +222,7 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
                 job_ref = job.get("git_ref") or git_ref
                 job_with_ref = dict(job)
                 job_with_ref["git_ref"] = job_ref
-                run = enqueue_job(
+                run, _ = enqueue_job(
                     session, job_with_ref,
                     project=job.get("project", project.name),
                     opp_file=opp_file,

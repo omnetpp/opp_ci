@@ -226,16 +226,21 @@ class TestRunLifecycle(enum.Enum):
     timed_out = "timed_out"
 
 
+class TestVerdictKind(enum.Enum):
+    EXPECTED = "EXPECTED"
+    UNEXPECTED = "UNEXPECTED"
+    UNKNOWN = "UNKNOWN"
+
+
 class Test(Base):
     __tablename__ = "tests"
 
     id = Column(Integer, primary_key=True)
 
-    # Editable metadata — the only mutable columns on a Test row.
-    # Excluded from coord_hash so renaming/expectation-edits never affect dedup.
+    # The only mutable column on a Test row. Excluded from coord_hash so
+    # renaming never affects dedup. Expectations live on
+    # ExpectedTestResult — append-only edit log keyed by test_id.
     name = Column(String, nullable=True)
-    expected_result_code = Column(Enum(TestResultCode), nullable=True)
-    expected_result_description = Column(Text, nullable=True)
 
     # Coordinate fields (immutable after creation; see TEST_COORD_FIELDS).
     project = Column(String, nullable=False)
@@ -267,27 +272,106 @@ class TestMatrixRun(Base):
     """One row per submission of a TestMatrix.
 
     Groups the per-Test `TestRun`s spawned from one expansion so they can
-    be tracked, cancelled, or queried as a unit. The matrix's own
-    aggregate status is computed by querying child `TestRun.lifecycle` —
-    there is no own `lifecycle` column in phase 1.
+    be tracked, cancelled, or queried as a unit. Counter columns
+    (pass/fail/error/expected/unexpected/unknown/cache_hit/total) and the
+    derived `actual_summary` / `verdict` are updated eagerly each time a
+    child `TestVerdict` finalizes; the UI / API never has to fan out
+    across cells to render a rollup.
     """
     __tablename__ = "test_matrix_runs"
 
     id = Column(Integer, primary_key=True)
     matrix_id = Column(Integer, ForeignKey("test_matrices.id"), nullable=False)
-    trigger = Column(String, default="manual")  # manual, web, remote, webhook, schedule, rerun
+    trigger = Column(String, default="manual")  # manual, web, remote, webhook, tag, schedule, rerun, cli
+    ref = Column(String, nullable=True)  # git ref / tag for which the run was triggered
     github_owner = Column(String, nullable=True)
     github_repo = Column(String, nullable=True)
     github_commit_sha = Column(String, nullable=True)
     github_pr_number = Column(Integer, nullable=True)
     github_status_url = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Rollup counters — updated atomically as each child TestVerdict finalizes.
+    pass_count = Column(Integer, nullable=False, default=0)
+    fail_count = Column(Integer, nullable=False, default=0)
+    error_count = Column(Integer, nullable=False, default=0)
+    expected_count = Column(Integer, nullable=False, default=0)
+    unexpected_count = Column(Integer, nullable=False, default=0)
+    unknown_count = Column(Integer, nullable=False, default=0)
+    cache_hit_count = Column(Integer, nullable=False, default=0)
+    total_count = Column(Integer, nullable=False, default=0)
+
+    # Derived summaries; recomputed in lockstep with the counters.
+    actual_summary = Column(Enum(TestResultCode), nullable=True)
+    verdict = Column(Enum(TestVerdictKind), nullable=True)
 
     matrix = relationship("TestMatrix", backref="matrix_runs")
     test_runs = relationship("TestRun", back_populates="matrix_run")
+    verdicts = relationship("TestVerdict", back_populates="matrix_run",
+                            cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<TestMatrixRun(id={self.id}, matrix_id={self.matrix_id}, trigger={self.trigger!r})>"
+
+
+class ExpectedTestResult(Base):
+    """Append-only edit log for the expected outcome of a Test.
+
+    "Current expectation for a Test" = most recent row by `set_at`. No row
+    at all = "no expectation ever declared." A row with
+    `expected_result_code IS NULL` is an explicit retraction
+    (distinguishable from never-set, and itself an audited event). Edits
+    are inserts; nothing is ever updated.
+    """
+    __tablename__ = "expected_test_results"
+
+    id = Column(Integer, primary_key=True)
+    test_id = Column(Integer, ForeignKey("tests.id"), nullable=False, index=True)
+    expected_result_code = Column(Enum(TestResultCode), nullable=True)
+    expected_result_description = Column(Text, nullable=True)
+    reason = Column(Text, nullable=True)
+    set_by = Column(String, nullable=True)
+    set_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False, index=True)
+
+    test = relationship("Test", backref="expected_results")
+
+    def __repr__(self):
+        code = self.expected_result_code.value if self.expected_result_code else "RETRACT"
+        return f"<ExpectedTestResult(test_id={self.test_id}, code={code}, set_at={self.set_at!s})>"
+
+
+class TestVerdict(Base):
+    """One row per cell of a TestMatrixRun.
+
+    A cell pins a Test to a specific TestRun (cache hits reuse a prior
+    row; cache misses point at a freshly-queued row) plus the
+    `ExpectedTestResult` row in force at recording time. The cell has at
+    most one promotion event (verdict written) and is then frozen. The
+    cell's lifecycle is derived from the underlying TestRun.lifecycle —
+    not stored — to avoid two sources of truth.
+    """
+    __tablename__ = "test_verdicts"
+
+    id = Column(Integer, primary_key=True)
+    matrix_run_id = Column(Integer, ForeignKey("test_matrix_runs.id"), nullable=False, index=True)
+    test_id = Column(Integer, ForeignKey("tests.id"), nullable=False, index=True)
+    test_run_id = Column(Integer, ForeignKey("test_runs.id"), nullable=False, index=True)
+    expectation_id = Column(Integer, ForeignKey("expected_test_results.id"), nullable=True)
+    verdict = Column(Enum(TestVerdictKind), nullable=True)
+    recorded_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    # True iff this cell reused a pre-existing TestRun (cache hit).
+    cache_hit = Column(Boolean, default=False, nullable=False)
+
+    matrix_run = relationship("TestMatrixRun", back_populates="verdicts")
+    test = relationship("Test")
+    test_run = relationship("TestRun", backref="verdicts")
+    expectation = relationship("ExpectedTestResult")
+
+    def __repr__(self):
+        v = self.verdict.value if self.verdict else "pending"
+        return f"<TestVerdict(id={self.id}, matrix_run={self.matrix_run_id}, test={self.test_id}, verdict={v})>"
 
 
 class TestRun(Base):
@@ -328,6 +412,9 @@ class TestRun(Base):
 
     # Best-effort system facts captured at run start.
     system_snapshot = Column(JSON, nullable=True)
+
+    # Content-addressable cache key (Phase 4). NULL on legacy rows.
+    cache_fingerprint = Column(String, nullable=True, index=True)
 
     test = relationship("Test", back_populates="runs")
     matrix_run = relationship("TestMatrixRun", back_populates="test_runs")

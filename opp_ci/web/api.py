@@ -35,12 +35,13 @@ from sqlalchemy import func, select
 from opp_ci.auth import require_role, require_worker_token
 from opp_ci.db.connection import SessionLocal
 from opp_ci.db.models import (
-    ApiToken, AutoTestRule, Project, Test, TestMatrix, TestMatrixRun,
-    TestResultCode, TestRun, TestRunLifecycle, Worker,
+    ApiToken, AutoTestRule, ExpectedTestResult, Project, Test, TestMatrix,
+    TestMatrixRun, TestResultCode, TestRun, TestRunLifecycle, TestVerdict,
+    TestVerdictKind, Worker,
 )
 from opp_ci.persistence import (
-    create_matrix_run, create_test_run, enqueue_job, get_or_create_test,
-    job_to_coord,
+    create_matrix_run, create_test_run, enqueue_job, finalize_verdict_for_run,
+    get_current_expectation, get_or_create_test, insert_expectation, job_to_coord,
 )
 
 _logger = logging.getLogger(__name__)
@@ -181,7 +182,7 @@ async def submit_matrix_run(
         jobs = expand_matrix(matrix.project, matrix.config)
         run_ids = []
         for job in jobs:
-            run = enqueue_job(
+            run, _ = enqueue_job(
                 session,
                 job,
                 project=matrix.project,
@@ -549,6 +550,8 @@ async def worker_report_result(
             if worker.status == "busy" and worker.current_job_count < worker.concurrency:
                 worker.status = "online"
 
+        finalize_verdict_for_run(session, run.id)
+
         session.commit()
         _logger.info("Run #%d result: %s (worker '%s')", run.id, req.result_code,
                      worker_info["worker_name"])
@@ -877,6 +880,265 @@ async def list_matrices(
             }
             for m in matrices
         ]
+    finally:
+        session.close()
+
+
+# ── Matrix-runs (rollup view + anonymous launcher) ─────────────────────
+
+
+class InlineMatrixRunRequest(BaseModel):
+    """Body for POST /api/matrix-runs.
+
+    Either `matrix_name` (an existing matrix) OR `project` plus axis
+    fields (anonymous matrix). When axis fields are present, a synthetic
+    `TestMatrix` row is persisted with a generated name.
+    """
+    matrix_name: str | None = None
+    project: str | None = None
+    name: str | None = None
+    opp_file: str | None = None
+    kinds: list[str] | None = None
+    modes: list[str] | None = None
+    refs: list[str] | None = None
+    versions: list[str] | None = None
+    os: list[str] | None = None
+    os_version: list[str] | None = None
+    distro: list[str] | None = None
+    distro_version: list[str] | None = None
+    flavor: list[str] | None = None
+    flavor_version: list[str] | None = None
+    compiler: list[str] | None = None
+    compiler_version: list[str] | None = None
+    arch: list[str] | None = None
+    isolation: list[str] | None = None
+    toolchain: list[str] | None = None
+    deps: dict | None = None
+
+
+def _spec_to_config(req: "InlineMatrixRunRequest"):
+    """Strip empty axes from the spec body and return a plain config dict."""
+    config = {}
+    for key in ("kinds", "modes", "refs", "versions", "os", "os_version",
+                "distro", "distro_version", "flavor", "flavor_version",
+                "compiler", "compiler_version", "arch", "isolation",
+                "toolchain"):
+        v = getattr(req, key)
+        if v:
+            config[key] = v
+    if req.deps:
+        config["deps"] = req.deps
+    return config
+
+
+@router.post("/matrix-runs")
+async def submit_matrix_run(
+    req: InlineMatrixRunRequest,
+    identity: dict = Depends(require_role("submitter")),
+):
+    """Launch a matrix run from a named matrix or an inline spec.
+
+    On an inline spec (no `matrix_name`), an anonymous `TestMatrix` row
+    is persisted with a generated name so the resulting `TestMatrixRun`
+    has a stable parent.
+    """
+    from opp_ci.scheduler import expand_matrix
+
+    session = SessionLocal()
+    try:
+        if req.matrix_name:
+            matrix = session.execute(
+                select(TestMatrix).where(TestMatrix.name == req.matrix_name)
+            ).scalar_one_or_none()
+            if matrix is None:
+                raise HTTPException(status_code=404,
+                                    detail=f"Matrix '{req.matrix_name}' not found")
+        else:
+            if not req.project:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Inline spec must include either 'matrix_name' "
+                           "or 'project' plus axis fields.",
+                )
+            name = req.name or (
+                f"adhoc:{req.project}:"
+                f"{datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}"
+            )
+            matrix = TestMatrix(
+                name=name,
+                project=req.project,
+                opp_file=req.opp_file,
+                config=_spec_to_config(req),
+            )
+            session.add(matrix)
+            session.flush()
+
+        proj = session.execute(
+            select(Project).where(Project.name == matrix.project)
+        ).scalar_one_or_none()
+        matrix_run = create_matrix_run(
+            session,
+            matrix_id=matrix.id,
+            trigger="remote",
+            github_owner=proj.github_owner if proj else None,
+            github_repo=proj.github_repo if proj else None,
+        )
+
+        jobs = expand_matrix(matrix.project, matrix.config)
+        run_ids = []
+        for job in jobs:
+            run, _ = enqueue_job(
+                session,
+                job,
+                project=matrix.project,
+                opp_file=matrix.opp_file,
+                matrix_run_id=matrix_run.id,
+            )
+            run_ids.append(run.id)
+        session.commit()
+        _logger.info(
+            "Matrix '%s' queued %d jobs (matrix_run=%d) by %s",
+            matrix.name, len(run_ids), matrix_run.id, identity.get("name"),
+        )
+        return {
+            "matrix": matrix.name,
+            "matrix_run_id": matrix_run.id,
+            "jobs_queued": len(run_ids),
+            "run_ids": run_ids,
+            "status": "queued",
+        }
+    finally:
+        session.close()
+
+
+
+
+def _matrix_run_to_dict(mr, matrix=None):
+    return {
+        "id": mr.id,
+        "matrix_id": mr.matrix_id,
+        "matrix_name": matrix.name if matrix else None,
+        "matrix_project": matrix.project if matrix else None,
+        "trigger": mr.trigger,
+        "ref": mr.ref,
+        "verdict": mr.verdict.value if mr.verdict else None,
+        "actual_summary": mr.actual_summary.value if mr.actual_summary else None,
+        "pass_count": mr.pass_count,
+        "fail_count": mr.fail_count,
+        "error_count": mr.error_count,
+        "expected_count": mr.expected_count,
+        "unexpected_count": mr.unexpected_count,
+        "unknown_count": mr.unknown_count,
+        "cache_hit_count": mr.cache_hit_count,
+        "total_count": mr.total_count,
+        "github_owner": mr.github_owner,
+        "github_repo": mr.github_repo,
+        "github_commit_sha": mr.github_commit_sha,
+        "github_pr_number": mr.github_pr_number,
+        "created_at": mr.created_at.isoformat() if mr.created_at else None,
+        "completed_at": mr.completed_at.isoformat() if mr.completed_at else None,
+    }
+
+
+@router.get("/matrix-runs")
+async def list_matrix_runs_api(
+    project: str | None = None,
+    verdict: str | None = None,
+    since: str | None = None,
+    limit: int = 50,
+    _identity: dict = Depends(require_role("readonly")),
+):
+    """List recent TestMatrixRun rows with their rollup verdict."""
+    session = SessionLocal()
+    try:
+        query = (
+            select(TestMatrixRun, TestMatrix)
+            .join(TestMatrix, TestMatrixRun.matrix_id == TestMatrix.id)
+            .order_by(TestMatrixRun.id.desc())
+            .limit(limit)
+        )
+        if project:
+            query = query.where(TestMatrix.project == project)
+        if verdict:
+            try:
+                query = query.where(TestMatrixRun.verdict == TestVerdictKind(verdict))
+            except ValueError:
+                raise HTTPException(status_code=400,
+                                    detail=f"Invalid verdict: {verdict!r}")
+        if since:
+            try:
+                cutoff = datetime.datetime.fromisoformat(since)
+            except ValueError:
+                raise HTTPException(status_code=400,
+                                    detail=f"Invalid since: {since!r}")
+            query = query.where(TestMatrixRun.created_at >= cutoff)
+
+        rows = session.execute(query).all()
+        return [_matrix_run_to_dict(mr, m) for mr, m in rows]
+    finally:
+        session.close()
+
+
+@router.get("/matrix-runs/{matrix_run_id}")
+async def get_matrix_run_api(
+    matrix_run_id: int,
+    _identity: dict = Depends(require_role("readonly")),
+):
+    """Get rollup plus the per-cell TestVerdict list for one matrix run."""
+    session = SessionLocal()
+    try:
+        mr = session.execute(
+            select(TestMatrixRun).where(TestMatrixRun.id == matrix_run_id)
+        ).scalar_one_or_none()
+        if mr is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Matrix run #{matrix_run_id} not found")
+        matrix = session.execute(
+            select(TestMatrix).where(TestMatrix.id == mr.matrix_id)
+        ).scalar_one_or_none()
+        d = _matrix_run_to_dict(mr, matrix)
+
+        rows = session.execute(
+            select(TestVerdict, TestRun, Test)
+            .join(TestRun, TestVerdict.test_run_id == TestRun.id)
+            .join(Test, TestVerdict.test_id == Test.id)
+            .where(TestVerdict.matrix_run_id == matrix_run_id)
+            .order_by(TestVerdict.id)
+        ).all()
+        cells = []
+        for verdict, run, test in rows:
+            expected = None
+            if verdict.expectation_id is not None:
+                exp = session.get(ExpectedTestResult, verdict.expectation_id)
+                if exp:
+                    expected = exp.expected_result_code.value if exp.expected_result_code else None
+            cells.append({
+                "verdict_id": verdict.id,
+                "test_id": test.id,
+                "test_run_id": run.id,
+                "kind": test.kind,
+                "mode": test.mode,
+                "os": test.os,
+                "os_version": test.os_version,
+                "distro": test.distro,
+                "distro_version": test.distro_version,
+                "flavor": test.flavor,
+                "flavor_version": test.flavor_version,
+                "arch": test.arch,
+                "compiler": test.compiler,
+                "compiler_version": test.compiler_version,
+                "isolation": test.isolation,
+                "toolchain": test.toolchain,
+                "actual": run.result_code.value if run.result_code else run.lifecycle.value,
+                "expected": expected,
+                "expectation_id": verdict.expectation_id,
+                "verdict": verdict.verdict.value if verdict.verdict else None,
+                "cache_hit": verdict.cache_hit,
+                "recorded_at": verdict.recorded_at.isoformat() if verdict.recorded_at else None,
+                "test_run_finished_at": run.finished_at.isoformat() if run.finished_at else None,
+            })
+        d["cells"] = cells
+        return d
     finally:
         session.close()
 

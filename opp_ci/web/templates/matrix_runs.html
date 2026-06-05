@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Matrix runs{% endblock %}
+{% block content %}
+<h2 style="margin-bottom: 1rem;">Matrix runs</h2>
+
+<form method="get" class="filters">
+    <input type="text" name="project" placeholder="project" value="{{ filter_project }}">
+    <select name="verdict">
+        <option value="">any verdict</option>
+        <option value="EXPECTED" {% if filter_verdict=="EXPECTED" %}selected{% endif %}>EXPECTED</option>
+        <option value="UNEXPECTED" {% if filter_verdict=="UNEXPECTED" %}selected{% endif %}>UNEXPECTED</option>
+        <option value="UNKNOWN" {% if filter_verdict=="UNKNOWN" %}selected{% endif %}>UNKNOWN</option>
+    </select>
+    <input type="text" name="since" placeholder="since YYYY-MM-DD" value="{{ filter_since }}">
+    <button type="submit">Filter</button>
+</form>
+
+{% if rows %}
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Matrix</th>
+            <th>Project</th>
+            <th>Trigger</th>
+            <th>Ref</th>
+            <th>Verdict</th>
+            <th>Actual</th>
+            <th>P/F/E</th>
+            <th>E/U/?</th>
+            <th>Total</th>
+            <th>Cache</th>
+            <th>Created</th>
+            <th>Completed</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for mr, m in rows %}
+        <tr>
+            <td><a href="/matrix-runs/{{ mr.id }}">#{{ mr.id }}</a></td>
+            <td><a href="/matrices/{{ m.id }}">{{ m.name }}</a></td>
+            <td><a href="/projects/{{ m.project }}">{{ m.project }}</a></td>
+            <td>{{ mr.trigger or "-" }}</td>
+            <td>{{ mr.ref or "-" }}</td>
+            <td>
+                {% if mr.verdict %}
+                    {% set v = mr.verdict.value %}
+                    <span class="badge badge-{{ 'passed' if v=='EXPECTED' else ('failed' if v=='UNEXPECTED' else 'queued') }}">{{ v }}</span>
+                {% else %}
+                    <span class="badge badge-queued">pending</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if mr.actual_summary %}
+                    {% set a = mr.actual_summary.value %}
+                    <span class="badge badge-{{ 'passed' if a=='PASS' else ('failed' if a=='FAIL' else 'error') }}">{{ a }}</span>
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+            <td>{{ mr.pass_count }}/{{ mr.fail_count }}/{{ mr.error_count }}</td>
+            <td>{{ mr.expected_count }}/{{ mr.unexpected_count }}/{{ mr.unknown_count }}</td>
+            <td>{{ mr.total_count }}</td>
+            <td>{{ mr.cache_hit_count }}</td>
+            <td>{{ mr.created_at.strftime("%Y-%m-%d %H:%M") if mr.created_at else "-" }}</td>
+            <td>{{ mr.completed_at.strftime("%Y-%m-%d %H:%M") if mr.completed_at else "-" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty">No matrix runs found.</p>
+{% endif %}
+{% endblock %}

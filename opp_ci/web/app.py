@@ -1,3 +1,4 @@
+import datetime
 import os
 import re
 from html import escape as html_escape
@@ -14,11 +15,14 @@ from opp_ci import config as cfg
 from opp_ci.auth import get_csrf_token, require_csrf, require_user
 from opp_ci.db.connection import SessionLocal
 from opp_ci.db.models import (
-    ApiToken, AutoTestRule, Compiler, OS, Project, Test, TestMatrix,
-    TestMatrixRun, TestResultCode, TestRun, TestRunLifecycle, User, Version,
-    Worker,
+    ApiToken, AutoTestRule, Compiler, ExpectedTestResult, OS, Project, Test,
+    TestMatrix, TestMatrixRun, TestResultCode, TestRun, TestRunLifecycle,
+    TestVerdict, TestVerdictKind, User, Version, Worker,
 )
-from opp_ci.persistence import create_matrix_run, enqueue_job, get_or_create_test, create_test_run
+from opp_ci.persistence import (
+    create_matrix_run, create_test_run, enqueue_job, get_current_expectation,
+    get_or_create_test, insert_expectation,
+)
 
 _ANSI_RE = re.compile(r'\x1b\[([0-9;]*)m')
 
@@ -688,6 +692,8 @@ def run_new_matrix(request: Request,
             )
             queued += 1
         session.commit()
+        # enqueue_job returns (TestRun, TestVerdict); we discard both — the
+        # rollup is refreshed inside enqueue_job and the IDs aren't needed here.
         msg = f"Queued+{queued}+jobs+from+matrix+{matrix_name}"
         return RedirectResponse(
             url=f"/queue?message={msg}&message_type=success",
@@ -1184,6 +1190,108 @@ def matrix_delete(matrix_id: int, current_user: User = Depends(require_user("sub
             session.delete(matrix)
             session.commit()
         return RedirectResponse(url="/matrices", status_code=303)
+    finally:
+        session.close()
+
+
+@web_router.get("/matrix-runs", response_class=HTMLResponse)
+def matrix_runs_list(
+    request: Request,
+    current_user: User = Depends(require_user()),
+    project: str = Query(default=None),
+    verdict: str = Query(default=None),
+    since: str = Query(default=None),
+    limit: int = Query(default=50),
+):
+    """Index of recent TestMatrixRun rows with their rollup verdict."""
+    session = SessionLocal()
+    try:
+        query = (
+            select(TestMatrixRun, TestMatrix)
+            .join(TestMatrix, TestMatrixRun.matrix_id == TestMatrix.id)
+            .order_by(TestMatrixRun.id.desc())
+            .limit(limit)
+        )
+        if project:
+            query = query.where(TestMatrix.project == project)
+        if verdict:
+            try:
+                query = query.where(TestMatrixRun.verdict == TestVerdictKind(verdict))
+            except ValueError:
+                pass
+        if since:
+            try:
+                cutoff = datetime.datetime.fromisoformat(since)
+                query = query.where(TestMatrixRun.created_at >= cutoff)
+            except ValueError:
+                pass
+
+        rows = session.execute(query).all()
+        return templates.TemplateResponse(request, "matrix_runs.html", {
+            "rows": rows,
+            "filter_project": project or "",
+            "filter_verdict": verdict or "",
+            "filter_since": since or "",
+            **_template_globals(request, current_user),
+        })
+    finally:
+        session.close()
+
+
+@web_router.get("/matrix-runs/{matrix_run_id}", response_class=HTMLResponse)
+def matrix_run_detail(
+    request: Request, matrix_run_id: int,
+    current_user: User = Depends(require_user()),
+    unexpected_only: int = Query(default=0),
+):
+    """Rollup header + per-cell verdict table for one TestMatrixRun."""
+    session = SessionLocal()
+    try:
+        mr = session.execute(
+            select(TestMatrixRun).where(TestMatrixRun.id == matrix_run_id)
+        ).scalar_one_or_none()
+        if mr is None:
+            return HTMLResponse("<h1>Matrix run not found</h1>", status_code=404)
+        matrix = session.execute(
+            select(TestMatrix).where(TestMatrix.id == mr.matrix_id)
+        ).scalar_one_or_none()
+
+        rows = session.execute(
+            select(TestVerdict, TestRun, Test)
+            .join(TestRun, TestVerdict.test_run_id == TestRun.id)
+            .join(Test, TestVerdict.test_id == Test.id)
+            .where(TestVerdict.matrix_run_id == matrix_run_id)
+            .order_by(TestVerdict.id)
+        ).all()
+
+        if unexpected_only:
+            rows = [r for r in rows if r[0].verdict != TestVerdictKind.EXPECTED]
+
+        # Resolve the expectation in force on each cell (for display).
+        cells = []
+        for verdict, run, test in rows:
+            expected_code = None
+            expected_descr = None
+            if verdict.expectation_id is not None:
+                exp = session.get(ExpectedTestResult, verdict.expectation_id)
+                if exp:
+                    expected_code = exp.expected_result_code
+                    expected_descr = exp.expected_result_description
+            cells.append({
+                "verdict": verdict,
+                "run": run,
+                "test": test,
+                "expected_code": expected_code,
+                "expected_descr": expected_descr,
+            })
+
+        return templates.TemplateResponse(request, "matrix_run_detail.html", {
+            "mr": mr,
+            "matrix": matrix,
+            "cells": cells,
+            "unexpected_only": bool(unexpected_only),
+            **_template_globals(request, current_user),
+        })
     finally:
         session.close()
 

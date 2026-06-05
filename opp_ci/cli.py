@@ -6,13 +6,14 @@ from sqlalchemy import select
 
 from opp_ci.db.connection import engine, SessionLocal
 from opp_ci.db.models import (
-    ApiToken, AutoTestRule, Base, Project, Test, TestMatrix, TestMatrixRun,
-    TestResultCode, TestRun, TestRunLifecycle, Version, Worker,
+    ApiToken, AutoTestRule, Base, ExpectedTestResult, Project, Test,
+    TestMatrix, TestMatrixRun, TestResultCode, TestRun, TestRunLifecycle,
+    TestVerdict, TestVerdictKind, Version, Worker,
 )
 from opp_ci.executor import install_project, run_test
 from opp_ci.persistence import (
     capture_system_snapshot, create_matrix_run, create_test_run, enqueue_job,
-    get_or_create_test,
+    finalize_verdict_for_run, get_or_create_test, insert_expectation,
 )
 from opp_ci.notes import update_ci_note
 
@@ -225,6 +226,7 @@ def run_cmd(ctx, project, kinds, git_ref, mode, isolation, toolchain,
                 test_run.result_code = TestResultCode.ERROR
                 test_run.stderr = str(e)
                 test_run.finished_at = datetime.datetime.utcnow()
+                finalize_verdict_for_run(session, test_run.id)
                 session.commit()
                 click.echo(f"  ERROR: {e}")
                 continue
@@ -237,6 +239,7 @@ def run_cmd(ctx, project, kinds, git_ref, mode, isolation, toolchain,
             test_run.stdout = outcome["stdout"]
             test_run.stderr = outcome["stderr"]
             test_run.details = outcome.get("details")
+            finalize_verdict_for_run(session, test_run.id)
             session.commit()
             update_ci_note(project, test_run.commit_sha, session)
             click.echo(f"  Result: {outcome['result_code']} ({outcome['duration_seconds']:.1f}s)")
@@ -1001,25 +1004,185 @@ def list_matrices():
         session.close()
 
 
+def _spec_from_flags(*, project, kinds, modes, refs, os_names, os_versions,
+                     distros, distro_versions, flavors, flavor_versions,
+                     compilers, compiler_versions, arches, isolation, toolchain,
+                     versions):
+    """Build a matrix-config dict from inline axis flags (Phase 2)."""
+    config = {}
+    if kinds:
+        config["kinds"] = [k.strip() for k in kinds.split(",") if k.strip()]
+    if modes:
+        config["modes"] = [m.strip() for m in modes.split(",") if m.strip()]
+    if refs:
+        config["refs"] = [r.strip() for r in refs.split(",") if r.strip()]
+    if os_names:
+        config["os"] = [o.strip() for o in os_names.split(",") if o.strip()]
+    if os_versions:
+        config["os_version"] = [o.strip() for o in os_versions.split(",")]
+    if distros:
+        config["distro"] = [d.strip() for d in distros.split(",")]
+    if distro_versions:
+        config["distro_version"] = [d.strip() for d in distro_versions.split(",")]
+    if flavors:
+        config["flavor"] = [f.strip() for f in flavors.split(",")]
+    if flavor_versions:
+        config["flavor_version"] = [f.strip() for f in flavor_versions.split(",")]
+    if compilers:
+        config["compiler"] = [c.strip() for c in compilers.split(",")]
+    if compiler_versions:
+        config["compiler_version"] = [c.strip() for c in compiler_versions.split(",")]
+    if arches:
+        config["arch"] = [a.strip() for a in arches.split(",")]
+    if isolation:
+        config["isolation"] = [v.strip() for v in isolation.split(",")]
+    if toolchain:
+        config["toolchain"] = [v.strip() for v in toolchain.split(",")]
+    if versions:
+        config["versions"] = [v.strip() for v in versions.split(",")]
+    elif project:
+        config["versions"] = [project]
+    return config
+
+
+def _generate_anonymous_matrix_name(project):
+    """Synthesise a stable, human-readable name for an anonymous matrix.
+
+    Phase 1 schema persists every matrix; anonymous matrices get a row
+    too so the rollup and per-cell verdict stay attached to a TestMatrix.
+    """
+    ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return f"adhoc:{project}:{ts}"
+
+
 @main.command("run-matrix")
-@click.option("--matrix", "matrix_name", required=True, help="Matrix name to run")
+@click.option("--matrix", "matrix_name", default=None,
+              help="Run a named matrix from the database")
+@click.option("--spec-file", "spec_file", default=None,
+              help="JSON spec for an anonymous matrix; '-' reads stdin")
+@click.option("--project", default=None, help="Anonymous matrix: project name")
+@click.option("--kinds", default=None, help="Anonymous matrix: comma-separated kinds")
+@click.option("--modes", default=None, help="Anonymous matrix: comma-separated modes")
+@click.option("--refs", default=None,
+              help="Anonymous matrix: comma-separated git refs/tags")
+@click.option("--ref", "single_ref", default=None,
+              help="Anonymous matrix: shorthand for a single git ref")
+@click.option("--versions", "versions", default=None,
+              help="Anonymous matrix: comma-separated opp_env versions")
+@click.option("--os", "os_names", default=None,
+              help="Anonymous matrix: comma-separated OS families")
+@click.option("--os-version", "os_versions", default=None,
+              help="Anonymous matrix: comma-separated OS versions")
+@click.option("--distro", "distros", default=None,
+              help="Anonymous matrix: comma-separated distros")
+@click.option("--distro-version", "distro_versions", default=None,
+              help="Anonymous matrix: comma-separated distro versions")
+@click.option("--flavor", "flavors", default=None,
+              help="Anonymous matrix: comma-separated flavors")
+@click.option("--flavor-version", "flavor_versions", default=None,
+              help="Anonymous matrix: comma-separated flavor versions")
+@click.option("--compiler", "compilers", default=None,
+              help="Anonymous matrix: comma-separated compilers")
+@click.option("--compiler-version", "compiler_versions", default=None,
+              help="Anonymous matrix: comma-separated compiler versions")
+@click.option("--arch", "arches", default=None,
+              help="Anonymous matrix: comma-separated arches")
+@click.option("--isolation", default=None,
+              help="Anonymous matrix: comma-separated isolation values")
+@click.option("--toolchain", default=None,
+              help="Anonymous matrix: comma-separated toolchain values")
+@click.option("--no-cache", is_flag=True,
+              help="Force a fresh TestRun per cell, bypassing the content cache")
+@click.option("--follow", is_flag=True,
+              help="Stream per-cell progress until the matrix terminates")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
-def run_matrix(matrix_name, skip_install):
-    """Expand a matrix and run all jobs sequentially."""
+def run_matrix(matrix_name, spec_file, project, kinds, modes, refs, single_ref,
+               versions, os_names, os_versions, distros, distro_versions,
+               flavors, flavor_versions, compilers, compiler_versions, arches,
+               isolation, toolchain, no_cache, follow, skip_install):
+    """Expand a matrix and run all jobs sequentially.
+
+    Three input modes (mutually exclusive):
+
+    \b
+        opp_ci run-matrix --matrix NAME
+        opp_ci run-matrix --spec-file spec.json
+        opp_ci run-matrix --project inet --kinds smoke --modes release ...
+
+    `--no-cache` forces a fresh TestRun per cell (bypassing the cache
+    introduced in Phase 4). `--follow` is an alias for the default
+    sequential behavior — kept so scripts can opt-in explicitly.
+    """
     from opp_ci.scheduler import expand_matrix
+    import json as _json
+
+    inputs = [bool(matrix_name), bool(spec_file),
+              bool(project or kinds or modes or refs or os_names or distros
+                   or flavors or compilers or arches)]
+    if sum(inputs) > 1:
+        raise click.ClickException(
+            "Pick exactly one of: --matrix NAME, --spec-file FILE, or inline axis flags."
+        )
 
     Base.metadata.create_all(engine)
     session = SessionLocal()
     try:
-        matrix = session.execute(
-            select(TestMatrix).where(TestMatrix.name == matrix_name)
-        ).scalar_one_or_none()
-        if matrix is None:
-            click.echo(f"Matrix '{matrix_name}' not found.")
-            return
+        if matrix_name:
+            matrix = session.execute(
+                select(TestMatrix).where(TestMatrix.name == matrix_name)
+            ).scalar_one_or_none()
+            if matrix is None:
+                click.echo(f"Matrix '{matrix_name}' not found.")
+                return
+        else:
+            # Build a TestMatrix row from the inline spec / spec file.
+            if spec_file:
+                import sys as _sys
+                stream = _sys.stdin if spec_file == "-" else open(spec_file)
+                with stream as fh:
+                    spec = _json.load(fh)
+                ad_hoc_project = spec.get("project") or project
+                if not ad_hoc_project:
+                    raise click.ClickException(
+                        "Spec file must include a 'project' key."
+                    )
+                ad_hoc_config = {k: v for k, v in spec.items()
+                                 if k not in ("project", "opp_file", "name")}
+                opp_file = spec.get("opp_file")
+                proposed_name = spec.get("name") or _generate_anonymous_matrix_name(ad_hoc_project)
+            else:
+                if not project:
+                    raise click.ClickException(
+                        "--project is required when building an anonymous matrix from flags."
+                    )
+                if single_ref and not refs:
+                    refs = single_ref
+                ad_hoc_project = project
+                ad_hoc_config = _spec_from_flags(
+                    project=project, kinds=kinds, modes=modes, refs=refs,
+                    os_names=os_names, os_versions=os_versions,
+                    distros=distros, distro_versions=distro_versions,
+                    flavors=flavors, flavor_versions=flavor_versions,
+                    compilers=compilers, compiler_versions=compiler_versions,
+                    arches=arches, isolation=isolation, toolchain=toolchain,
+                    versions=versions,
+                )
+                opp_file = None
+                proposed_name = _generate_anonymous_matrix_name(project)
+
+            matrix = TestMatrix(
+                name=proposed_name,
+                project=ad_hoc_project,
+                opp_file=opp_file,
+                config=ad_hoc_config,
+            )
+            session.add(matrix)
+            session.flush()
+            click.echo(f"Anonymous matrix '{matrix.name}' created.")
 
         jobs = expand_matrix(matrix.project, matrix.config)
-        click.echo(f"Running matrix '{matrix_name}': {len(jobs)} jobs")
+        click.echo(f"Running matrix '{matrix.name}': {len(jobs)} jobs"
+                   f"{'' if not no_cache else ' (cache disabled)'}")
 
         # Install once per unique project+ref+toolchain+isolation combination.
         # install_project is a no-op unless isolation=none and toolchain=nix,
@@ -1049,7 +1212,7 @@ def run_matrix(matrix_name, skip_install):
         failed = 0
         errors = 0
         for i, job in enumerate(jobs, 1):
-            test_run = enqueue_job(
+            test_run, _ = enqueue_job(
                 session, job,
                 project=matrix.project,
                 opp_file=matrix.opp_file,
@@ -1085,6 +1248,7 @@ def run_matrix(matrix_name, skip_install):
                 test_run.result_code = TestResultCode.ERROR
                 test_run.stderr = str(e)
                 test_run.finished_at = datetime.datetime.utcnow()
+                finalize_verdict_for_run(session, test_run.id)
                 session.commit()
                 click.echo(f" → ERROR")
                 errors += 1
@@ -1098,6 +1262,7 @@ def run_matrix(matrix_name, skip_install):
             test_run.stdout = outcome["stdout"]
             test_run.stderr = outcome["stderr"]
             test_run.details = outcome.get("details")
+            finalize_verdict_for_run(session, test_run.id)
             session.commit()
             update_ci_note(job["project"], test_run.commit_sha, session,
                            opp_file=matrix.opp_file)
@@ -1110,6 +1275,7 @@ def run_matrix(matrix_name, skip_install):
                 click.echo(f" → FAIL ({outcome['duration_seconds']:.1f}s)")
 
         click.echo(f"\nMatrix complete: {passed} passed, {failed} failed, {errors} errors")
+        click.echo(f"Matrix run #{matrix_run.id} — opp_ci show-matrix-run {matrix_run.id}")
 
         # Trigger GitHub Action notes sync once for the whole matrix
         proj = session.execute(
@@ -1118,6 +1284,137 @@ def run_matrix(matrix_name, skip_install):
         if proj and proj.github_owner and proj.github_repo:
             from opp_ci.notes import trigger_notes_sync
             trigger_notes_sync(proj.github_owner, proj.github_repo)
+    finally:
+        session.close()
+
+
+@main.command("list-matrix-runs")
+@click.option("--project", default=None, help="Filter by project")
+@click.option("--verdict", default=None,
+              type=click.Choice(["EXPECTED", "UNEXPECTED", "UNKNOWN"]),
+              help="Filter by rollup verdict")
+@click.option("--since", default=None, help="Only runs created after YYYY-MM-DD")
+@click.option("--limit", default=20, type=int, help="Max rows to show (default: 20)")
+def list_matrix_runs(project, verdict, since, limit):
+    """List recent TestMatrixRun rows with their rollup verdict."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        query = (
+            select(TestMatrixRun, TestMatrix)
+            .join(TestMatrix, TestMatrixRun.matrix_id == TestMatrix.id)
+            .order_by(TestMatrixRun.id.desc())
+            .limit(limit)
+        )
+        if project:
+            query = query.where(TestMatrix.project == project)
+        if verdict:
+            query = query.where(TestMatrixRun.verdict == TestVerdictKind(verdict))
+        if since:
+            cutoff = datetime.datetime.strptime(since, "%Y-%m-%d")
+            query = query.where(TestMatrixRun.created_at >= cutoff)
+
+        rows = session.execute(query).all()
+        if not rows:
+            click.echo("No matrix runs found.")
+            return
+
+        click.echo(f"{'ID':<6} {'Matrix':<24} {'Project':<14} {'Trigger':<10} "
+                   f"{'Ref':<14} {'Verdict':<11} {'P/F/E':<10} {'Total':<6} {'Created'}")
+        click.echo("-" * 130)
+        for mr, m in rows:
+            verdict_str = mr.verdict.value if mr.verdict else "-"
+            pfe = f"{mr.pass_count}/{mr.fail_count}/{mr.error_count}"
+            created = mr.created_at.strftime("%Y-%m-%d %H:%M") if mr.created_at else "-"
+            ref = mr.ref or "-"
+            click.echo(
+                f"{mr.id:<6} {m.name[:24]:<24} {m.project[:14]:<14} "
+                f"{mr.trigger or '-':<10} {ref[:14]:<14} {verdict_str:<11} "
+                f"{pfe:<10} {mr.total_count:<6} {created}"
+            )
+    finally:
+        session.close()
+
+
+@main.command("show-matrix-run")
+@click.argument("matrix_run_id", type=int)
+@click.option("--unexpected-only", is_flag=True,
+              help="Show only cells whose verdict diverged from expectation")
+def show_matrix_run(matrix_run_id, unexpected_only):
+    """Print rollup + per-cell table for one TestMatrixRun."""
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        mr = session.execute(
+            select(TestMatrixRun).where(TestMatrixRun.id == matrix_run_id)
+        ).scalar_one_or_none()
+        if mr is None:
+            click.echo(f"Matrix run #{matrix_run_id} not found.")
+            return
+        matrix = session.execute(
+            select(TestMatrix).where(TestMatrix.id == mr.matrix_id)
+        ).scalar_one_or_none()
+
+        verdict_str = mr.verdict.value if mr.verdict else "(pending)"
+        actual_str = mr.actual_summary.value if mr.actual_summary else "-"
+        click.echo(f"Matrix run #{mr.id}: {matrix.name if matrix else '?'} "
+                   f"({matrix.project if matrix else '?'})")
+        click.echo(f"  Trigger:      {mr.trigger}")
+        click.echo(f"  Ref:          {mr.ref or '-'}")
+        click.echo(f"  Verdict:      {verdict_str}")
+        click.echo(f"  Actual:       {actual_str}")
+        click.echo(f"  Counters:     pass={mr.pass_count}  fail={mr.fail_count}  "
+                   f"error={mr.error_count}  total={mr.total_count}")
+        click.echo(f"                expected={mr.expected_count}  "
+                   f"unexpected={mr.unexpected_count}  unknown={mr.unknown_count}  "
+                   f"cache_hits={mr.cache_hit_count}")
+        click.echo(f"  Created at:   {mr.created_at}")
+        click.echo(f"  Completed at: {mr.completed_at or '(in progress)'}")
+        click.echo("")
+
+        rows = session.execute(
+            select(TestVerdict, TestRun, Test)
+            .join(TestRun, TestVerdict.test_run_id == TestRun.id)
+            .join(Test, TestVerdict.test_id == Test.id)
+            .where(TestVerdict.matrix_run_id == matrix_run_id)
+            .order_by(TestVerdict.id)
+        ).all()
+        if unexpected_only:
+            rows = [r for r in rows if r[0].verdict not in
+                    (TestVerdictKind.EXPECTED,)]
+
+        if not rows:
+            click.echo("(no cells)" if not unexpected_only else "(no diverged cells)")
+            return
+
+        click.echo(f"{'Cell':<6} {'Run':<6} {'Kind':<14} {'Mode':<8} "
+                   f"{'OS':<14} {'Compiler':<14} {'Actual':<10} "
+                   f"{'Expected':<10} {'Verdict':<11} {'Cache'}")
+        click.echo("-" * 130)
+        for verdict, test_run, test in rows:
+            actual = test_run.result_code.value if test_run.result_code else \
+                test_run.lifecycle.value
+            expected = "-"
+            if verdict.expectation_id is not None:
+                exp = session.get(ExpectedTestResult, verdict.expectation_id)
+                if exp and exp.expected_result_code:
+                    expected = exp.expected_result_code.value
+                elif exp:
+                    expected = "(retract)"
+            v = verdict.verdict.value if verdict.verdict else "(pending)"
+            cache = "hit" if verdict.cache_hit else "-"
+            os_str = (test.os or "") + (
+                f" {test.os_version}" if test.os_version else ""
+            ) + (f" {test.distro}" if test.distro else "")
+            compiler_str = (test.compiler or "-") + (
+                f"-{test.compiler_version}" if test.compiler_version else ""
+            )
+            click.echo(
+                f"{verdict.id:<6} #{test_run.id:<5} {test.kind[:14]:<14} "
+                f"{(test.mode or '-')[:8]:<8} {os_str[:14]:<14} "
+                f"{compiler_str[:14]:<14} {actual:<10} {expected:<10} "
+                f"{v:<11} {cache}"
+            )
     finally:
         session.close()
 

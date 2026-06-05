@@ -1,7 +1,9 @@
 """Helpers for writing the new test data model.
 
-Centralises the get-or-create Test + create TestRun pattern so every call
-site (web routes, REST API, CLI, github webhook) stays consistent.
+Centralises the get-or-create Test + create TestRun + create TestVerdict
+pattern so every call site (web routes, REST API, CLI, github webhook)
+stays consistent, and keeps verdict computation + matrix-run rollup in a
+single place.
 """
 
 import datetime
@@ -12,11 +14,15 @@ from sqlalchemy import select
 
 from opp_ci.db.models import (
     TEST_COORD_FIELDS,
+    ExpectedTestResult,
     Test,
     TestMatrix,
     TestMatrixRun,
+    TestResultCode,
     TestRun,
     TestRunLifecycle,
+    TestVerdict,
+    TestVerdictKind,
     compute_test_coord_hash,
 )
 
@@ -58,7 +64,7 @@ def get_or_create_test(session, coord):
     return test
 
 
-def create_matrix_run(session, *, matrix_id, trigger="manual",
+def create_matrix_run(session, *, matrix_id, trigger="manual", ref=None,
                       github_owner=None, github_repo=None,
                       github_commit_sha=None, github_pr_number=None,
                       github_status_url=None):
@@ -66,6 +72,7 @@ def create_matrix_run(session, *, matrix_id, trigger="manual",
     matrix_run = TestMatrixRun(
         matrix_id=matrix_id,
         trigger=trigger,
+        ref=ref,
         github_owner=github_owner,
         github_repo=github_repo,
         github_commit_sha=github_commit_sha,
@@ -79,7 +86,7 @@ def create_matrix_run(session, *, matrix_id, trigger="manual",
 
 def create_test_run(session, *, test_id, matrix_run_id=None,
                     commit_sha=None, git_ref=None, version=None,
-                    resolved_deps=None):
+                    resolved_deps=None, cache_fingerprint=None):
     """Create a queued TestRun targeting `test_id`."""
     run = TestRun(
         test_id=test_id,
@@ -89,22 +96,294 @@ def create_test_run(session, *, test_id, matrix_run_id=None,
         version=version,
         resolved_deps=resolved_deps,
         lifecycle=TestRunLifecycle.queued,
+        cache_fingerprint=cache_fingerprint,
     )
     session.add(run)
     session.flush()
     return run
 
 
-def enqueue_job(session, job, *, project, opp_file=None, matrix_run_id=None):
-    """End-to-end: turn one expand_matrix job dict into a queued TestRun.
+# ── Expectations ──────────────────────────────────────────────────────
 
-    Looks up (or creates) the matching `Test`, then creates a `TestRun`
-    parented to `matrix_run_id` if given. Returns the TestRun. Caller
-    commits.
+
+def get_current_expectation(session, test_id):
+    """Return the most recent `ExpectedTestResult` row for `test_id`, or None.
+
+    "Most recent" means the row with the highest `set_at`. A retraction
+    row (where `expected_result_code IS NULL`) is treated like any other
+    row — callers that need to distinguish "no row" from "retracted" must
+    look at the returned object's `expected_result_code`.
+    """
+    return session.execute(
+        select(ExpectedTestResult)
+        .where(ExpectedTestResult.test_id == test_id)
+        .order_by(ExpectedTestResult.set_at.desc(),
+                  ExpectedTestResult.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def insert_expectation(session, *, test_id, expected_result_code,
+                       expected_result_description=None, reason=None,
+                       set_by=None, set_at=None):
+    """Append a new ExpectedTestResult row. `expected_result_code` may be
+    None — that records an explicit retraction, distinguishable from
+    never-set. Caller commits."""
+    row = ExpectedTestResult(
+        test_id=test_id,
+        expected_result_code=expected_result_code,
+        expected_result_description=expected_result_description,
+        reason=reason,
+        set_by=set_by,
+        set_at=set_at or datetime.datetime.utcnow(),
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+# ── Verdicts ──────────────────────────────────────────────────────────
+
+
+def compute_verdict_kind(actual_code, expectation):
+    """Three-state verdict for one cell.
+
+    `actual_code` is the TestRun.result_code value (an enum or None);
+    `expectation` is an ExpectedTestResult row or None.
+
+    Returns:
+      None       — actual is not yet known (TestRun still queued/running)
+      UNKNOWN    — actual known, but no expectation existed (or it was
+                   explicitly retracted)
+      EXPECTED   — actual matched the expectation
+      UNEXPECTED — actual diverged from the expectation
+    """
+    if actual_code is None:
+        return None
+    if expectation is None or expectation.expected_result_code is None:
+        return TestVerdictKind.UNKNOWN
+    if actual_code == expectation.expected_result_code:
+        return TestVerdictKind.EXPECTED
+    return TestVerdictKind.UNEXPECTED
+
+
+def create_test_verdict(session, *, matrix_run_id, test_id, test_run_id,
+                        expectation=None, verdict=None,
+                        recorded_at=None, cache_hit=False):
+    """Insert a TestVerdict row. When `verdict` is None the cell is
+    pending; otherwise `recorded_at` must be set (the caller's
+    `datetime.utcnow()` for cache hits, the run's `finished_at` for
+    miss-then-execute). Caller commits."""
+    row = TestVerdict(
+        matrix_run_id=matrix_run_id,
+        test_id=test_id,
+        test_run_id=test_run_id,
+        expectation_id=expectation.id if expectation else None,
+        verdict=verdict,
+        recorded_at=recorded_at,
+        cache_hit=cache_hit,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+# ── Rollup ────────────────────────────────────────────────────────────
+
+
+_RESULT_RANK = {
+    TestResultCode.PASS: 0,
+    TestResultCode.SKIPPED: 0,
+    TestResultCode.FAIL: 1,
+    TestResultCode.ERROR: 2,
+}
+
+
+def _worst_result(a, b):
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return b if _RESULT_RANK.get(b, 0) > _RESULT_RANK.get(a, 0) else a
+
+
+def recompute_matrix_run_rollup(session, matrix_run_id):
+    """Recompute the counter / verdict / actual_summary / completed_at
+    columns on a TestMatrixRun from its child TestVerdict + TestRun rows.
+
+    Called whenever a cell promotes (verdict written) or a TestRun
+    transitions lifecycle. The rollup is stored so the UI and API never
+    have to fan out across cells.
+    """
+    matrix_run = session.get(TestMatrixRun, matrix_run_id)
+    if matrix_run is None:
+        return
+
+    rows = session.execute(
+        select(TestVerdict, TestRun)
+        .join(TestRun, TestVerdict.test_run_id == TestRun.id)
+        .where(TestVerdict.matrix_run_id == matrix_run_id)
+    ).all()
+
+    pass_n = fail_n = error_n = 0
+    exp_n = unexp_n = unk_n = 0
+    cache_hits = 0
+    total = 0
+    actual_summary = None
+    all_finished = True
+    latest_finished = None
+
+    for verdict, test_run in rows:
+        total += 1
+        if verdict.cache_hit:
+            cache_hits += 1
+        rc = test_run.result_code
+        if rc == TestResultCode.PASS:
+            pass_n += 1
+            actual_summary = _worst_result(actual_summary, rc)
+        elif rc == TestResultCode.FAIL:
+            fail_n += 1
+            actual_summary = _worst_result(actual_summary, rc)
+        elif rc == TestResultCode.ERROR:
+            error_n += 1
+            actual_summary = _worst_result(actual_summary, rc)
+
+        if verdict.verdict == TestVerdictKind.EXPECTED:
+            exp_n += 1
+        elif verdict.verdict == TestVerdictKind.UNEXPECTED:
+            unexp_n += 1
+        elif verdict.verdict == TestVerdictKind.UNKNOWN:
+            unk_n += 1
+
+        if test_run.lifecycle not in (TestRunLifecycle.finished,
+                                      TestRunLifecycle.cancelled,
+                                      TestRunLifecycle.timed_out):
+            all_finished = False
+        if test_run.finished_at is not None:
+            if latest_finished is None or test_run.finished_at > latest_finished:
+                latest_finished = test_run.finished_at
+
+    matrix_run.pass_count = pass_n
+    matrix_run.fail_count = fail_n
+    matrix_run.error_count = error_n
+    matrix_run.expected_count = exp_n
+    matrix_run.unexpected_count = unexp_n
+    matrix_run.unknown_count = unk_n
+    matrix_run.cache_hit_count = cache_hits
+    matrix_run.total_count = total
+    matrix_run.actual_summary = actual_summary
+
+    if unexp_n > 0:
+        matrix_run.verdict = TestVerdictKind.UNEXPECTED
+    elif unk_n > 0:
+        matrix_run.verdict = TestVerdictKind.UNKNOWN
+    elif exp_n > 0 and (exp_n + unexp_n + unk_n) == total:
+        matrix_run.verdict = TestVerdictKind.EXPECTED
+    else:
+        matrix_run.verdict = None
+
+    matrix_run.completed_at = latest_finished if (total > 0 and all_finished) else None
+
+
+def finalize_verdict_for_run(session, run_id):
+    """Promote any pending TestVerdict rows attached to `run_id` and
+    refresh the parent TestMatrixRun rollup.
+
+    Called from the worker result handler and from any local executor
+    once the TestRun outcome is known. Idempotent — if the verdict has
+    already been written it is left alone.
+    """
+    run = session.get(TestRun, run_id)
+    if run is None:
+        return
+    if run.lifecycle != TestRunLifecycle.finished or run.result_code is None:
+        return
+
+    pending = session.execute(
+        select(TestVerdict).where(
+            TestVerdict.test_run_id == run_id,
+            TestVerdict.verdict.is_(None),
+        )
+    ).scalars().all()
+
+    affected_matrix_runs = set()
+    for verdict in pending:
+        expectation = get_current_expectation(session, verdict.test_id)
+        verdict.expectation_id = expectation.id if expectation else None
+        verdict.verdict = compute_verdict_kind(run.result_code, expectation)
+        verdict.recorded_at = run.finished_at or datetime.datetime.utcnow()
+        affected_matrix_runs.add(verdict.matrix_run_id)
+
+    # Even cells whose verdict was pre-populated (cache hits) belong to a
+    # matrix run that may still need rollup recomputation if other cells
+    # changed lifecycle; pick up every matrix run this TestRun touches.
+    for vid, mid in session.execute(
+        select(TestVerdict.id, TestVerdict.matrix_run_id)
+        .where(TestVerdict.test_run_id == run_id)
+    ).all():
+        affected_matrix_runs.add(mid)
+
+    for mid in affected_matrix_runs:
+        if mid is not None:
+            recompute_matrix_run_rollup(session, mid)
+
+
+# ── Enqueue ───────────────────────────────────────────────────────────
+
+
+def enqueue_job(session, job, *, project, opp_file=None, matrix_run_id=None,
+                use_cache=False, cache_fingerprint=None):
+    """End-to-end: turn one expand_matrix job dict into a queued TestRun
+    plus (when `matrix_run_id` is given) a corresponding TestVerdict cell.
+
+    Cache strategy:
+      * `use_cache=True` and a `cache_fingerprint` is given → look up the
+        most recent finished TestRun with the same fingerprint. On hit,
+        no new TestRun is created; the cell points at the existing
+        TestRun and the verdict is computed immediately.
+      * Miss or `use_cache=False` → a fresh TestRun is queued. The
+        verdict cell is created with `verdict=None`; it promotes when
+        the run finishes.
+
+    Returns a (TestRun, TestVerdict|None) tuple. The TestVerdict is None
+    only when no `matrix_run_id` was given.
     """
     coord = job_to_coord(job, project=project, opp_file=opp_file)
     test = get_or_create_test(session, coord)
-    return create_test_run(
+
+    cached_run = None
+    if use_cache and cache_fingerprint:
+        cached_run = session.execute(
+            select(TestRun)
+            .where(
+                TestRun.cache_fingerprint == cache_fingerprint,
+                TestRun.lifecycle == TestRunLifecycle.finished,
+                TestRun.result_code.isnot(None),
+            )
+            .order_by(TestRun.finished_at.desc(), TestRun.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+    if cached_run is not None:
+        run = cached_run
+        if matrix_run_id is not None:
+            expectation = get_current_expectation(session, test.id)
+            verdict = compute_verdict_kind(run.result_code, expectation)
+            tv = create_test_verdict(
+                session,
+                matrix_run_id=matrix_run_id,
+                test_id=test.id,
+                test_run_id=run.id,
+                expectation=expectation,
+                verdict=verdict,
+                recorded_at=datetime.datetime.utcnow(),
+                cache_hit=True,
+            )
+            recompute_matrix_run_rollup(session, matrix_run_id)
+            return run, tv
+        return run, None
+
+    run = create_test_run(
         session,
         test_id=test.id,
         matrix_run_id=matrix_run_id,
@@ -112,7 +391,22 @@ def enqueue_job(session, job, *, project, opp_file=None, matrix_run_id=None):
         git_ref=job.get("git_ref"),
         version=job.get("version"),
         resolved_deps=job.get("resolved_deps"),
+        cache_fingerprint=cache_fingerprint,
     )
+    tv = None
+    if matrix_run_id is not None:
+        tv = create_test_verdict(
+            session,
+            matrix_run_id=matrix_run_id,
+            test_id=test.id,
+            test_run_id=run.id,
+            expectation=None,
+            verdict=None,
+            recorded_at=None,
+            cache_hit=False,
+        )
+        recompute_matrix_run_rollup(session, matrix_run_id)
+    return run, tv
 
 
 def capture_system_snapshot():
