@@ -32,10 +32,18 @@ def list_all_projects():
             ...
         ]
     """
-    result = subprocess.run(
-        ["opp_env", "info", "--raw"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["opp_env", "info", "--raw"],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        _logger.warning(
+            "opp_env not installed — skipping catalog sync. "
+            "Install it into the same venv (pip install -e /path/to/opp_env) "
+            "or via packaging/systemd/install.sh, which clones it as a sibling."
+        )
+        return []
     if result.returncode != 0:
         _logger.error("opp_env info --raw failed: %s", result.stderr.strip())
         return []

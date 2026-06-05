@@ -1,16 +1,49 @@
 #!/bin/bash
 #
 # Recreate the opp_ci database from scratch:
-# - Seed the core projects, platforms, and default matrices.
-# - Import the remaining projects + versions from the opp_env catalog.
+# - Reset and reseed the core projects, platforms, and default matrices.
+# - Sync the opp_env catalog (skipped with a warning if opp_env is missing).
+# - Ensure the `notes-readonly` API token exists.
 #
+# Locates the opp_ci CLI via the venv next to this script (.venv) or one
+# level up (../.venv) — works in both a dev checkout and the systemd
+# deploy layout, with no PATH gymnastics from the caller.
 
 set -e
 
-opp_ci reset-db --yes --preserve-tokens
-opp_ci seed-projects
-opp_ci seed-platforms
-opp_ci seed-matrices
-opp_ci sync-catalog
-opp_ci token list | grep -qE '^\S+\s+notes-readonly\b' || opp_ci token create --name notes-readonly --role readonly
-opp_ci list-projects
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Locate the venv. Dev checkout typically has .venv at the repo root;
+# the systemd install has it at the same place (/opt/opp_ci/.venv). Some
+# devs use a sibling .venv in workspace/, so check that too.
+for candidate in "$REPO_ROOT/.venv" "$REPO_ROOT/../.venv"; do
+    if [[ -x "$candidate/bin/opp_ci" ]]; then
+        OPP_CI="$candidate/bin/opp_ci"
+        break
+    fi
+done
+if [[ -z "${OPP_CI:-}" ]]; then
+    echo "error: cannot find opp_ci in $REPO_ROOT/.venv or $REPO_ROOT/../.venv" >&2
+    echo "       run packaging/systemd/install.sh, or create the venv manually" >&2
+    exit 1
+fi
+
+"$OPP_CI" reset-db --yes --preserve-tokens
+"$OPP_CI" seed-projects
+"$OPP_CI" seed-platforms
+"$OPP_CI" seed-matrices
+
+# opp_env may be missing on a coordinator-only host. Don't abort the whole
+# recreate over it — the dashboard works fine without the upstream catalog.
+if "$OPP_CI" sync-catalog; then
+    :
+else
+    rc=$?
+    echo "warning: sync-catalog failed (rc=$rc) — install opp_env to populate" >&2
+    echo "         the project catalog, then run: opp_ci sync-catalog" >&2
+fi
+
+"$OPP_CI" token list | grep -qE '^\S+\s+notes-readonly\b' \
+    || "$OPP_CI" token create --name notes-readonly --role readonly
+"$OPP_CI" list-projects
