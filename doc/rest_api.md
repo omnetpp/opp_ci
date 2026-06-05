@@ -29,9 +29,33 @@ Implementation: `opp_ci/auth.py`.
 | Endpoint | Method | Role | Purpose |
 |---|---|---|---|
 | `/api/runs` | POST | submitter | Submit a single test run to the queue. Body fields: `project`, `kind` (required); plus the same coordinate fields that appear on a [Test](data_model.md#test). |
-| `/api/runs/matrix` | POST | submitter | Expand a named matrix and queue all jobs as one `TestMatrixRun`. Body: `{"matrix_name": "..."}`. Response includes `matrix_run_id` and `run_ids`. |
+| `/api/runs/matrix` | POST | submitter | (Legacy) Expand a named matrix and queue all jobs as one `TestMatrixRun`. Body: `{"matrix_name": "..."}`. Response includes `matrix_run_id` and `run_ids`. Prefer the more flexible `/api/matrix-runs` below. |
 | `/api/runs` | GET | readonly | List runs. Filters: `project`, `kind`, `status` (matches `lifecycle`), `os`, `os_version`, `distro`, `distro_version`, `flavor`, `flavor_version`, `limit`. |
 | `/api/runs/{id}` | GET | readonly | Run detail including `stdout`, `stderr`, and `details` (read off the same `TestRun` row). |
+
+### Matrix runs (rollup view + anonymous launcher)
+
+Each `TestMatrixRun` carries a stored, O(1) rollup with a three-state
+verdict (`EXPECTED` / `UNEXPECTED` / `UNKNOWN`) computed eagerly as
+child [`TestVerdict`](data_model.md#testverdict) cells finalize.
+
+| Endpoint | Method | Role | Purpose |
+|---|---|---|---|
+| `/api/matrix-runs` | POST | submitter | Launch a matrix run. Body: either `{"matrix_name": "..."}` (existing named matrix) **or** `{"project": "...", "kinds": [...], "modes": [...], "os": [...], ...}` (anonymous matrix; same axis keys as a `TestMatrix.config`). Optional `name`, `opp_file`, `deps`, and `no_cache: true` to bypass the content-addressable cache. Anonymous matrices persist as `adhoc:<project>:<UTC-timestamp>` rows so the resulting `TestMatrixRun` has a stable parent. Response: `{"matrix_run_id", "jobs_queued", "run_ids", "status"}`. |
+| `/api/matrix-runs` | GET | readonly | Recent `TestMatrixRun` rows with their rollup verdict. Filters: `project`, `verdict` (`EXPECTED` / `UNEXPECTED` / `UNKNOWN`), `since` (ISO date), `limit`. |
+| `/api/matrix-runs/{id}` | GET | readonly | Rollup header plus a `cells` array of `TestVerdict` rows joined to their `TestRun` + `Test` (per-cell verdict, actual, expected, cache_hit, recorded_at, …). |
+
+### Expectations
+
+Append-only edit log per Test — see
+[`ExpectedTestResult`](data_model.md#expectedtestresult). Editing
+applies forward-only; historical verdicts pin their own
+`ExpectedTestResult` row via `expectation_id`.
+
+| Endpoint | Method | Role | Purpose |
+|---|---|---|---|
+| `/api/tests/{id}/expectations` | POST | submitter | Append a new expectation row. Body: `{"expected_result_code": "PASS"\|"FAIL"\|"ERROR"\|"SKIPPED"\|null, "expected_result_description": "...", "reason": "..."}`. `expected_result_code: null` records an explicit *retraction* (distinguishable from never-set, itself audited). `set_by` is taken from the bearer token's name. |
+| `/api/tests/{id}/expectations` | GET | readonly | Expectation edit history for one Test, newest first. Optional `limit`. |
 
 ### Workers
 
