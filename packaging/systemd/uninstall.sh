@@ -17,6 +17,9 @@ echo "==> Stopping and disabling units (if running)"
 # Stop instances first, then base units. Ignore errors — units may not be enabled.
 systemctl stop 'opp_ci-worker@*.service' 2>/dev/null || true
 systemctl disable 'opp_ci-worker@*.service' 2>/dev/null || true
+systemctl stop opp_ci-serve-cert.path 2>/dev/null || true
+systemctl disable opp_ci-serve-cert.path 2>/dev/null || true
+systemctl stop opp_ci-serve-cert-reload.service 2>/dev/null || true
 systemctl stop opp_ci-serve.service 2>/dev/null || true
 systemctl disable opp_ci-serve.service 2>/dev/null || true
 systemctl disable opp_ci.target 2>/dev/null || true
@@ -25,6 +28,12 @@ echo "==> Removing unit files"
 rm -f "$SYSTEMD_DIR/opp_ci.target"
 rm -f "$SYSTEMD_DIR/opp_ci-serve.service"
 rm -f "$SYSTEMD_DIR/opp_ci-worker@.service"
+rm -f "$SYSTEMD_DIR/opp_ci-serve-cert.path"
+rm -f "$SYSTEMD_DIR/opp_ci-serve-cert-reload.service"
+# Drop-in dir: remove the shipped .example, but leave any operator-authored
+# tls.conf in place so the next install isn't a TLS-status surprise.
+rm -f "$SYSTEMD_DIR/opp_ci-serve.service.d/tls.conf.example"
+rmdir --ignore-fail-on-non-empty "$SYSTEMD_DIR/opp_ci-serve.service.d" 2>/dev/null || true
 
 systemctl daemon-reload
 
@@ -34,7 +43,7 @@ opp_ci systemd units removed.
 
 Preserved (delete manually if you also want them gone):
   $INSTALL_DIR              (source + venv)
-  /etc/opp_ci/              (config, including worker tokens)
+  /etc/opp_ci/              (config, including worker tokens and tls/)
   /var/lib/opp_ci/          (sqlite DB, caches)
   user/group 'opp_ci'       (run: sudo userdel opp_ci && sudo groupdel opp_ci)
 EOF

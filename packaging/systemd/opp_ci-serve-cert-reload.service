@@ -1,0 +1,11 @@
+[Unit]
+Description=Restart opp_ci-serve after TLS cert change
+Documentation=https://github.com/omnetpp/opp_ci
+After=opp_ci-serve.service
+# Don't fire if serve isn't running — avoids accidentally starting it
+# when a cert was rotated while the service is intentionally stopped.
+Requisite=opp_ci-serve.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart opp_ci-serve.service

@@ -1,0 +1,16 @@
+[Unit]
+Description=Watch opp_ci TLS cert for renewal
+Documentation=https://github.com/omnetpp/opp_ci
+# Only meaningful when serve is running; stop together.
+PartOf=opp_ci-serve.service
+
+[Path]
+# Fires on close-after-write or atomic rename, which is what acme.sh,
+# certbot's deploy hook, opp_ci tls-selfsign, and `install -m` all do.
+# Write the key file *before* the cert file so this watcher sees a
+# consistent pair.
+PathChanged=/etc/opp_ci/tls/fullchain.pem
+Unit=opp_ci-serve-cert-reload.service
+
+[Install]
+WantedBy=opp_ci.target

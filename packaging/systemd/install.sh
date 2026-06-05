@@ -52,7 +52,9 @@ INSTALL_DIR="/opt/opp_ci"
 STATE_DIR="/var/lib/opp_ci"
 CONFIG_DIR="/etc/opp_ci"
 WORKER_CONFIG_DIR="$CONFIG_DIR/workers"
+TLS_DIR="$CONFIG_DIR/tls"
 SYSTEMD_DIR="/etc/systemd/system"
+SERVE_DROPIN_DIR="$SYSTEMD_DIR/opp_ci-serve.service.d"
 # Filled in below after Postgres is up (some Ubuntu hosts allocate the
 # cluster on 5433 rather than the canonical 5432, e.g. when another
 # cluster already occupied 5432 at install time).
@@ -76,6 +78,9 @@ install -d -o root         -g root         -m 0755 "$INSTALL_DIR"
 install -d -o root         -g "$OPP_CI_GROUP" -m 0750 "$CONFIG_DIR"
 install -d -o "$OPP_CI_USER" -g "$OPP_CI_GROUP" -m 0750 "$WORKER_CONFIG_DIR"
 install -d -o "$OPP_CI_USER" -g "$OPP_CI_GROUP" -m 0750 "$STATE_DIR"
+# TLS materials directory. Empty by default — operator supplies cert/key
+# (Cloudflare Origin Cert, Let's Encrypt copy, or `opp_ci tls-selfsign`).
+install -d -o root         -g "$OPP_CI_GROUP" -m 0750 "$TLS_DIR"
 
 echo "==> Syncing source tree to $INSTALL_DIR"
 # Use rsync if available, otherwise cp -a. Excludes the venv (rebuilt below)
@@ -150,9 +155,30 @@ if [[ "$WITH_POSTGRES" -eq 1 ]]; then
 fi
 
 echo "==> Installing unit files into $SYSTEMD_DIR"
-install -m 0644 "$SCRIPT_DIR/opp_ci.target"            "$SYSTEMD_DIR/opp_ci.target"
-install -m 0644 "$SCRIPT_DIR/opp_ci-serve.service"     "$SYSTEMD_DIR/opp_ci-serve.service"
-install -m 0644 "$SCRIPT_DIR/opp_ci-worker@.service"   "$SYSTEMD_DIR/opp_ci-worker@.service"
+install -m 0644 "$SCRIPT_DIR/opp_ci.target"                       "$SYSTEMD_DIR/opp_ci.target"
+install -m 0644 "$SCRIPT_DIR/opp_ci-serve.service"                "$SYSTEMD_DIR/opp_ci-serve.service"
+install -m 0644 "$SCRIPT_DIR/opp_ci-worker@.service"              "$SYSTEMD_DIR/opp_ci-worker@.service"
+install -m 0644 "$SCRIPT_DIR/opp_ci-serve-cert.path"              "$SYSTEMD_DIR/opp_ci-serve-cert.path"
+install -m 0644 "$SCRIPT_DIR/opp_ci-serve-cert-reload.service"    "$SYSTEMD_DIR/opp_ci-serve-cert-reload.service"
+
+# TLS drop-in shipped as .example so the installer doesn't silently turn
+# on CAP_NET_BIND_SERVICE. Operator renames it to tls.conf to activate.
+install -d -m 0755 "$SERVE_DROPIN_DIR"
+if [[ -e "$SERVE_DROPIN_DIR/tls.conf" ]]; then
+    echo "    keeping existing $SERVE_DROPIN_DIR/tls.conf"
+elif [[ -e "$SERVE_DROPIN_DIR/tls.conf.example" ]]; then
+    echo "    keeping existing $SERVE_DROPIN_DIR/tls.conf.example"
+else
+    install -m 0644 "$SCRIPT_DIR/dropins/tls.conf.example" \
+                    "$SERVE_DROPIN_DIR/tls.conf.example"
+    echo "    wrote $SERVE_DROPIN_DIR/tls.conf.example (inactive — rename to tls.conf to enable)"
+fi
+
+# Cloudflare Origin CA bundle — for workers that bypass Cloudflare's
+# edge and connect direct to the origin presenting an Origin Certificate.
+install -m 0644 -o root -g "$OPP_CI_GROUP" \
+    "$SCRIPT_DIR/cloudflare-origin-ca.pem" \
+    "$TLS_DIR/cloudflare-origin-ca.pem"
 
 echo "==> Seeding $CONFIG_DIR with example env files (only if missing)"
 install_example() {
@@ -201,6 +227,17 @@ Next steps:
          sudo systemctl enable --now opp_ci-worker@<name>.service
   4. To enable the whole stack on boot:
        sudo systemctl enable opp_ci.target
+
+  5. (Optional) Enable HTTPS in serve itself:
+       Drop fullchain.pem + privkey.pem into /etc/opp_ci/tls/
+       (use \`opp_ci tls-selfsign\` for a lab cert, or paste your
+       Cloudflare Origin Certificate). Uncomment the TLS block in
+       /etc/opp_ci/serve.env. For port 443 also:
+         sudo mv /etc/systemd/system/opp_ci-serve.service.d/tls.conf.example \\
+                 /etc/systemd/system/opp_ci-serve.service.d/tls.conf
+         sudo systemctl daemon-reload
+         sudo systemctl enable --now opp_ci-serve-cert.path
+       See doc/ssl.md for the full recipe.
 
 Logs:    journalctl -fu opp_ci-serve
          journalctl -fu opp_ci-worker@default
