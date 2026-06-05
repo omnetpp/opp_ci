@@ -70,7 +70,7 @@ Add to `/etc/opp_ci/serve.env` (or your equivalent):
 
 ```ini
 OPP_CI_SESSION_SECRET=<random-string-from-bootstrap>
-OPP_CI_SESSION_COOKIE_SECURE=1            # if you front opp_ci with HTTPS
+OPP_CI_SESSION_COOKIE_SECURE=1            # auto-on when native TLS is on; set explicitly behind a proxy
 OPP_CI_PUBLIC_URL=https://opp-ci.example.com
 
 OPP_CI_GITHUB_OAUTH_CLIENT_ID=Iv1.abcdef0123456789
@@ -81,6 +81,13 @@ OPP_CI_GITHUB_OAUTH_CLIENT_SECRET_FILE=/etc/opp_ci/github_oauth_secret
 sent to GitHub is built from it, and deriving it from a `Host:` header
 breaks behind a reverse proxy. `serve` refuses to start with OAuth
 enabled and `PUBLIC_URL` empty.
+
+If you've also enabled native TLS in `opp_ci serve` itself (see
+[ssl.md](ssl.md)), `OPP_CI_PUBLIC_URL` **must use `https://`** — `serve`
+checks this at startup. For Cloudflare-fronted deploys, set it to the
+Cloudflare-fronted hostname (e.g. `https://ci.omnetpp.org`), not the
+origin IP — the GitHub OAuth callback redirects the user's browser, which
+must hit Cloudflare's edge, not the origin direct.
 
 Restart `opp_ci-serve.service`; the "Sign in with GitHub" button now
 appears on the login page.

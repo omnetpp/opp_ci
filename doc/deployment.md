@@ -61,8 +61,17 @@ instead of (or in addition to) local passwords, see
 [web-login.md](web-login.md) for the OAuth App setup and the
 role-mapping config.
 
-Always place behind a reverse proxy with HTTPS (Caddy or nginx + Let's
-Encrypt). Example public URLs:
+Serve HTTPS one of two ways:
+
+- **Native TLS in `opp_ci serve`** (recommended for single-service
+  hosts) — paste a Cloudflare Origin Certificate (or Let's Encrypt
+  files) into `/etc/opp_ci/tls/` and activate the shipped systemd
+  drop-in. End-to-end TLS, no extra processes. See [ssl.md](ssl.md).
+- **Reverse proxy with HTTPS** (Caddy or nginx + Let's Encrypt) — keep
+  serve on `127.0.0.1:8080` and put the proxy in front on 443. Right
+  call if you host other services on the same VM.
+
+Example public URLs:
 
 - Web UI: `https://ci.omnetpp.org/`
 - API base: `https://ci.omnetpp.org/api/`

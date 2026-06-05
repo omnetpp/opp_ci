@@ -197,10 +197,16 @@ same host. Pick one of the access patterns:
   `OPP_CI_SERVE_HOST=0.0.0.0`, restart the unit. Opens port 8080 over
   plain HTTP — fine for a private VM, **not** for the public internet
   (no TLS, credentials and tokens in cleartext).
-- **Reverse proxy with HTTPS** (recommended for any real exposure):
-  keep serve on 127.0.0.1, put Caddy or nginx + Let's Encrypt in front
-  on 443. See [deployment.md](deployment.md) for the reverse-proxy
-  shape.
+- **Reverse proxy with HTTPS**: keep serve on 127.0.0.1, put Caddy or
+  nginx + Let's Encrypt in front on 443. Pick this if you also run
+  other web services on the host. See [deployment.md](deployment.md)
+  for the reverse-proxy shape.
+- **Native TLS in serve itself** (recommended for single-service
+  hosts): paste a Cloudflare Origin Certificate (or other cert) into
+  `/etc/opp_ci/tls/`, activate the shipped TLS drop-in
+  (`tls.conf.example` → `tls.conf`), uncomment the TLS block in
+  `serve.env`, enable `opp_ci-serve-cert.path` for automatic restart
+  on cert renewal. Full walkthrough in [ssl.md](ssl.md).
 
 ## Environment files
 
