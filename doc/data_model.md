@@ -13,7 +13,11 @@ the [test data model redesign](../plan/done/test-data-model-phase-1-schema.md)
 split what used to be a single `test_runs` row into four entities
 (`tests`, `test_matrices`, `test_matrix_runs`, `test_runs`) and was
 applied by wiping and recreating the database — there is no migration
-chain to chase.
+chain to chase. Phase 2 of the
+[redesign](../plan/done/test-data-model-redesign.md) introduced two
+more tables (`expected_test_results`, `test_verdicts`) and a stored
+rollup on `test_matrix_runs`; that revision (`d4a8c91e7350`) ships as
+an Alembic migration that backfills counters from existing rows.
 
 ---
 
@@ -30,15 +34,17 @@ Grouped by role; the detail sections below appear in the same order.
 | [`os_entries`](#os) | Catalog of `(name, version, arch)` triples | referenced by matrix configs |
 | [`compilers`](#compiler) | Catalog of `(name, version)` pairs | referenced by matrix configs |
 
-**Test data model** — what was run and how it went (the four-entity
-model introduced by the phase-1 cutover):
+**Test data model** — what was run, what was expected, and how it
+graded:
 
 | Table | Purpose | Key relations |
 |---|---|---|
-| [`test_matrices`](#testmatrix) | Named cross-product configuration | parent of `test_matrix_runs`; referenced by `auto_test_rules` |
-| [`tests`](#test) | Deduped immutable coordinate row + editable metadata | parent of `test_runs` |
-| [`test_matrix_runs`](#testmatrixrun) | One row per submission of a `TestMatrix` — groups its children, owns the GitHub linkage | child of `test_matrices`; parent of `test_runs` |
-| [`test_runs`](#testrun) | One row per attempt to run a `Test` — carries lifecycle + outcome | child of `tests` + `test_matrix_runs` + `workers` |
+| [`test_matrices`](#testmatrix) | Named (or anonymous) cross-product configuration | parent of `test_matrix_runs`; referenced by `auto_test_rules` |
+| [`tests`](#test) | Deduped immutable coordinate row + one editable label | parent of `test_runs`, `expected_test_results`, `test_verdicts` |
+| [`expected_test_results`](#expectedtestresult) | Append-only edit log of expected outcomes per `Test` | child of `tests`; pinned by `test_verdicts.expectation_id` |
+| [`test_matrix_runs`](#testmatrixrun) | One row per submission of a `TestMatrix` — groups its children, owns the GitHub linkage and the stored rollup | child of `test_matrices`; parent of `test_runs` and `test_verdicts` |
+| [`test_runs`](#testrun) | One row per attempt to run a `Test` — carries lifecycle + outcome + cache fingerprint | child of `tests` + `test_matrix_runs` + `workers` |
+| [`test_verdicts`](#testverdict) | One row per cell of a matrix run: pins a TestRun + the expectation in force, carries the EXPECTED/UNEXPECTED/UNKNOWN verdict | child of `test_matrix_runs` + `tests` + `test_runs` + `expected_test_results` |
 
 **Workers and automation** — what does the running, and what triggers it:
 
@@ -62,10 +68,15 @@ projects ───┬─< versions
             │                                                            │
             └── (referenced by name from tests)                          │
                                                                          │
-                            tests ──< test_runs >─────────────────-──────┘
-                                          ▲
-                                          │
-                                       workers
+                            tests ──< test_runs >─────────────────-──────┤
+                              │           ▲                              │
+                              │           │                              │
+                              │        workers                           │
+                              │                                          │
+                              ├─< expected_test_results                  │
+                              │           ▲                              │
+                              │           │                              │
+                              └─< test_verdicts >───────────────────-────┘
 
 os_entries     compilers     api_tokens     users
    (standalone catalog / auth tables)
@@ -173,10 +184,12 @@ Axis semantics and JSON shape: see
 ## Test
 
 `tests` — a deduped row holding the immutable coordinate of "what we
-test", plus three editable metadata columns. One `Test` is shared by
+test", plus a single editable display label. One `Test` is shared by
 every `TestRun` that retries / reruns the same coordinate; matrix
 expansion looks up the row by `coord_hash` and inserts a new one only
-on first sight.
+on first sight. Expected outcomes are no longer columns on `Test` —
+they live in [`expected_test_results`](#expectedtestresult), keyed by
+`test_id` and audited as an append-only log.
 
 ### Coordinate columns (immutable after creation)
 
@@ -201,17 +214,14 @@ on first sight.
 | `coord_hash` | string(64), unique, not null | SHA-256 hex over the canonical JSON of every coordinate column — the dedup key |
 | `created_at` | datetime, default now | |
 
-### Editable metadata columns
+### Editable column
 
-These three columns are the only ones a user can change after the
-row exists. They are deliberately excluded from `coord_hash` so
-renaming or expectation-edits never produce a new `Test` row.
+`name` is the only mutable column on a `Test` row. It is deliberately
+excluded from `coord_hash` so renaming never produces a new row.
 
 | Column | Type | Notes |
 |---|---|---|
 | `name` | string, nullable | Optional human label |
-| `expected_result_code` | enum [`TestResultCode`](#testresultcode), nullable | What outcome the maintainer expects |
-| `expected_result_description` | text, nullable | Free-form context for the expectation |
 
 ### `coord_hash` field list
 
@@ -234,35 +244,112 @@ re-keys every existing row.
 
 - `runs` → many [`TestRun`](#testrun), `cascade="all, delete-orphan"`
   (deleting a Test cascades to its TestRuns).
+- `expected_results` → many [`ExpectedTestResult`](#expectedtestresult)
+  (backref from `expected_test_results.test`).
+- Pointed at by [`TestVerdict.test_id`](#testverdict).
+
+---
+
+## ExpectedTestResult
+
+`expected_test_results` — append-only edit log of the expected outcome
+for a `Test`. The "current expectation" is the row with the highest
+`set_at`; a row whose `expected_result_code` is NULL is an explicit
+*retraction*, distinguishable from never-set and itself audited.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `test_id` | int FK → `tests.id`, not null, indexed | The Test this expectation describes |
+| `expected_result_code` | enum [`TestResultCode`](#testresultcode), nullable | PASS / FAIL / ERROR / SKIPPED, or NULL = retraction |
+| `expected_result_description` | text, nullable | Free-form note |
+| `reason` | text, nullable | Why the expectation was set (issue link, justification) |
+| `set_by` | string, nullable | Account name (CLI sets `"cli"`, REST records the API token name, web records the user's `display_name`) |
+| `set_at` | datetime, not null, indexed | When the row was inserted |
+
+Edits are inserts; nothing is ever updated. Use
+`persistence.get_current_expectation(session, test_id)` to read the
+current expectation in one ordered query. Use
+`persistence.insert_expectation(session, …)` (or one of its CLI / REST
+front-ends — see [cli_reference.md](cli_reference.md) and
+[rest_api.md](rest_api.md)) to record an edit.
+
+### Relationships
+
+- `test` → one [`Test`](#test) (backref `Test.expected_results`).
+- Pointed at by [`TestVerdict.expectation_id`](#testverdict) — every
+  recorded verdict pins the specific `ExpectedTestResult` row that was
+  in force at recording time, so historical verdicts stay stable when
+  the expectation is later edited.
 
 ---
 
 ## TestMatrixRun
 
 `test_matrix_runs` — one row per submission of a `TestMatrix`. Groups
-the per-`Test` `TestRun`s spawned from a single matrix expansion so
-they can be tracked, cancelled, or queried as a unit. Also owns the
-GitHub linkage that, before phase 1, lived on every `TestRun` row.
+the per-cell [`TestVerdict`](#testverdict)s spawned from a single
+matrix expansion so they can be tracked, cancelled, or queried as a
+unit. Owns the GitHub linkage that, before phase 1, lived on every
+`TestRun` row, and the stored rollup that, before phase 2, was
+recomputed in app code on every render.
+
+### Identity / triggering
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | int PK | |
-| `matrix_id` | int FK → `test_matrices.id`, not null | The matrix this submission expanded. Anonymous / ad-hoc matrices still get a row. |
-| `trigger` | string, default `"manual"` | `manual` / `web` / `remote` / `webhook` / `schedule` / `rerun` |
+| `matrix_id` | int FK → `test_matrices.id`, not null | The matrix this submission expanded. Anonymous / ad-hoc matrices still get a row (with a generated `adhoc:<project>:<UTC-timestamp>` name). |
+| `trigger` | string, default `"manual"` | `manual` / `cli` / `web` / `remote` / `webhook` / `tag` / `schedule` / `rerun`. `"tag"` is set by the webhook handler for tag-push events; the project page's "Latest release run" card filters on it. |
+| `ref` | string, nullable | Git ref / tag the run was triggered against (set for `trigger="tag"`; left empty for branch/PR pushes) |
 | `github_owner` | string, nullable | GitHub repository owner |
 | `github_repo` | string, nullable | GitHub repository name |
 | `github_commit_sha` | string, nullable | Head SHA of the triggering event |
 | `github_pr_number` | int, nullable | PR number, when the trigger was a `pull_request` event |
 | `github_status_url` | string, nullable | The `statuses_url` to post commit-status updates to |
 | `created_at` | datetime, default now | |
+| `completed_at` | datetime, nullable | Set to the finished-at of the last child cell when every cell has reached `finished` / `cancelled` / `timed_out` |
 
-No own lifecycle column in phase 1: the matrix-run's aggregate status
-is rolled up from child `TestRun.lifecycle` values in app code.
+### Rollup counters
+
+Updated transactionally as each child [`TestVerdict`](#testverdict)
+finalizes (via `persistence.recompute_matrix_run_rollup`). The UI and
+REST surface read them as constant-time O(1) columns; the legacy
+app-side rollup is gone.
+
+| Column | Type | Notes |
+|---|---|---|
+| `pass_count` | int, not null, default `0` | Number of cells whose `TestRun.result_code == PASS` |
+| `fail_count` | int, not null, default `0` | Number of cells whose `TestRun.result_code == FAIL` |
+| `error_count` | int, not null, default `0` | Number of cells whose `TestRun.result_code == ERROR` |
+| `expected_count` | int, not null, default `0` | Cells whose verdict is `EXPECTED` |
+| `unexpected_count` | int, not null, default `0` | Cells whose verdict is `UNEXPECTED` |
+| `unknown_count` | int, not null, default `0` | Cells whose verdict is `UNKNOWN` (no expectation existed at recording time) |
+| `cache_hit_count` | int, not null, default `0` | Cells reusing a pre-existing `TestRun` via the content-addressable cache |
+| `total_count` | int, not null, default `0` | Total cells in the matrix run |
+| `actual_summary` | enum [`TestResultCode`](#testresultcode), nullable | Worst actual outcome across cells (PASS < FAIL < ERROR) |
+| `verdict` | enum [`TestVerdictKind`](#testverdictkind), nullable | Rolled-up verdict; see rules below. NULL while no cell has finalized. |
+
+### Verdict rollup rules
+
+Evaluated in order on every counter update:
+
+1. `UNEXPECTED` — at least one cell's verdict is UNEXPECTED.
+2. `UNKNOWN` — no UNEXPECTED cells, but at least one cell finalized
+   with no expectation in force at recording time.
+3. `EXPECTED` — every cell had an expectation in force at recording
+   time *and* the actual matched it. This is the release-ready state.
+
+Release-readiness for tag-triggered matrix runs is then a one-liner:
+`TestMatrixRun.verdict == EXPECTED` on the row triggered by the
+release tag.
 
 ### Relationships
 
 - `matrix` → one [`TestMatrix`](#testmatrix) (backref `TestMatrix.matrix_runs`).
-- `test_runs` → many [`TestRun`](#testrun) (children of this submission).
+- `test_runs` → many [`TestRun`](#testrun) (children of this submission;
+  cache hits do not create a new TestRun, so the count here can be
+  smaller than `total_count`).
+- `verdicts` → many [`TestVerdict`](#testverdict), `cascade="all, delete-orphan"` (one per cell).
 
 ---
 
@@ -315,6 +402,12 @@ lifecycle state, and — once `lifecycle == finished` — the outcome.
 |---|---|---|
 | `system_snapshot` | JSON, nullable | Captured at claim time; posted by the worker via `POST /api/workers/snapshot`. On Postgres, TOAST keeps the blob out-of-line and lazy-loaded so it costs nothing on queries that don't touch it. No retention policy in phase 1. |
 
+### Cache fingerprint
+
+| Column | Type | Notes |
+|---|---|---|
+| `cache_fingerprint` | string, nullable, indexed | SHA-256 hex of every input that can change the outcome — coordinates, `git_ref` (best-effort resolved to a SHA via the GitHub client when a token is configured), `version`, and `resolved_deps`. Computed by `opp_ci.fingerprint.compute_cache_fingerprint(job)` at submit time. A subsequent enqueue with the same fingerprint reuses this row instead of creating a new `TestRun`, and the new `TestVerdict` cell records `cache_hit=True`. Expectations are deliberately *not* part of the key — cache hits grade against the currently-in-force expectation. |
+
 ### View-side accessors
 
 `TestRun` exposes Python properties that delegate to the joined `Test`
@@ -341,6 +434,76 @@ the kind string.
 - `test` → one [`Test`](#test) (backref `Test.runs`, `cascade="all, delete-orphan"`).
 - `matrix_run` → one [`TestMatrixRun`](#testmatrixrun) (backref `TestMatrixRun.test_runs`).
 - `worker` → one [`Worker`](#worker) (backref `Worker.test_runs`).
+- `verdicts` → many [`TestVerdict`](#testverdict) — a single TestRun
+  can back many cells when cache hits attribute later matrix runs to
+  the same observation.
+
+---
+
+## TestVerdict
+
+`test_verdicts` — one row per cell of a `TestMatrixRun`. Pins the
+`TestRun` whose outcome this cell attributes (a freshly-queued row on
+a cache miss, a pre-existing finished row on a hit) plus the
+`ExpectedTestResult` row in force at recording time. The cell has at
+most one promotion event (verdict written) and is then frozen; its
+lifecycle is derived from the underlying `TestRun.lifecycle` rather
+than stored, so there is only ever one source of truth for "is it
+done yet".
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `matrix_run_id` | int FK → `test_matrix_runs.id`, not null, indexed | Parent matrix run |
+| `test_id` | int FK → `tests.id`, not null, indexed | The Test coordinate this cell represents |
+| `test_run_id` | int FK → `test_runs.id`, not null, indexed | The TestRun whose outcome this cell attributes |
+| `expectation_id` | int FK → `expected_test_results.id`, nullable | The expectation row in force at recording time. NULL ⇔ no expectation existed when the verdict landed |
+| `verdict` | enum [`TestVerdictKind`](#testverdictkind), nullable | `EXPECTED` / `UNEXPECTED` / `UNKNOWN`. NULL until the underlying `TestRun` finalizes (stays NULL forever if the run is cancelled). |
+| `recorded_at` | datetime, nullable | When the verdict was written: `TestRun.finished_at` for miss-then-execute, insertion time for cache hits |
+| `created_at` | datetime, not null | When the cell was inserted (= matrix submit time) |
+| `cache_hit` | bool, not null, default `false` | True iff this cell reused a pre-existing TestRun via the content-addressable cache |
+
+### Verdict computation
+
+Computed by `persistence.compute_verdict_kind(actual_code,
+expectation)`:
+
+- `None` — actual not yet known (TestRun still queued/running).
+- `UNKNOWN` — actual known, no expectation existed (or the most recent
+  ExpectedTestResult row was a retraction).
+- `EXPECTED` — actual matches `expectation.expected_result_code`.
+- `UNEXPECTED` — actual diverges from `expectation.expected_result_code`
+  (covers unexpected ERROR as well).
+
+### Snapshot semantics
+
+Because each verdict pins a specific `ExpectedTestResult` row via
+`expectation_id`, later edits to the expectation log do *not*
+retroactively change historical verdicts or the parent matrix run's
+counters. A `TestMatrixRun` is a snapshot of "what we knew when this
+ran"; the [matrix-run detail page](web_ui.md#matrix-run-detail) and
+CLI ([`opp_ci show-matrix-run`](cli_reference.md)) surface this
+explicitly.
+
+### Relationships
+
+- `matrix_run` → one [`TestMatrixRun`](#testmatrixrun) (backref `TestMatrixRun.verdicts`).
+- `test` → one [`Test`](#test).
+- `test_run` → one [`TestRun`](#testrun) (backref `TestRun.verdicts`).
+- `expectation` → one [`ExpectedTestResult`](#expectedtestresult) (nullable).
+
+---
+
+## TestVerdictKind
+
+Python `enum.Enum`, stored as the SQL `Enum` type on
+`test_verdicts.verdict` and `test_matrix_runs.verdict`.
+
+| Value | Meaning |
+|---|---|
+| `EXPECTED` | Actual outcome matched the expectation in force at recording time. Release-ready. |
+| `UNEXPECTED` | Actual diverged from the expectation (wrong outcome, or unexpected ERROR). Regression candidate. |
+| `UNKNOWN` | No mismatch, but no expectation existed when the verdict landed — declare an expectation to characterise the cell. |
 
 ---
 
@@ -362,7 +525,8 @@ Python `enum.Enum`, stored as the SQL `Enum` type on
 ## TestResultCode
 
 Python `enum.Enum`, stored as the SQL `Enum` type on
-`test_runs.result_code` and `tests.expected_result_code`.
+`test_runs.result_code`, `expected_test_results.expected_result_code`,
+and `test_matrix_runs.actual_summary`.
 
 | Value | Meaning |
 |---|---|
@@ -539,9 +703,15 @@ Common write paths against the new model live in
 |---|---|
 | `job_to_coord(job, *, project, opp_file)` | Project an `expand_matrix` job dict (or form-field dict) down to the `TEST_COORD_FIELDS` keys |
 | `get_or_create_test(session, coord)` | Look up the matching `Test` by `coord_hash`, creating it on first sight |
-| `create_matrix_run(session, *, matrix_id, trigger, github_*)` | Create one `TestMatrixRun` for a matrix submission |
-| `create_test_run(session, *, test_id, matrix_run_id, …)` | Create a queued `TestRun` |
-| `enqueue_job(session, job, *, project, opp_file, matrix_run_id)` | End-to-end: turn one job dict into a get-or-create-`Test` + create-`TestRun` |
+| `create_matrix_run(session, *, matrix_id, trigger, ref, github_*)` | Create one `TestMatrixRun` for a matrix submission |
+| `create_test_run(session, *, test_id, matrix_run_id, …, cache_fingerprint)` | Create a queued `TestRun` (fingerprint optional; see [opp_ci/fingerprint.py](../opp_ci/fingerprint.py)) |
+| `get_current_expectation(session, test_id)` | Most recent [`ExpectedTestResult`](#expectedtestresult) row for `test_id`, or `None` |
+| `insert_expectation(session, *, test_id, expected_result_code, …)` | Append a new expectation row. `expected_result_code=None` records an explicit retraction. |
+| `compute_verdict_kind(actual_code, expectation)` | Three-state verdict for one cell (returns a [`TestVerdictKind`](#testverdictkind) or None when actual is not yet known) |
+| `create_test_verdict(session, *, matrix_run_id, test_id, test_run_id, expectation, verdict, recorded_at, cache_hit)` | Insert a `TestVerdict` row |
+| `finalize_verdict_for_run(session, run_id)` | Promote pending TestVerdict rows attached to `run_id` and refresh the parent rollup. Called from the worker result handler and the local executor right after the TestRun outcome is known. |
+| `recompute_matrix_run_rollup(session, matrix_run_id)` | Recompute the counter / verdict / `actual_summary` / `completed_at` columns from the child verdicts. |
+| `enqueue_job(session, job, *, project, opp_file, matrix_run_id, use_cache, cache_fingerprint)` | End-to-end: get-or-create-`Test`, look up the cache, then either reuse the existing `TestRun` (cache hit) or create a fresh queued one. **Returns** `(TestRun, TestVerdict \| None)`. The verdict is `None` only when `matrix_run_id` was not provided. |
 | `capture_system_snapshot()` | Best-effort dict of host facts to write into `TestRun.system_snapshot` |
 
 ---
@@ -549,8 +719,13 @@ Common write paths against the new model live in
 ## Schema changes after phase 1
 
 The phase-1 cutover was applied by wiping and recreating the database,
-not by running a migration. Subsequent schema changes are expected to
-land via Alembic migrations under
-[opp_ci/db/migrations/](../opp_ci/db/migrations/) (config in
+not by running a migration. The phase-2 redesign (this revision)
+*does* ship as an Alembic migration (`d4a8c91e7350`), and it backfills
+counters on existing matrix runs and migrates any legacy
+`tests.expected_result_*` values into one initial `ExpectedTestResult`
+row each.
+
+Subsequent schema changes are expected to land via Alembic migrations
+under [opp_ci/db/migrations/](../opp_ci/db/migrations/) (config in
 `alembic.ini`), but the current `models.py` does not depend on any
 historical migration revision — it is the source of truth.

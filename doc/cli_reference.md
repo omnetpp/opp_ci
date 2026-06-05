@@ -18,14 +18,32 @@ For full per-command flags, run `opp_ci <command> --help`.
 | Command | Purpose |
 |---|---|
 | `opp_ci init-db` | Create tables. Auto-runs on first `run`, so usually optional. |
-| `opp_ci reset-db --yes` | Drop and recreate all tables. Destructive. Add `--preserve-tokens` to snapshot and restore the `api_tokens` and `workers` rows so external systems keep working. |
+| `opp_ci reset-db --yes` | Drop and recreate all tables. Destructive. On Postgres the drop is `DROP SCHEMA public CASCADE` so any legacy tables left over from prior schemas (e.g. a pre-Phase-1 `test_results` table) get cleared too. Add `--preserve-tokens` to snapshot and restore the `api_tokens` and `workers` rows so external systems keep working. |
 
 ## Running tests
 
 | Command | Purpose |
 |---|---|
 | `opp_ci run` | Run a single test for a project. Required: `--project`, `--kind`. Common: `--ref`, `--mode`, `--isolation {none\|podman}`, `--toolchain {none\|nix}`, `--os`, `--os-version`, `--arch`, `--compiler`, `--compiler-version`, `--pin <dep>=<ver>` (repeatable), `--force`, `--skip-install`. |
-| `opp_ci run-matrix --matrix NAME` | Expand a named matrix and run all jobs. Options: `--force`, `--skip-install`. |
+| `opp_ci run-matrix` | Universal matrix launcher — three input modes, choose exactly one. See below. |
+
+`run-matrix` accepts any one of:
+
+- **Named matrix**: `--matrix NAME` looks up a stored `TestMatrix` and expands it.
+- **Spec file**: `--spec-file path.json` (or `-` to read JSON from stdin) — a JSON object with `project`, optional `name` / `opp_file`, and the same axis keys as a `TestMatrix.config`.
+- **Inline axis flags**: `--project NAME` plus any of `--kinds`, `--modes`, `--refs` / `--ref`, `--versions`, `--os`, `--os-version`, `--distro`, `--distro-version`, `--flavor`, `--flavor-version`, `--compiler`, `--compiler-version`, `--arch`, `--isolation`, `--toolchain` (all comma-separated for multi-value axes).
+
+Spec-file and inline forms persist an anonymous `TestMatrix` row named
+`adhoc:<project>:<UTC-timestamp>` so the resulting `TestMatrixRun` has
+a stable parent.
+
+Cross-cutting options:
+
+- `--no-cache` — bypass the content-addressable cache and force a fresh `TestRun` per cell. Without it, cells whose `cache_fingerprint` matches a prior finished `TestRun` reuse that observation (a `TestVerdict` cell with `cache_hit=True`) instead of re-executing.
+- `--skip-install` — skip the `opp_env install` step (only relevant for `--isolation none --toolchain nix`).
+
+The command prints the new `TestMatrixRun` id at the end, so
+`opp_ci show-matrix-run <id>` is the natural follow-up.
 
 Supported test kinds (comma-separated for `--kind`) — see the canonical
 list in [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-kind):
@@ -54,6 +72,30 @@ Platform axes accept two styles:
 | `opp_ci show-results` | Same filters as `list-runs`; presents stored outcomes. |
 | `opp_ci delete-run RUN_ID --yes` | Delete a single run. |
 | `opp_ci delete-runs` | Bulk delete. Filters: `--project`, `--ref`, `--kind`, `--status`, `--before YYYY-MM-DD`, `--yes`. |
+
+## Matrix runs and verdicts
+
+Each `TestMatrixRun` carries an O(1) rollup with a three-state
+verdict (`EXPECTED` / `UNEXPECTED` / `UNKNOWN`) computed against the
+[expectation log](#expectations). The CLI mirrors the [matrix-runs
+web pages](web_ui.md#matrix-runs).
+
+| Command | Purpose |
+|---|---|
+| `opp_ci list-matrix-runs` | Recent `TestMatrixRun` rows with their rollup verdict. Filters: `--project`, `--verdict {EXPECTED\|UNEXPECTED\|UNKNOWN}`, `--since YYYY-MM-DD`, `--limit`. |
+| `opp_ci show-matrix-run ID` | Rollup header + per-cell `TestVerdict` table for one matrix run. `--unexpected-only` filters to cells that diverged from their expectation (or have no expectation yet). |
+
+## Expectations
+
+Expectations live in [`expected_test_results`](data_model.md#expectedtestresult)
+— an append-only log keyed by `test_id`. Editing an expectation
+applies *forward only*: historical `TestVerdict` rows pin the row
+that was in force at recording time and stay reconstructible.
+
+| Command | Purpose |
+|---|---|
+| `opp_ci set-expectation --expect {pass\|fail\|error\|none}` | Insert one `ExpectedTestResult` row per matching `Test`. Matches on `--project NAME` and/or `--where field=value` (repeatable; e.g. `--where os=Linux --where kind=smoke`). Allowed fields are the `Test` coordinate columns. `--expect none` writes an explicit retraction (NULL code), distinguishable from never-set and itself audited. Options: `--reason`, `--set-by` (default `cli`), `--limit` (safety cap on Tests touched, default 200), `--dry-run` to preview without writing. |
+| `opp_ci show-expectations --test-id N` | List the per-Test edit history (newest first). |
 
 ## Projects and versions
 
