@@ -53,10 +53,11 @@ coordinates (Q2).
 | Question | Decision |
 |---|---|
 | Grading rollup at the matrix-run level | Three-state verdict on `TestMatrixRun`: `EXPECTED` / `UNEXPECTED` / `UNKNOWN`. Release-ready ⇔ `verdict == EXPECTED`. |
-| Per-cell verdict storage | A `verdict` column on `TestRun`, written when the outcome lands by comparing `TestRun.result_code` against the *then-current* `Test.expected_result_code`. Editing `Test.expected_result_code` later does not retroactively change historical verdicts. |
-| Counters on `TestMatrixRun` | Stored, not recomputed. Updated atomically as each child `TestRun` lands. The phase-1 app-side rollup is replaced once these columns exist. |
+| Per-cell verdict storage | New `TestVerdict` table — one row per cell of a matrix run. Holds `verdict`, `recorded_at`, FK to the `TestRun` whose outcome this cell attributes, and FK to the `ExpectedTestResult` row that was in force at recording time. `TestRun` is a pure execution observation — no verdict, no matrix membership, no cache back-reference. |
+| Expectations | Move off `Test` into a new append-only `ExpectedTestResult` table. Each edit is an insert with `set_by` / `set_at` / `reason`. "Current expectation for a Test" = most recent row. A row with `expected_result_code IS NULL` is an explicit retraction (distinguishable from never-set). `Test` keeps only `name` mutable. |
+| Counters on `TestMatrixRun` | Stored, not recomputed. Updated atomically as each child `TestVerdict` finalizes. The phase-1 app-side rollup is replaced once these columns exist. |
 | Ad-hoc cartesian product without a saved matrix | Yes — *anonymous* matrices via the same launcher. (Schema-wise, anonymous matrices already get a persisted `TestMatrix` row with a generated name from phase-1.) |
-| Caching | Content-addressable fingerprint on `TestRun`. Re-running an unchanged matrix is near-instant; moving refs are detected via the fingerprint and re-executed. |
+| Caching | Content-addressable fingerprint on `TestRun`. Cache hit creates only a `TestVerdict` pointing at the existing `TestRun`; no `TestRun` row is duplicated. Re-running an unchanged matrix is near-instant; moving refs are detected via the fingerprint and re-executed. |
 | Re-test cadence | On tagged release candidates only (cron / nightly deferred). |
 | Native vs. podman | Per-matrix choice — podman for releases, native for dev. |
 | Auto-expansion (algorithm / AI) | Deferred — see [Future scope](#future-scope). |
@@ -65,22 +66,26 @@ coordinates (Q2).
 
 **Q1 — release-ready?** A maintainer tags `inet-4.5.3`. An
 `AutoTestRule` matching the tag pattern fires. The bound matrix
-expands (cache absorbs unchanged cells, fresh cells run on workers).
-The `TestMatrixRun` row holds the rollup. `verdict == EXPECTED` ⇒
+expands (cache absorbs unchanged cells as new `TestVerdict` rows
+attributed to prior `TestRun`s; fresh cells run on workers). The
+`TestMatrixRun` row holds the rollup. `verdict == EXPECTED` ⇒
 release-ready: every cell had a declared expectation and met it
 (including XFAILs). `UNEXPECTED` ⇒ at least one cell diverged from its
 expectation (any kind of mismatch — wrong outcome or unexpected
 ERROR). `UNKNOWN` ⇒ no mismatches, but at least one cell ran without a
 declared expectation, so the matrix doesn't yet *say* what that cell
-should do — the maintainer either declares an expectation (edits the
-`Test` row) or investigates the cell. `opp_ci show-matrix-run <id>`
-lists the diverged and undeclared cells; the release blocks until the
-verdict is `EXPECTED`.
+should do — the maintainer either declares an expectation (inserts an
+`ExpectedTestResult` row) or investigates the cell. `opp_ci
+show-matrix-run <id>` lists the diverged and undeclared cells; the
+release blocks until the verdict is `EXPECTED`.
 
-**Q2 — would it work on X?** A direct lookup against `TestRun` joined
-through `Test` on the relevant coordinates. Exact match ⇒ return the
-actual result. No exact match ⇒ answer "no data" and offer to queue a
-one-off:
+**Q2 — would it work on X?** A direct lookup for the most recent
+finished `TestRun` joined through `Test` on the relevant coordinates.
+Exact match ⇒ return the actual result, optionally surfacing the
+most-recent `TestVerdict.recorded_at` as "last verified at" (which can
+be later than `TestRun.finished_at` if there were cache-hit
+attributions since). No exact match ⇒ answer "no data" and offer to
+queue a one-off:
 
 ```
 opp_ci run-matrix --project inet --ref v4.5 \
@@ -93,48 +98,101 @@ plan — see [Future scope](#future-scope).
 
 ## Schema additions
 
-Columns to add on top of the existing tables. No new tables.
+Two new tables (`expected_test_results`, `test_verdicts`) plus columns
+on the existing tables. The verdict and cache columns previously
+proposed for `test_runs` move out — `test_runs` is left as a pure
+execution observation.
+
+### `tests` — coord-only after this plan
+
+Drop `expected_result_code` and `expected_result_description` (moved
+to `expected_test_results`, below). After this drop, `name` is the
+only mutable column on `Test`; every other field is fixed by
+`coord_hash`.
+
+### `expected_test_results` — append-only expectation log (new table)
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int | PK |
+| `test_id` | int | FK to `tests` |
+| `expected_result_code` | enum? | PASS / FAIL / ERROR, or NULL for an explicit retraction |
+| `expected_result_description` | text? | optional free-form note |
+| `reason` | text? | why the expectation was set (issue link, justification) |
+| `set_by` | text | account that set the expectation |
+| `set_at` | timestamptz | when |
+
+"Current expectation for a Test" = most recent row by `set_at`. No
+row at all = "no expectation ever declared." A row with
+`expected_result_code IS NULL` is an explicit retraction
+(distinguishable from never-set, and itself an audited event). Edits
+are inserts; nothing is ever updated. Index `(test_id, set_at DESC)`
+keeps "current expectation" effectively a single-row read.
+
+### `test_verdicts` — per-cell verdict (new table)
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int | PK |
+| `matrix_run_id` | int | FK to `test_matrix_runs` |
+| `test_id` | int | FK to `tests` |
+| `test_run_id` | int | FK to the `test_runs` row whose outcome this cell attributes. Cache hits reuse a prior row; cache misses point at a freshly-queued row |
+| `expectation_id` | int? | FK to the `expected_test_results` row in force at recording time. NULL ⇔ no expectation existed when the verdict landed |
+| `verdict` | enum? | EXPECTED / UNEXPECTED / UNKNOWN; NULL until the underlying `TestRun` finalizes (stays NULL forever if the run is cancelled) |
+| `recorded_at` | timestamptz? | when the verdict was written (= `TestRun.finished_at` for miss-then-execute, = insertion time for cache hits) |
+| `created_at` | timestamptz | when the cell was inserted (= matrix submit time) |
+
+Cell lifecycle (queued / running / finished / cancelled) is **derived**
+from the underlying `TestRun.lifecycle` — not stored. Avoids two
+sources of truth. The cell has at most one promotion event (verdict
+written) and is then frozen.
+
+### `test_runs` — pure execution observation
+
+| Column | Type | Notes |
+|---|---|---|
+| `cache_fingerprint` | text | content-addressable hash; populated at submit time once F4 lands |
+
+**Removed from earlier drafts of this plan**: no `verdict` column, no
+`matrix_run_id`, no `cached_from_id` on `test_runs`. Matrix membership
+and per-cell verdict live on `test_verdicts`; cache attribution is the
+`test_verdicts.test_run_id` pointer (cache hits don't create a new
+`TestRun` at all).
 
 ### `test_matrix_runs` — counters, verdict, summary
 
 | Column | Type | Notes |
 |---|---|---|
-| `pass_count` | int | actual outcome counters |
+| `pass_count` | int | actual outcome counters (over child verdicts, via their `test_run.result_code`) |
 | `fail_count` | int | |
 | `error_count` | int | |
 | `expected_count` | int | cells whose verdict is EXPECTED |
 | `unexpected_count` | int | cells whose verdict is UNEXPECTED |
-| `unknown_count` | int | cells whose verdict is UNKNOWN (no expectation set on the targeted Test) |
-| `cache_hit_count` | int | cells served from cache (zero until F4 lands) |
+| `unknown_count` | int | cells whose verdict is UNKNOWN (no expectation existed at recording time) |
+| `cache_hit_count` | int | cells whose `test_run_id` points at a TestRun that already existed at cell-insertion time (zero until F4 lands) |
 | `total_count` | int | |
 | `actual_summary` | enum | PASS / FAIL / ERROR — worst actual across cells |
 | `verdict` | enum | EXPECTED / UNEXPECTED / UNKNOWN — same enum as the per-cell verdict, rolled up |
 | `ref` | text | git ref / tag the run is against, if any (snapshotted from the triggering event) |
-| `completed_at` | timestamptz? | null until the last cell lands |
+| `completed_at` | timestamptz? | null until the last cell finalizes |
 
 (`trigger` already exists on `TestMatrixRun` from phase 1.)
 
 Verdict rollup rules (evaluated in order):
 
-- `UNEXPECTED` — at least one cell's actual diverged from its declared
+- `UNEXPECTED` — at least one cell's actual diverged from its
   expectation (this covers unexpected errors as well — an unexpected
   ERROR is just an UNEXPECTED cell).
-- `UNKNOWN` — no UNEXPECTED cells, but at least one cell ran against a
-  `Test` whose `expected_result_code` is `NULL`. The matrix has actual
-  results but isn't fully *characterised* yet.
-- `EXPECTED` — every cell targeted a `Test` with a declared expectation
-  and the actual matched it. This is the release-ready state.
+- `UNKNOWN` — no UNEXPECTED cells, but at least one cell finalized
+  with `expectation_id IS NULL` (no `ExpectedTestResult` row existed
+  for that `Test` at recording time, or the most recent row was a
+  retraction). The matrix has actual results but isn't fully
+  *characterised* yet.
+- `EXPECTED` — every cell had an expectation in force at recording
+  time and the actual matched it. This is the release-ready state.
 
 Release-readiness is then a one-liner: `verdict == EXPECTED` on the
 `TestMatrixRun` triggered by the release tag.
-
-### `test_runs` — verdict and cache columns
-
-| Column | Type | Notes |
-|---|---|---|
-| `verdict` | enum | EXPECTED / UNEXPECTED / UNKNOWN; written at result time by comparing `result_code` to the targeted `Test.expected_result_code` *as of that moment* |
-| `cache_fingerprint` | text | content-addressable hash; populated at submit time once F4 lands |
-| `cached_from_id` | int? | nullable; if set, this row reused another run's outcome |
 
 ### `auto_test_rules` — tag pattern
 
@@ -146,24 +204,27 @@ Release-readiness is then a one-liner: `verdict == EXPECTED` on the
 
 ### F1 — `TestMatrixRun` rollup
 
-`TestMatrixRun` rows already exist; this feature adds the eager rollup.
-Each time a child `TestRun` finishes (live or via cache, once caching
-exists), a transactional update bumps the relevant counters on the
-parent row and recomputes `actual_summary` and `verdict`. Once the
-final child lands, `completed_at` is set.
+`TestMatrixRun` rows already exist; this feature adds the eager rollup
+over the new `TestVerdict` cells. Each time a cell finalizes (either
+because its underlying `TestRun` finishes, or because it was inserted
+as a cache hit with the verdict already populated), a transactional
+update bumps the relevant counters on the parent row and recomputes
+`actual_summary` and `verdict`. Once the final cell lands,
+`completed_at` is set.
 
 The rollup is stored, not recomputed — the UI and API never have to
-fan out across thousands of `TestRun`s to render a verdict. This
-supersedes phase-1's "rollup in app code" placeholder, which was a
-deliberate phase-1 simplification.
+fan out across thousands of cells to render a verdict. This supersedes
+phase-1's "rollup in app code" placeholder, which was a deliberate
+phase-1 simplification.
 
-The per-cell `verdict` lives on `TestRun` so the rollup is a simple
-counter increment rather than a join. Because the verdict is computed
-against `Test.expected_result_code` *at the moment the run finishes*,
-later edits to `Test.expected_result_code` do not retroactively change
-historical verdicts or counters — a `TestMatrixRun` is a snapshot of
-"what we knew when this ran". This is the right behavior for
-append-only history but is worth flagging to users in the UI.
+The per-cell `verdict` lives on `TestVerdict` so the rollup is a
+simple counter increment rather than a join. Because the verdict is
+computed against the `ExpectedTestResult` row in force *at the moment
+the cell finalizes* (and pinned via `TestVerdict.expectation_id`),
+later expectation inserts do not retroactively change historical
+verdicts or counters — a `TestMatrixRun` is a snapshot of "what we
+knew when this ran". This is the right behavior for append-only
+history but is worth flagging to users in the UI.
 
 ### F2 — Anonymous matrices
 
@@ -208,34 +269,45 @@ provides the launcher ergonomics.
 
 ### F3 — Expected results and per-cell verdict
 
-Expectations live on `Test` (`expected_result_code`,
-`expected_result_description`), set by phase-1 schema and edited
-through CRUD on the `Test` row. They are **not** part of a matrix
-spec, and matrix expansion does not modify them. A `Test` whose
-`expected_result_code` is `NULL` means "no expectation declared" — not
-"PASS by default".
+Expectations live in `expected_test_results` — an append-only edit log
+keyed by `test_id`. They are **not** part of a matrix spec, and matrix
+expansion does not modify them. A `Test` with no `ExpectedTestResult`
+row, or whose most recent row has `expected_result_code IS NULL`,
+means "no expectation declared" — not "PASS by default".
+
+Phase-1 stored expectations as mutable columns on `Test`. This plan
+moves them out into their own table so:
+
+- Every edit is audited natively (no bolted-on history table).
+- The `reason` / `set_by` / `set_at` triple has a real home, rather
+  than being lost on every overwrite.
+- `Test` becomes coord-only, aligning with the content-addressable
+  identity of every other field on it.
 
 The contribution this plan makes is the *grading layer*:
 
-- A `verdict` column on `TestRun`, populated when the outcome lands:
-  - `EXPECTED` — `result_code == expected_result_code`
-  - `UNEXPECTED` — `result_code != expected_result_code` (including
-    unexpected ERROR)
-  - `UNKNOWN` — `expected_result_code IS NULL`
+- A `TestVerdict` row per cell of a matrix run, with:
+  - `expectation_id` — FK to the `ExpectedTestResult` row used at
+    recording time (NULL if no expectation existed)
+  - `verdict` — `EXPECTED` if `test_run.result_code` matched the
+    expectation, `UNEXPECTED` if it diverged (including unexpected
+    ERROR), `UNKNOWN` if `expectation_id IS NULL`
+  - `recorded_at` — when the verdict was written
 - The matrix-run rollup over those (`expected_count`,
   `unexpected_count`, `unknown_count`, and the derived
   `TestMatrixRun.verdict`).
-- A UI / REST surface to edit `expected_result_code` and
-  `expected_result_description` on a `Test` row.
+- A UI / REST surface to insert new `ExpectedTestResult` rows.
 
-Editing an expectation in the UI applies *forward only* — historical
-verdicts and rollups are not recomputed. A new matrix run will use the
-updated expectation; an old one keeps its snapshot. This is the
-append-only-history posture that lets the dashboard's "release run on
-tag X-Y-Z had verdict EXPECTED" stay a stable, audit-grade claim.
+Inserting a new expectation applies *forward only* — historical
+verdicts and rollups are not recomputed, because each `TestVerdict`
+pins the specific `ExpectedTestResult` row it used via
+`expectation_id`. A future matrix run picks up the newly-current row;
+an old verdict keeps its pinned reference and stays
+reconstructible — that's what makes the dashboard's "release run on
+tag X-Y-Z had verdict EXPECTED" a stable, audit-grade claim.
 
-CLI convenience for bulk-setting expectations (writing onto matching
-`Test` rows):
+CLI convenience for bulk-setting expectations (writes a batch of
+`ExpectedTestResult` rows sharing `set_by`, `set_at`, and `reason`):
 
 ```
 opp_ci set-expectation --project inet \
@@ -248,10 +320,11 @@ opp_ci set-expectation --project inet \
     --reason "tracked in #432"
 ```
 
-This is sugar over the REST endpoint that updates `Test` rows matching
-the `--where` predicate. It does not run anything — it edits the
-expectation. Running the matrix afterwards picks up the new
-expectations through normal grading.
+`--expect none` (or `--retract`) inserts retraction rows
+(`expected_result_code = NULL`) for the matched tests — distinguishable
+from never-set and itself audited. The command does not run any
+matrix; it only edits expectations. Running the matrix afterwards
+picks up the new expectations through normal grading.
 
 ### F4 — Content-addressable cache
 
@@ -273,7 +346,7 @@ cache_fingerprint = hash(
 )
 ```
 
-Submission flow:
+Submission flow (per cell of an expanding matrix):
 
 1. Resolve the moving parts (git ref → SHA, dep pins, recipe SHA,
    image SHA) and compute `cache_fingerprint`.
@@ -281,19 +354,37 @@ Submission flow:
    the same `cache_fingerprint`. PASS, FAIL, and ERROR all count as
    deterministic — only cancelled / timed-out / not-yet-finished runs
    are cache-misses.
-3. **Hit**: insert the new `TestRun`, copy `result_code` and the
-   outcome columns from the matched row, set `cached_from_id`, mark
-   `lifecycle = finished` without queuing. Compute and store
-   `verdict`. Bump `cache_hit_count` on the parent `TestMatrixRun`.
-4. **Miss**: queue as normal; `cache_fingerprint` is stored on the new
-   row so the next submission can hit it.
+3. **Hit**: insert only a new `TestVerdict` row, with `test_run_id`
+   pointing at the matched (existing) `TestRun`. Compute `verdict`
+   immediately against the currently-in-force `ExpectedTestResult`
+   row, set `expectation_id` and `recorded_at`. Bump `cache_hit_count`
+   on the parent `TestMatrixRun`. No `TestRun` row is created — the
+   prior execution stands as the system of record for the outcome.
+4. **Miss**: insert a new `TestRun` with `cache_fingerprint`
+   populated, queue it for a worker, and insert a `TestVerdict`
+   pointing at it with `verdict = NULL`. When the run finishes, the
+   verdict is computed against the then-current `ExpectedTestResult`
+   and the cell finalizes.
 
 `expected_result_code` is **not** in the cache key — expectations are
-post-hoc annotations on `Test`. A cached cell still gets a fresh
-verdict comparing its (cached) actual against the targeted `Test`'s
-(current) expectation.
+post-hoc annotations. A cached cell still gets a fresh verdict
+comparing its (cached) actual against the (currently-in-force)
+expectation.
 
-`--no-cache` on `opp_ci run-matrix` bypasses cache lookup entirely.
+Implications worth flagging:
+
+- A single `TestRun` can be referenced by many `TestVerdict` rows
+  across different matrix runs. That's the whole point of pulling the
+  verdict out: provenance for the outcome is shared cleanly without
+  duplicating outcome blobs.
+- "Most recent observation for these coords" splits into two
+  well-defined queries: most recent `TestRun.finished_at` (last actual
+  execution) and most recent `TestVerdict.recorded_at` for the same
+  coords (last attribution, including cache hits). The CLI can surface
+  both.
+
+`--no-cache` on `opp_ci run-matrix` bypasses cache lookup entirely and
+forces a fresh `TestRun` per cell.
 
 ### F5 — Release-tag triggers
 
@@ -333,7 +424,7 @@ Every invocation creates exactly one `TestMatrixRun`.
 | `opp_ci run-matrix --spec-file path.json` | (new) Anonymous matrix from a full JSON spec; `-` reads from stdin. |
 | `opp_ci show-matrix-run <id>` | (new) Print rollup + per-cell table for one `TestMatrixRun`. `--unexpected-only` filters to diverged cells. |
 | `opp_ci list-matrix-runs` | (new) Recent `TestMatrixRun` rows. Flags: `--project`, `--verdict`, `--since`, `--limit`. |
-| `opp_ci set-expectation` | (new) Bulk-edit `expected_result_code` / `expected_result_description` on matching `Test` rows. Sugar over the REST update endpoint. |
+| `opp_ci set-expectation` | (new) Insert `ExpectedTestResult` rows for matching `Test`s. `--expect pass|fail|error|none`, `--reason`. Sugar over the REST endpoint. |
 
 Modified commands:
 
@@ -347,10 +438,10 @@ Modified commands:
 Mirror of the CLI:
 
 - `POST /api/matrix-runs` — body = spec JSON → returns `{id, status: queued}`.
-- `GET /api/matrix-runs/<id>` — rollup + paginated cells.
+- `GET /api/matrix-runs/<id>` — rollup + paginated cells (`TestVerdict` rows joined to `TestRun`).
 - `GET /api/matrix-runs?project=…&verdict=UNEXPECTED&since=…` — list view.
-- `PATCH /api/tests/<id>` — update `expected_result_code` and
-  `expected_result_description`.
+- `POST /api/tests/<id>/expectations` — body = `{expected_result_code, expected_result_description, reason}`; inserts a new `ExpectedTestResult` row. `expected_result_code: null` is a retraction.
+- `GET /api/tests/<id>/expectations` — paginated history for the Test.
 - `POST /api/auto-test-rules` — body now accepts `tag_pattern`.
 
 ## Web UI
@@ -359,10 +450,13 @@ Two new pages:
 
 - **Matrix runs index** — table of recent `TestMatrixRun` rows with
   verdict, counters, trigger, and link to the underlying matrix.
-- **Matrix run detail** — rollup header + per-cell table. UNEXPECTED
-  rows highlighted. Click a cell ⇒ existing `TestRun` detail page.
-  Inline editor on each row to set the targeted `Test`'s expectation
-  (with a "future runs only" note explaining the snapshot semantics).
+- **Matrix run detail** — rollup header + per-cell `TestVerdict`
+  table. UNEXPECTED rows highlighted. Cache-hit cells (whose
+  `test_run.finished_at` significantly predates `recorded_at`) carry a
+  "cached from TestRun #N" tag. Click a cell ⇒ underlying `TestRun`
+  detail page. Inline editor on each row inserts a new
+  `ExpectedTestResult` (with a "future runs only" note explaining the
+  snapshot semantics).
 
 The project page (existing) gains a "Latest release run" card showing
 the most recent tag-triggered `TestMatrixRun` with its verdict — the
@@ -372,22 +466,31 @@ at-a-glance answer to Q1.
 
 Each phase is independently useful and ships independently.
 
-### Phase 1 — Rollup, counters, verdict, matrix-run pages
+### Phase 1 — Schema reshape, rollup, counters, matrix-run pages
 
 - Add the counter / `actual_summary` / `verdict` / `ref` /
-  `completed_at` columns to `test_matrix_runs`, and the `verdict`
-  column to `test_runs`.
+  `completed_at` columns to `test_matrix_runs`.
+- Add the `expected_test_results` table; drop `expected_result_code`
+  and `expected_result_description` from `tests`. Existing values are
+  migrated as initial `ExpectedTestResult` rows (one per non-null
+  expectation, `set_at = migration_time`, `set_by = "migration"`).
+- Add the `test_verdicts` table. Matrix expansion now creates
+  `(TestRun, TestVerdict)` pairs; the verdict cell carries the
+  matrix-run membership that previously rode on `TestRun`.
 - Replace phase-1's app-side roll-up with an eager transactional
-  update: on each child `TestRun` lifecycle write, recompute the
-  parent rollup atomically.
-- Verdict computation at result-write time: read the targeted
-  `Test.expected_result_code` and write `TestRun.verdict`.
+  update: on each `TestVerdict` finalization, recompute the parent
+  rollup atomically.
+- Verdict computation at finalization time: read the currently-in-force
+  `ExpectedTestResult` row for the cell's `Test`, write
+  `TestVerdict.expectation_id`, `TestVerdict.verdict`, and
+  `TestVerdict.recorded_at`.
 - `opp_ci show-matrix-run <id>` and `opp_ci list-matrix-runs` (CLI +
   REST).
 - Web UI matrix-runs index + detail pages.
 
 Already useful: every matrix run now has a single stored
-`actual_summary` + `verdict` + counters answerable in O(1).
+`actual_summary` + `verdict` + counters answerable in O(1); expectation
+edits are natively audited; `Test` is coord-only.
 
 ### Phase 2 — Anonymous-matrix launcher surface
 
@@ -403,28 +506,37 @@ named matrix.
 ### Phase 3 — Expectation editing UX
 
 - Inline expectation editor on the matrix-run detail page (rows whose
-  verdict is UNKNOWN or UNEXPECTED).
-- `opp_ci set-expectation` CLI + matching REST.
+  verdict is UNKNOWN or UNEXPECTED) — each save inserts a new
+  `ExpectedTestResult` row.
+- `opp_ci set-expectation` CLI + matching REST (including
+  `--expect none` / `--retract` for explicit retractions).
 - Reason / description editor.
+- History view: per-Test timeline of expectation changes (who, when,
+  why), rendered straight from `expected_test_results`.
 - Documentation explaining the "edits are forward-only; historical
-  matrix-run verdicts are snapshots" semantics.
+  matrix-run verdicts pin a specific ExpectedTestResult row via
+  `TestVerdict.expectation_id`" semantics.
 
-Schema columns exist from phase-1; verdict computation lands in Phase
-1 above. This phase is the UX that turns those into a workflow:
-maintainer looks at a red matrix run, declares which UNKNOWN cells
-should be expected to fail, re-runs to confirm, achieves `verdict ==
-EXPECTED`.
+The schema (`expected_test_results` table and
+`TestVerdict.expectation_id` FK) lands in Phase 1 above. This phase is
+the UX that turns it into a workflow: maintainer looks at a red matrix
+run, declares which UNKNOWN cells should be expected to fail, re-runs
+to confirm, achieves `verdict == EXPECTED`.
 
 Already useful: known-broken combinations stop polluting release
-verdicts, and "is this characterised yet?" is queryable per-Test.
+verdicts, "is this characterised yet?" is queryable per-Test, and the
+audit trail for who-changed-what-and-why is first-class.
 
 ### Phase 4 — Content-addressable cache
 
-- Add `cache_fingerprint` and `cached_from_id` columns to `test_runs`;
-  add `cache_hit_count` rollup on `test_matrix_runs`.
+- Add `cache_fingerprint` column to `test_runs`; add `cache_hit_count`
+  rollup on `test_matrix_runs`.
 - Fingerprint computation in `opp_ci/fingerprint.py` — resolves moving
   refs, dep pins, recipe SHA, image SHA at submit time.
-- Cache lookup at submission keyed on `cache_fingerprint`.
+- Cache lookup at submission keyed on `cache_fingerprint`. On a hit,
+  the cell's `TestVerdict.test_run_id` points at the existing
+  `TestRun`; no new `TestRun` is created. On a miss, both a `TestRun`
+  and a `TestVerdict` are created and the run is queued.
 - `--no-cache` flag on `opp_ci run-matrix`.
 
 Already useful: re-running an unchanged matrix is near-instant, and
@@ -461,10 +573,12 @@ no design or code in this plan.
 - **macOS / aarch64 worker fleet.** The new entities are
   platform-agnostic; expanding worker coverage is a separate ops
   exercise.
-- **Retroactive verdict recomputation.** Editing
-  `Test.expected_result_code` only affects future runs today. A
-  "recompute verdicts for matrix runs since date X" tool could re-grade
-  historical rollups — useful if a long-standing misclassification is
+- **Retroactive verdict recomputation.** Inserting a new
+  `ExpectedTestResult` row only affects future runs today; historical
+  `TestVerdict.expectation_id` stays pinned to whatever was in force
+  at recording time. A "recompute verdicts for matrix runs since date
+  X" tool could re-grade historical rollups against the now-current
+  expectation — useful if a long-standing misclassification is
   corrected, but it breaks the audit-grade snapshot guarantee, so it
   would be an opt-in admin action.
 - **Support declaration on opp_env side.** A structured "this version
@@ -480,10 +594,10 @@ no design or code in this plan.
   operational needs.
 - **Spec-time expectation rules.** An earlier draft put rule-based
   `expected_results` blocks in the matrix spec, evaluated at expansion
-  time to stamp each child `TestRun`. The phase-1 schema puts
-  expectations on `Test` as user-editable state instead, which is
-  cleaner: one expectation per coordinate, edited like any other
-  metadata, not duplicated across every matrix that hits the same cell.
+  time to stamp each child run. This plan instead keeps expectations
+  in `expected_test_results`, keyed by `Test`: one expectation per
+  coordinate, audited, edited like any other metadata, not duplicated
+  across every matrix that hits the same cell.
 
 ## Open questions
 
@@ -499,13 +613,11 @@ flag if any becomes a real concern.
    subset of `Test`s from the old `TestMatrixRun` directly? Different
    semantics when the matrix has been edited between attempts.
 
-2. **Audit / history for mutable columns on `Test`.** `Test` has three
-   mutables (`name`, `expected_result_code`,
-   `expected_result_description`). A silent rename loses context.
-   `expected_result_code` already has snapshot-style isolation via the
-   per-cell verdict snapshot (an edit only affects future runs), but
-   `name` and `expected_result_description` are still silently
-   overwritten. Do we want a single audit mechanism covering all three?
+2. **Audit / history for `Test.name`.** Expectation history is
+   now natively covered by `expected_test_results`. `Test.name`
+   remains the one mutable column on `Test` and is still silently
+   overwritten. Likely fine — `name` is a display label, not part of
+   grading — but flag if rename history ever becomes important.
 
 3. **`TestRun.details` JSON schema.** Phase-1 schema stores it as a
    free-form blob. If a particular field becomes a common query target
@@ -539,19 +651,20 @@ flag if any becomes a real concern.
    environments but risks papering over real infra issues. Including
    for completeness; may deprecate.
 
-8. **Verdict for cached cells.** A cache hit copies the actual outcome
-   from a prior run, then grades against the *current*
-   `Test.expected_result_code`. If the expectation changed since the
-   cached attempt finished, the new `TestRun`'s verdict reflects the
-   new expectation while its actual reflects old code. That's
-   consistent with everything else (verdict is a snapshot at
-   result-write time), but the "actual" half is staler than the
-   expectation half. The UI should probably surface "cached at SHA X"
-   when a cell's `cached_from_id` is set.
+8. **Verdict for cached cells.** A cache hit reuses a prior `TestRun`
+   and grades against the *current* `ExpectedTestResult`. If the
+   expectation changed since the cached run finished, the new
+   `TestVerdict` reflects the new expectation while the underlying
+   `TestRun` reflects old code. That's consistent with everything else
+   (verdict is a snapshot at recording time, pinned via
+   `expectation_id`), but the "actual" half is staler than the
+   expectation half. The UI should surface "cached from TestRun #N
+   (finished at T)" on cells whose `test_run.finished_at` is
+   meaningfully earlier than the cell's `recorded_at`.
 
 9. **Conflict between matrix-expansion expectation hints and
-   `Test.expected_result_code`.** If we ever bring back any form of
+   `ExpectedTestResult`.** If we ever bring back any form of
    per-matrix expectation override (e.g. "this release matrix expects
-   PASS even though the Test row says FAIL"), the storage model needs
-   another layer. Out of scope for now, but flag if it becomes a real
-   request.
+   PASS even though the current `ExpectedTestResult` for this Test
+   says FAIL"), the storage model needs another layer. Out of scope
+   for now, but flag if it becomes a real request.
