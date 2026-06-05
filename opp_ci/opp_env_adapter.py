@@ -7,10 +7,28 @@ dependencies in a normalized format suitable for catalog sync.
 
 import json
 import logging
+import os
 import re
 import subprocess
+import sys
 
 _logger = logging.getLogger(__name__)
+
+
+def _opp_env_cmd():
+    """Resolve the opp_env executable.
+
+    Prefer the one next to the current Python — opp_env is installed
+    into the same venv as opp_ci by packaging/systemd/install.sh, so
+    that's where it lives in production. Falls back to a bare `opp_env`
+    PATH lookup for developer setups where the script is run from
+    outside a venv. This avoids the PATH-stripping footgun under
+    `sudo -u opp_ci`, where /opt/opp_ci/.venv/bin isn't on PATH.
+    """
+    venv_bin = os.path.join(os.path.dirname(sys.executable), "opp_env")
+    if os.path.isfile(venv_bin):
+        return venv_bin
+    return "opp_env"
 
 
 def list_all_projects():
@@ -34,7 +52,7 @@ def list_all_projects():
     """
     try:
         result = subprocess.run(
-            ["opp_env", "info", "--raw"],
+            [_opp_env_cmd(), "info", "--raw"],
             capture_output=True, text=True,
         )
     except FileNotFoundError:
