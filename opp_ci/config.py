@@ -57,6 +57,22 @@ REFERENCE_PLATFORM = os.environ.get("OPP_CI_REFERENCE_PLATFORM", "Ubuntu 24.04/g
 SERVE_HOST = os.environ.get("OPP_CI_SERVE_HOST", "127.0.0.1")
 SERVE_PORT = int(os.environ.get("OPP_CI_SERVE_PORT", "8080"))
 
+# ── TLS ───────────────────────────────────────────────────────────────
+#
+# Native TLS termination in `opp_ci serve`. Empty pair → plain HTTP, the
+# default. Setting only one of CERT_FILE / KEY_FILE is a startup error.
+# When TLS is enabled, SESSION_COOKIE_SECURE is auto-flipped on at
+# startup, and OAuth callback requires OPP_CI_PUBLIC_URL.
+SERVE_TLS_CERT_FILE = os.environ.get("OPP_CI_SERVE_TLS_CERT_FILE", "")
+SERVE_TLS_KEY_FILE = os.environ.get("OPP_CI_SERVE_TLS_KEY_FILE", "")
+SERVE_TLS_KEY_PASSWORD_FILE = os.environ.get("OPP_CI_SERVE_TLS_KEY_PASSWORD_FILE", "")
+
+# Outbound TLS verification, used by the worker and the Python client when
+# the coordinator presents a non-public-CA cert (self-signed, Cloudflare
+# Origin Certificate, internal CA). Empty → use the system CA store.
+TLS_CA_BUNDLE = os.environ.get("OPP_CI_TLS_CA_BUNDLE", "")
+TLS_INSECURE = os.environ.get("OPP_CI_TLS_INSECURE", "0") == "1"
+
 WORKER_POLL_INTERVAL = int(os.environ.get("OPP_CI_WORKER_POLL_INTERVAL", "10"))
 WORKER_HEARTBEAT_INTERVAL = int(os.environ.get("OPP_CI_WORKER_HEARTBEAT_INTERVAL", "30"))
 WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("OPP_CI_WORKER_HEARTBEAT_TIMEOUT", "120"))
@@ -99,6 +115,20 @@ GITHUB_ORG = os.environ.get("OPP_CI_GITHUB_ORG", "")
 GITHUB_ADMIN_TEAMS = [s.strip() for s in os.environ.get("OPP_CI_GITHUB_ADMIN_TEAMS", "").split(",") if s.strip()]
 GITHUB_SUBMITTER_TEAMS = [s.strip() for s in os.environ.get("OPP_CI_GITHUB_SUBMITTER_TEAMS", "*").split(",") if s.strip()]
 GITHUB_ALLOW_EXTERNAL = os.environ.get("OPP_CI_GITHUB_ALLOW_EXTERNAL", "1") == "1"
+
+
+def get_tls_key_password():
+    """Read the TLS key passphrase from file (or env override). Empty if not set."""
+    pw = os.environ.get("OPP_CI_SERVE_TLS_KEY_PASSWORD", "")
+    if pw:
+        return pw
+    if not SERVE_TLS_KEY_PASSWORD_FILE:
+        return ""
+    try:
+        with open(SERVE_TLS_KEY_PASSWORD_FILE) as f:
+            return f.read().strip()
+    except (OSError, FileNotFoundError):
+        return ""
 
 
 def get_github_oauth_client_secret():

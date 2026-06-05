@@ -39,6 +39,7 @@ web = [
     "itsdangerous",
     "bcrypt",
     "httpx",
+    "cryptography",
 ]
 client = [
     "requests",

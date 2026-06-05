@@ -304,8 +304,13 @@ def _run_remote(project, tests, git_ref, *, mode=None,
               help="Bind host (default from $OPP_CI_SERVE_HOST, or 127.0.0.1)")
 @click.option("--port", default=None, type=int,
               help="Bind port (default from $OPP_CI_SERVE_PORT, or 8080)")
-def serve(host, port):
+@click.option("--cert", "cert_file", default=None,
+              help="TLS certificate file (default $OPP_CI_SERVE_TLS_CERT_FILE)")
+@click.option("--key", "key_file", default=None,
+              help="TLS private key file (default $OPP_CI_SERVE_TLS_KEY_FILE)")
+def serve(host, port, cert_file, key_file):
     """Start the web UI server."""
+    import os
     import uvicorn
     from opp_ci.web.app import app
     from opp_ci import config as cfg
@@ -314,8 +319,195 @@ def serve(host, port):
         host = cfg.SERVE_HOST
     if port is None:
         port = cfg.SERVE_PORT
-    click.echo(f"Starting opp_ci web UI at http://{host}:{port}")
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    if cert_file is None:
+        cert_file = cfg.SERVE_TLS_CERT_FILE
+    if key_file is None:
+        key_file = cfg.SERVE_TLS_KEY_FILE
+
+    # ── TLS validation ──────────────────────────────────────────────
+    if bool(cert_file) != bool(key_file):
+        raise click.UsageError(
+            "TLS requires both --cert/$OPP_CI_SERVE_TLS_CERT_FILE and "
+            "--key/$OPP_CI_SERVE_TLS_KEY_FILE; set both or neither."
+        )
+    tls_on = bool(cert_file)
+    if tls_on:
+        for label, path in (("cert", cert_file), ("key", key_file)):
+            if not os.access(path, os.R_OK):
+                raise click.UsageError(
+                    f"TLS {label} file is not readable: {path} "
+                    f"(check ownership/permissions)"
+                )
+        # Auto-flip secure cookies when TLS is on, unless the operator
+        # explicitly opted out via env var. Silent on plain HTTP.
+        if not os.environ.get("OPP_CI_SESSION_COOKIE_SECURE"):
+            cfg.SESSION_COOKIE_SECURE = True
+            click.echo("TLS on → forcing OPP_CI_SESSION_COOKIE_SECURE=1")
+        # OAuth callback URL must be HTTPS when TLS is on.
+        if cfg.GITHUB_OAUTH_CLIENT_ID and not cfg.PUBLIC_URL:
+            raise click.UsageError(
+                "OPP_CI_PUBLIC_URL is required when TLS and GitHub OAuth "
+                "are both enabled (set it to your public https:// URL)."
+            )
+    else:
+        if cfg.SESSION_COOKIE_SECURE:
+            click.echo(
+                "WARNING: OPP_CI_SESSION_COOKIE_SECURE=1 but TLS is off — "
+                "session cookies will not be sent over plain HTTP."
+            )
+
+    scheme = "https" if tls_on else "http"
+    click.echo(f"Starting opp_ci web UI at {scheme}://{host}:{port}")
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+        ssl_certfile=cert_file or None,
+        ssl_keyfile=key_file or None,
+        ssl_keyfile_password=cfg.get_tls_key_password() or None,
+    )
+
+
+@main.command("tls-selfsign")
+@click.option("--host", required=True,
+              help="Primary hostname to put in the cert's Common Name and SAN list "
+                   "(e.g. ci.lab.local). Add more with --extra-san.")
+@click.option("--extra-san", "extra_sans", multiple=True,
+              help="Additional Subject Alternative Names. May be repeated. "
+                   "IP addresses (e.g. 10.0.0.5) are recognized.")
+@click.option("--out", "out_dir", default="/etc/opp_ci/tls",
+              help="Output directory. Writes fullchain.pem + privkey.pem there.")
+@click.option("--days", default=365, type=int, help="Validity in days.")
+@click.option("--bits", default=4096, type=int, help="RSA key size.")
+@click.option("--dry-run", is_flag=True,
+              help="Print the PEMs to stdout instead of writing to --out.")
+def tls_selfsign(host, extra_sans, out_dir, days, bits, dry_run):
+    """Generate a self-signed TLS cert + key for lab / smoke-test use.
+
+    Not for production — workers refuse the resulting cert unless their
+    OPP_CI_TLS_CA_BUNDLE points at fullchain.pem (or OPP_CI_TLS_INSECURE=1).
+    For real deploys use a Cloudflare Origin Certificate, Let's Encrypt,
+    or a corporate CA.
+    """
+    import ipaddress
+    import os
+    import socket as _socket
+    import stat
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    # Build SAN list: --host, --extra-san, plus the usual local fallbacks
+    # so a same-host worker can connect by 127.0.0.1 / localhost / the
+    # machine's hostname without certificate-name mismatches.
+    san_strings = [host, *extra_sans, "localhost", _socket.gethostname()]
+    san_entries = []
+    seen = set()
+    for name in san_strings:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        try:
+            ip = ipaddress.ip_address(name)
+            san_entries.append(x509.IPAddress(ip))
+        except ValueError:
+            san_entries.append(x509.DNSName(name))
+    # 127.0.0.1 added unconditionally as an IPAddress entry.
+    loopback = ipaddress.ip_address("127.0.0.1")
+    if not any(isinstance(e, x509.IPAddress) and e.value == loopback for e in san_entries):
+        san_entries.append(x509.IPAddress(loopback))
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=bits)
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, host),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "opp_ci self-signed"),
+    ])
+    now = datetime.datetime.utcnow()
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=5))
+        .not_valid_after(now + datetime.timedelta(days=days))
+        .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True, key_encipherment=True, key_agreement=False,
+                content_commitment=False, data_encipherment=False, key_cert_sign=False,
+                crl_sign=False, encipher_only=False, decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]),
+            critical=False,
+        )
+        .sign(private_key=key, algorithm=hashes.SHA256())
+    )
+
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+    if dry_run:
+        click.echo("# fullchain.pem")
+        click.echo(cert_pem.decode())
+        click.echo("# privkey.pem")
+        click.echo(key_pem.decode())
+        return
+
+    os.makedirs(out_dir, exist_ok=True)
+    cert_path = os.path.join(out_dir, "fullchain.pem")
+    key_path = os.path.join(out_dir, "privkey.pem")
+    # Write key first then cert, so a watcher (.path unit) that fires on
+    # fullchain.pem sees a consistent pair.
+    _write_secure(key_path, key_pem, mode=0o640)
+    _write_secure(cert_path, cert_pem, mode=0o640)
+    # If running as root, hand the files to root:opp_ci so the service
+    # account can read them. Best-effort: ignore if the group is missing.
+    if os.geteuid() == 0:
+        try:
+            import grp
+            gid = grp.getgrnam("opp_ci").gr_gid
+            os.chown(cert_path, 0, gid)
+            os.chown(key_path, 0, gid)
+        except KeyError:
+            pass
+
+    click.echo(f"Wrote {cert_path} and {key_path} (valid {days} days)")
+    click.echo("")
+    click.echo("Next steps:")
+    click.echo(f"  serve:   set OPP_CI_SERVE_TLS_CERT_FILE={cert_path}")
+    click.echo(f"                OPP_CI_SERVE_TLS_KEY_FILE={key_path}")
+    click.echo(f"  workers: set OPP_CI_TLS_CA_BUNDLE={cert_path}  "
+               "(or OPP_CI_TLS_INSECURE=1 for dev)")
+
+
+def _write_secure(path, data, *, mode):
+    """Atomically write `data` to `path` with the given mode."""
+    import os
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 @main.command("list-runs")
