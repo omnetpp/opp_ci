@@ -23,9 +23,18 @@ The webhook receiver, status updater, and API client live in
 5. For each matched rule, creates one `TestMatrixRun` carrying the
    event's GitHub linkage fields (`github_owner`, `github_repo`,
    `github_commit_sha`, `github_pr_number`, `github_status_url`),
-   then expands the linked matrix and queues a child `TestRun` per
-   job.
-6. Posts a `pending` commit status to the head SHA.
+   then expands the linked matrix. Each cell goes through
+   `persistence.enqueue_job`, which computes a
+   [`cache_fingerprint`](data_model.md#cache-fingerprint) and either
+   reuses a prior finished `TestRun` (cache hit → a fresh
+   [`TestVerdict`](data_model.md#testverdict) cell with
+   `cache_hit=True`) or queues a new one.
+6. For tag-push events, the matrix run is recorded with
+   `trigger="tag"` and `ref=<tag-name>` so the project page's
+   "Latest release run" card and `opp_ci list-matrix-runs --verdict`
+   queries can scope to release events. Branch and PR triggers keep
+   `trigger="webhook"` and leave `ref` empty.
+7. Posts a `pending` commit status to the head SHA.
 
 Webhook secret configuration: see [configuration.md](configuration.md).
 
@@ -48,7 +57,7 @@ Examples:
 |---|---|---|---|---|
 | inet | branch | `master` | `inet-full` | Full matrix on every push to master |
 | inet | pr | `*` | `inet-smoke` | Smoke on every PR |
-| omnetpp | tag | `v6.*` | `omnetpp-release` | Release matrix on `v6.x` tags |
+| omnetpp | tag | `v6.*` | `omnetpp-release` | Release matrix on `v6.x` tags. The resulting `TestMatrixRun` has `trigger="tag"` and `ref="v6.X.Y"` so it surfaces on the project page's "Latest release run" card; `verdict == EXPECTED` ⇒ release-ready. |
 
 Manage rules via:
 
