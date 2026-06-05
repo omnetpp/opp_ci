@@ -7,10 +7,13 @@ for the schema sketched in
 [concepts.md](concepts.md#domain-model-database).
 
 The authoritative source is [opp_ci/db/models.py](../opp_ci/db/models.py)
-(SQLAlchemy). Schema changes are managed by Alembic — migrations live in
-[opp_ci/db/migrations/](../opp_ci/db/migrations/), config in
-`alembic.ini`. The database backend is selected by `OPP_CI_DATABASE_URL`
-(default `sqlite:///opp_ci.db`; production uses PostgreSQL).
+(SQLAlchemy). The database backend is selected by `OPP_CI_DATABASE_URL`
+(default `sqlite:///opp_ci.db`; production uses PostgreSQL). Phase 1 of
+the [test data model redesign](../plan/done/test-data-model-phase-1-schema.md)
+split what used to be a single `test_runs` row into four entities
+(`tests`, `test_matrices`, `test_matrix_runs`, `test_runs`) and was
+applied by wiping and recreating the database — there is no migration
+chain to chase.
 
 ---
 
@@ -22,11 +25,12 @@ The authoritative source is [opp_ci/db/models.py](../opp_ci/db/models.py)
 | [`versions`](#version) | Project version + pinned deps | child of `projects` |
 | [`os_entries`](#os) | Catalog of `(name, version, arch)` triples | referenced by matrix configs |
 | [`compilers`](#compiler) | Catalog of `(name, version)` pairs | referenced by matrix configs |
-| [`test_matrices`](#testmatrix) | Named cross-product configuration | referenced by `auto_test_rules`, `test_runs` |
+| [`test_matrices`](#testmatrix) | Named cross-product configuration | referenced by `auto_test_rules`, `test_matrix_runs` |
 | [`auto_test_rules`](#autotestrule) | Event-pattern → matrix bindings | child of `projects` + `test_matrices` |
 | [`workers`](#worker) | Worker registrations | referenced by `test_runs` |
-| [`test_runs`](#testrun) | One row per job (the unit of work) | child of `test_matrices` + `workers`; parent of `test_results` |
-| [`test_results`](#testresult) | Per-individual-test outcome | child of `test_runs` |
+| [`tests`](#test) | Deduped immutable coordinate row + editable metadata | parent of `test_runs` |
+| [`test_matrix_runs`](#testmatrixrun) | One row per submission of a `TestMatrix` — groups its children, owns the GitHub linkage | child of `test_matrices`; parent of `test_runs` |
+| [`test_runs`](#testrun) | One row per attempt to run a `Test` — carries lifecycle + outcome | child of `tests` + `test_matrix_runs` + `workers` |
 | [`api_tokens`](#apitoken) | Bearer tokens for REST access | — |
 | [`users`](#user) | Web-UI human users (local + GitHub) | — |
 
@@ -34,21 +38,20 @@ The authoritative source is [opp_ci/db/models.py](../opp_ci/db/models.py)
 
 ```
 projects ───┬─< versions
-            └─< auto_test_rules >── test_matrices ──┐
-                                                    │
-                              workers ──┐           │
-                                        ▼           ▼
-                                       test_runs ───┘
+            └─< auto_test_rules >── test_matrices ──< test_matrix_runs ──┐
+                                                                         │
+                            tests ──< test_runs >──────────────────-─────┘
+                                          ▲
                                           │
-                                          └──< test_results
+                                       workers
 
 os_entries     compilers     api_tokens     users
    (standalone catalog/auth tables)
 ```
 
 `<` = "has many", read left-to-right. `os_entries` and `compilers` are
-referenced by string value from `test_runs` and from matrix JSON
-configs, not by foreign key — see [Denormalised columns](#denormalised-columns).
+referenced by string value from `tests` and from matrix JSON configs,
+not by foreign key — see [Denormalised columns](#denormalised-columns).
 
 ---
 
@@ -105,7 +108,7 @@ override it via its own `resolved_deps` column. See
 | `arch` | string, default `"x86_64"` | e.g. `x86_64`, `aarch64` |
 
 Helper: `OS.label` formats as `"<name> <version>"`. Not foreign-keyed
-from TestRun — see [Denormalised columns](#denormalised-columns).
+from `tests` — see [Denormalised columns](#denormalised-columns).
 
 ---
 
@@ -121,14 +124,14 @@ configs.
 | `version` | string, nullable | e.g. `13` |
 
 Helper: `Compiler.label` formats as `"<name>-<version>"`. Not
-foreign-keyed from TestRun — see [Denormalised columns](#denormalised-columns).
+foreign-keyed from `tests` — see [Denormalised columns](#denormalised-columns).
 
 ---
 
 ## TestMatrix
 
 `test_matrices` — named cross-product configuration. Expanded by the
-scheduler into TestRun rows.
+scheduler into `Test` + `TestRun` rows under a `TestMatrixRun` umbrella.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -136,7 +139,8 @@ scheduler into TestRun rows.
 | `name` | string, unique, not null | CLI identifier (`inet-default`, `omnetpp-full`, …) |
 | `project` | string, not null | Project name (stored by name, not FK) |
 | `opp_file` | string, nullable | Optional `.opp` file the matrix targets |
-| `config` | JSON, not null | The axes (versions, modes, os, compiler, isolation, toolchain, tests …) |
+| `config` | JSON, not null | The axes (versions, modes, os, compiler, isolation, toolchain, kinds, …) |
+| `created_at` | datetime, default now | |
 
 Axis semantics and JSON shape: see
 [test_matrix_dimensions.md](test_matrix_dimensions.md).
@@ -186,110 +190,206 @@ rules: see [workers.md](workers.md#capability-tags).
 
 ---
 
-## TestRun
+## Test
 
-`test_runs` — one row per queued / running / finished job. The unit
-of work. For an exhaustive field-by-field reference written from the
-*test author's* perspective (CLI flag, REST field, defaults,
-validation, lifecycle) see
-[single_test_parameters.md](single_test_parameters.md); the table
-below is the *DBA's* view.
+`tests` — a deduped row holding the immutable coordinate of "what we
+test", plus three editable metadata columns. One `Test` is shared by
+every `TestRun` that retries / reruns the same coordinate; matrix
+expansion looks up the row by `coord_hash` and inserts a new one only
+on first sight.
 
-### Identity and coordinate columns
+### Coordinate columns (immutable after creation)
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | int PK | |
 | `project` | string, not null | Project name (denormalised, see below) |
-| `test` | string, not null | Entry in `executor.COMMAND_MAP` (`smoke`, `fingerprint`, …) |
+| `kind` | string, not null | Entry in `executor.COMMAND_MAP` (`smoke`, `fingerprint`, …). Renamed from the legacy `test` column. |
 | `mode` | string, nullable | Build mode (`release`, `debug`) |
 | `os` | string, nullable | OS family — `Linux`, `Windows`, `MacOS` |
 | `os_version` | string, nullable | OS version (Windows/MacOS only; NULL for Linux) |
-| `distro` | string, nullable | Linux distribution (`ubuntu`, `fedora`, ...). NULL for non-Linux. |
+| `distro` | string, nullable | Linux distribution (`ubuntu`, `fedora`, …). NULL for non-Linux. |
 | `distro_version` | string, nullable | Distribution version. NULL when no distro. |
-| `flavor` | string, nullable | Distribution variant (`kubuntu`, ...). NULL when not a flavor. |
+| `flavor` | string, nullable | Distribution variant (`kubuntu`, …). NULL when not a flavor. |
 | `flavor_version` | string, nullable | Flavor version. Falls back to `distro_version` when NULL. |
 | `arch` | string, nullable | CPU architecture (`amd64`, `aarch64`) |
 | `compiler` | string, nullable | Compiler name |
 | `compiler_version` | string, nullable | Compiler version |
 | `isolation` | string, nullable | `none` / `podman`; `None` is read as `none` |
 | `toolchain` | string, nullable | `none` / `nix`; `None` is read as `none` |
-| `platform_desc` | string, nullable | Pre-rendered platform string for display |
-| `git_ref` | string, nullable | Branch / tag the run targets |
-| `commit_sha` | string, nullable | Resolved head SHA |
-| `version` | string, nullable | Version label (matrix-set) |
-| `resolved_deps` | JSON, nullable | Pinned dep map for this run |
 | `opp_file` | string, nullable | Same as TestMatrix.opp_file when set by matrix |
-| `matrix_id` | int FK → `test_matrices.id`, nullable | Null for ad-hoc CLI runs |
+| `coord_hash` | string(64), unique, not null | SHA-256 hex over the canonical JSON of every coordinate column — the dedup key |
+| `created_at` | datetime, default now | |
 
-### Lifecycle columns
+### Editable metadata columns
+
+These three columns are the only ones a user can change after the
+row exists. They are deliberately excluded from `coord_hash` so
+renaming or expectation-edits never produce a new `Test` row.
 
 | Column | Type | Notes |
 |---|---|---|
-| `worker_id` | int FK → `workers.id`, nullable | Set when claimed |
-| `status` | enum [`TestRunStatus`](#testrunstatus), default `queued` | Single source of truth for state |
-| `started_at` | datetime, default now | Set at insert (not at worker-start) |
-| `finished_at` | datetime, nullable | |
-| `duration_seconds` | float, nullable | |
-| `trigger` | string, default `"manual"` | `manual` / `remote` / `webhook` / `schedule` |
+| `name` | string, nullable | Optional human label |
+| `expected_result_code` | enum [`TestResultCode`](#testresultcode), nullable | What outcome the maintainer expects |
+| `expected_result_description` | text, nullable | Free-form context for the expectation |
 
-### GitHub linkage (webhook-only)
+### `coord_hash` field list
 
-| Column | Type |
-|---|---|
-| `github_owner` | string, nullable |
-| `github_repo` | string, nullable |
-| `github_commit_sha` | string, nullable |
-| `github_pr_number` | int, nullable |
-| `github_status_url` | string, nullable |
+Computed by `compute_test_coord_hash(coord)` in
+[opp_ci/db/models.py](../opp_ci/db/models.py) as the SHA-256 of the
+sorted-keys canonical JSON over:
 
-These are populated only for runs created by the webhook receiver and
-drive the commit-status / PR-comment posting back to GitHub. See
-[github_integration.md](github_integration.md).
+```
+project, kind, mode,
+os, os_version, distro, distro_version, flavor, flavor_version, arch,
+compiler, compiler_version,
+isolation, toolchain,
+opp_file
+```
+
+Treat this set as frozen for phase 1; adding or removing a field
+re-keys every existing row.
 
 ### Relationships
 
-- `results` → many [`TestResult`](#testresult), `cascade="all, delete-orphan"`
-  (deleting a TestRun cascades to its TestResults).
+- `runs` → many [`TestRun`](#testrun), `cascade="all, delete-orphan"`
+  (deleting a Test cascades to its TestRuns).
+
+---
+
+## TestMatrixRun
+
+`test_matrix_runs` — one row per submission of a `TestMatrix`. Groups
+the per-`Test` `TestRun`s spawned from a single matrix expansion so
+they can be tracked, cancelled, or queried as a unit. Also owns the
+GitHub linkage that, before phase 1, lived on every `TestRun` row.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `matrix_id` | int FK → `test_matrices.id`, not null | The matrix this submission expanded. Anonymous / ad-hoc matrices still get a row. |
+| `trigger` | string, default `"manual"` | `manual` / `web` / `remote` / `webhook` / `schedule` / `rerun` |
+| `github_owner` | string, nullable | GitHub repository owner |
+| `github_repo` | string, nullable | GitHub repository name |
+| `github_commit_sha` | string, nullable | Head SHA of the triggering event |
+| `github_pr_number` | int, nullable | PR number, when the trigger was a `pull_request` event |
+| `github_status_url` | string, nullable | The `statuses_url` to post commit-status updates to |
+| `created_at` | datetime, default now | |
+
+No own lifecycle column in phase 1: the matrix-run's aggregate status
+is rolled up from child `TestRun.lifecycle` values in app code.
+
+### Relationships
+
+- `matrix` → one [`TestMatrix`](#testmatrix) (backref `TestMatrix.matrix_runs`).
+- `test_runs` → many [`TestRun`](#testrun) (children of this submission).
+
+---
+
+## TestRun
+
+`test_runs` — one row per attempt to run a `Test`. Carries the
+per-attempt context (commit, version, deps, worker, timing), the
+lifecycle state, and — once `lifecycle == finished` — the outcome.
+
+### Identity / parent FKs
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | int PK | |
+| `test_id` | int FK → `tests.id`, not null | The coordinate being run. All coordinate fields (`project`, `kind`, `os`, …) are read off the joined `Test` row. |
+| `matrix_run_id` | int FK → `test_matrix_runs.id`, nullable | Null for ad-hoc single-test submissions (CLI `opp_ci run`, `POST /api/runs`); set for every child of a matrix submission. |
+| `worker_id` | int FK → `workers.id`, nullable | Set when a worker claims the run via `/api/workers/poll`. |
+
+### Per-attempt context
+
+| Column | Type | Notes |
+|---|---|---|
+| `commit_sha` | string, nullable | Resolved head SHA — set by the worker once `git_ref` resolves to a concrete commit |
+| `git_ref` | string, nullable | Branch / tag the run targets |
+| `version` | string, nullable | Version label (matrix-set) |
+| `resolved_deps` | JSON, nullable | Pinned dep map for this run |
+
+### Lifecycle
+
+| Column | Type | Notes |
+|---|---|---|
+| `lifecycle` | enum [`TestRunLifecycle`](#testrunlifecycle), not null, default `queued` | The state machine. Set to `running` when a worker claims the row, `finished` on worker result, `cancelled` by a user action, `timed_out` by the watchdog. |
+| `created_at` | datetime, default now | Insert time |
+| `started_at` | datetime, nullable | Set at claim time by `/api/workers/poll` (not at insert) |
+| `finished_at` | datetime, nullable | Set on worker result |
+| `duration_seconds` | float, nullable | Reported by the worker |
+
+### Outcome (populated iff `lifecycle == finished`)
+
+| Column | Type | Notes |
+|---|---|---|
+| `result_code` | enum [`TestResultCode`](#testresultcode), nullable | `PASS` / `FAIL` / `ERROR` / `SKIPPED` |
+| `stdout` | text, nullable | Raw, ANSI codes preserved |
+| `stderr` | text, nullable | Raw, ANSI codes preserved |
+| `details` | JSON, nullable | Free-form per-test breakdown from opp_repl (`to_dict()`); populated only on the direct-import executor path |
+
+### Best-effort system context
+
+| Column | Type | Notes |
+|---|---|---|
+| `system_snapshot` | JSON, nullable | Captured at claim time; posted by the worker via `POST /api/workers/snapshot`. On Postgres, TOAST keeps the blob out-of-line and lazy-loaded so it costs nothing on queries that don't touch it. No retention policy in phase 1. |
+
+### View-side accessors
+
+`TestRun` exposes Python properties that delegate to the joined `Test`
+row so existing templates and rollup code can read `run.project`,
+`run.kind`, `run.os`, `run.compiler`, etc. directly without writing the
+join out by hand. There is also:
+
+- `run.matrix_id` — proxies `matrix_run.matrix_id` (None for ad-hoc).
+- `run.github_owner` / `run.github_repo` / `run.github_commit_sha` /
+  `run.github_pr_number` / `run.trigger` — all delegate to
+  `matrix_run`, so they are None for ad-hoc runs.
+- `run.effective_status` — combines `lifecycle` and `result_code`
+  into the single label used by templates / rollup: returns the
+  `result_code` value (`"PASS"` / `"FAIL"` / `"ERROR"` / `"SKIPPED"`)
+  when `lifecycle == finished`, otherwise the `lifecycle` value
+  (`"queued"` / `"running"` / `"cancelled"` / `"timed_out"`).
+
+Note: `run.test` is the SQLAlchemy relationship returning the `Test`
+row, **not** the test kind — use `run.kind` (or `run.test.kind`) for
+the kind string.
+
+### Relationships
+
+- `test` → one [`Test`](#test) (backref `Test.runs`, `cascade="all, delete-orphan"`).
+- `matrix_run` → one [`TestMatrixRun`](#testmatrixrun) (backref `TestMatrixRun.test_runs`).
 - `worker` → one [`Worker`](#worker) (backref `Worker.test_runs`).
 
 ---
 
-## TestRunStatus
+## TestRunLifecycle
 
-Python `enum.Enum`, stored as the SQL `Enum` type on `test_runs.status`.
+Python `enum.Enum`, stored as the SQL `Enum` type on
+`test_runs.lifecycle`. Always set.
 
 | Value | Meaning |
 |---|---|
 | `queued` | Inserted by scheduler / CLI; awaiting a worker |
 | `running` | Claimed by a worker |
-| `PASS` | Terminal — every TestResult passed |
-| `FAIL` | Terminal — at least one TestResult failed |
-| `ERROR` | Terminal — infrastructure failure (build, env, worker crash) |
-
-`PASS` / `FAIL` / `ERROR` are uppercase by convention to mirror
-opp_repl's verdict strings.
+| `finished` | Worker reported a result — `result_code` is now populated |
+| `cancelled` | A user action cancelled the run. Only valid transition from `queued`; running runs are left to finish (the worker can't be interrupted). |
+| `timed_out` | The coordinator's watchdog reclaimed the run after the worker stopped heartbeating |
 
 ---
 
-## TestResult
+## TestResultCode
 
-`test_results` — per-individual-test outcome attached to a TestRun. A
-single fingerprint TestRun can yield dozens of TestResult rows.
+Python `enum.Enum`, stored as the SQL `Enum` type on
+`test_runs.result_code` and `tests.expected_result_code`.
 
-| Column | Type | Notes |
-|---|---|---|
-| `id` | int PK | |
-| `test_run_id` | int FK → `test_runs.id`, not null | Cascade-delete with parent |
-| `result_code` | string, not null | `PASS` / `FAIL` / `ERROR` / opp_repl-specific code |
-| `stdout` | text, nullable | Raw, ANSI codes preserved |
-| `stderr` | text, nullable | Raw, ANSI codes preserved |
-| `details` | JSON, nullable | Per-test breakdown from opp_repl (`to_dict()`); populated only on the direct-import executor path |
-
-Per-test name and duration live inside `details`, not as columns.
-ANSI escapes are stored raw and converted to colored HTML by a Jinja
-filter at render time — see
-[concepts.md → ANSI-preserving storage](concepts.md#ansi-preserving-storage).
+| Value | Meaning |
+|---|---|
+| `PASS` | All sub-tests passed |
+| `FAIL` | At least one sub-test failed |
+| `ERROR` | Infrastructure failure (build, env, worker crash) |
+| `SKIPPED` | The run was deliberately not executed (reserved) |
 
 ---
 
@@ -345,28 +445,34 @@ Helper: `User.display_name` prefers `@github_username`, falls back to
 
 ### Denormalised columns
 
-TestRun records the project, OS, compiler, and (resolved) dependency
-coordinates by **string value**, not by foreign key. This is
-deliberate:
+`Test` records the project, OS, compiler, and platform coordinates by
+**string value**, not by foreign key. This is deliberate:
 
-- A historical run record stays meaningful after the catalog is
-  edited, OS rows are renamed, or projects are removed.
+- A historical Test row stays meaningful after the catalog is edited,
+  OS rows are renamed, or projects are removed.
 - Reporting and aggregation queries (see
-  [rollup](concepts.md#rollup)) can group runs by string equality
-  without joins.
+  [rollup](concepts.md#rollup)) can group by string equality without
+  joins back to catalog tables.
 
-The cost is that consistency between catalog tables and TestRun
-columns is by convention, not by referential integrity. Treat the
-catalog tables (`projects`, `versions`, `os_entries`, `compilers`) as
-the *current* truth and TestRun string columns as the *historical*
+The cost is that consistency between catalog tables and `Test` columns
+is by convention, not by referential integrity. Treat the catalog
+tables (`projects`, `versions`, `os_entries`, `compilers`) as the
+*current* truth and the `Test` string columns as the *historical*
 truth.
 
 ### Cascade behaviour
 
-Only one cascade is declared: deleting a `TestRun` deletes its
-`TestResult`s (`cascade="all, delete-orphan"`). Everything else uses
-SQL-level FK behaviour (default `NO ACTION`), so dropping a referenced
-worker / matrix / project requires manual cleanup or migration.
+Two cascades are declared:
+
+- Deleting a `Test` cascades to its `TestRun`s
+  (`cascade="all, delete-orphan"`).
+- A `TestMatrixRun` does **not** cascade to its `TestRun` children at
+  the ORM level; orphan handling on matrix deletion is a manual
+  operation today.
+
+Everything else uses SQL-level FK behaviour (default `NO ACTION`), so
+dropping a referenced worker / matrix / project requires manual
+cleanup.
 
 ### JSON columns
 
@@ -377,11 +483,12 @@ worker / matrix / project requires manual cleanup or migration.
 | `test_matrices.config` | object describing axes (see [test_matrix_dimensions.md](test_matrix_dimensions.md)) |
 | `workers.tags` | list of strings (capability tags) |
 | `test_runs.resolved_deps` | object: dep-name → version |
-| `test_results.details` | opp_repl per-test breakdown (`to_dict()`) |
+| `test_runs.details` | opp_repl per-test breakdown (`to_dict()`) |
+| `test_runs.system_snapshot` | object: best-effort host facts captured at run start (hostname, OS, Python version, …) |
 
 On SQLite the column type degrades to TEXT with JSON encoding; on
-PostgreSQL it is native `JSON`. Use SQLAlchemy's JSON access (not raw
-SQL) when querying, so both backends behave the same.
+PostgreSQL it is native `JSON` / `JSONB`. Use SQLAlchemy's JSON access
+(not raw SQL) when querying, so both backends behave the same.
 
 ### Timestamps
 
@@ -399,18 +506,28 @@ everything.
 
 ---
 
-## Migrations
+## Persistence helpers
 
-Alembic migrations in [opp_ci/db/migrations/versions/](../opp_ci/db/migrations/versions/).
-At time of writing:
+Common write paths against the new model live in
+[opp_ci/persistence.py](../opp_ci/persistence.py), so every call site
+(web routes, REST API, CLI, github webhook) stays consistent:
 
-| Revision | Effect |
+| Helper | Purpose |
 |---|---|
-| `4e2a31c0a4b1_drop_project_tier` | Removed an early `Project.tier` column |
-| `11b0cd9aa9a6_add_isolation_toolchain` | Added the orthogonal isolation × toolchain axes |
-| `9f1c4d2a8e10_rename_docker_to_podman` | Renamed `docker` → `podman` everywhere |
-| `8a3f1d2e5b04_add_arch_to_test_runs` | Added `TestRun.arch` |
-| `c5d8a4f12b30_add_users_table` | Added the `users` table |
+| `job_to_coord(job, *, project, opp_file)` | Project an `expand_matrix` job dict (or form-field dict) down to the `TEST_COORD_FIELDS` keys |
+| `get_or_create_test(session, coord)` | Look up the matching `Test` by `coord_hash`, creating it on first sight |
+| `create_matrix_run(session, *, matrix_id, trigger, github_*)` | Create one `TestMatrixRun` for a matrix submission |
+| `create_test_run(session, *, test_id, matrix_run_id, …)` | Create a queued `TestRun` |
+| `enqueue_job(session, job, *, project, opp_file, matrix_run_id)` | End-to-end: turn one job dict into a get-or-create-`Test` + create-`TestRun` |
+| `capture_system_snapshot()` | Best-effort dict of host facts to write into `TestRun.system_snapshot` |
 
-Run `alembic upgrade head` against the configured `OPP_CI_DATABASE_URL`
-to apply pending migrations.
+---
+
+## Schema changes after phase 1
+
+The phase-1 cutover was applied by wiping and recreating the database,
+not by running a migration. Subsequent schema changes are expected to
+land via Alembic migrations under
+[opp_ci/db/migrations/](../opp_ci/db/migrations/) (config in
+`alembic.ini`), but the current `models.py` does not depend on any
+historical migration revision — it is the source of truth.

@@ -42,6 +42,7 @@ opp_ci/
 ├── compatibility.py    — pass/fail aggregation across version pairs
 ├── notes.py            — formatter for git note payloads
 ├── podman/            — Container images for isolated builds (Podman)
+├── persistence.py     — get-or-create Test + create TestRun helpers
 ├── db/
 │   ├── models.py       — SQLAlchemy models
 │   ├── connection.py   — engine + session factory
@@ -59,9 +60,11 @@ opp_ci/
 
 ## Database schema
 
-`opp_ci/db/models.py` — SQLAlchemy. Migrations live in
-`opp_ci/db/migrations/` (Alembic, config in `alembic.ini`). For a
-field-by-field reference see [data_model.md](data_model.md).
+`opp_ci/db/models.py` — SQLAlchemy. For a field-by-field reference see
+[data_model.md](data_model.md). The four `Test*` entities below were
+introduced by the phase-1 test data model cutover, applied by wiping
+and recreating the database; later schema changes are expected to
+land via Alembic under `opp_ci/db/migrations/`.
 
 | Model | Purpose |
 |---|---|
@@ -69,12 +72,13 @@ field-by-field reference see [data_model.md](data_model.md).
 | **Version** | project FK, opp_env_version, git_ref (branch/tag/SHA), label, `resolved_dependencies` JSON (e.g. `{"omnetpp": "6.1"}`) |
 | **OS** | name, version, arch |
 | **Compiler** | name, version |
-| **TestMatrix** | project FK, JSON config of versions × platforms × tests |
+| **TestMatrix** | project (by name), JSON config of versions × platforms × kinds, optional `opp_file` |
 | **Worker** | name (unique), token, tags JSON, concurrency, status, last_heartbeat, current_job_count |
 | **ApiToken** | token, name, role (readonly/submitter/worker/admin), enabled, created_at |
 | **AutoTestRule** | project FK, rule_type (branch/pr/tag), pattern (glob), matrix FK, enabled |
-| **TestRun** | matrix FK, worker FK, git_ref, version, plus plain `project` / `os` / `os_version` / `arch` / `compiler` / `compiler_version` string columns (no FK to Project / OS / Compiler — denormalised by design, so a run record survives catalog edits). Also: timestamp, status (queued/running/PASS/FAIL/ERROR), trigger (manual/webhook/schedule/remote), `github_*` fields. |
-| **TestResult** | run FK, result_code, stdout/stderr (raw with ANSI), `details` JSON (per-test breakdown from opp_repl). Per-test name/duration live inside `details`, not as columns. |
+| **Test** | Deduped coordinate row: plain `project` / `kind` / `mode` / `os` / `os_version` / `distro` / `distro_version` / `flavor` / `flavor_version` / `arch` / `compiler` / `compiler_version` / `isolation` / `toolchain` / `opp_file` string columns (no FK to Project / OS / Compiler — denormalised by design, so a run record survives catalog edits) keyed by SHA-256 `coord_hash`. Plus three mutable metadata columns: `name`, `expected_result_code`, `expected_result_description`. |
+| **TestMatrixRun** | One row per matrix submission: matrix FK, `trigger` (manual/web/remote/webhook/schedule/rerun), `github_*` linkage fields, `created_at`. |
+| **TestRun** | One attempt at a Test: test FK, optional matrix_run FK, worker FK, `git_ref`, `commit_sha`, `version`, `resolved_deps`, `lifecycle` (queued/running/finished/cancelled/timed_out), timestamps, and — populated iff lifecycle=finished — outcome columns `result_code` (PASS/FAIL/ERROR/SKIPPED), `stdout`/`stderr` (raw with ANSI), free-form `details` JSON. Also `system_snapshot` JSON captured at run start. |
 
 Connection pool and engine factory in `opp_ci/db/connection.py`;
 configured by `OPP_CI_DATABASE_URL`.
@@ -113,27 +117,30 @@ named matrix. The axes are cross-producted:
 - OS × OS version
 - Compiler × compiler version
 - Isolation × toolchain
-- Tests
+- Kinds (test kind — `smoke`, `fingerprint`, …)
 
 Platform axes accept two styles: combined strings (`Ubuntu 24.04`,
 auto-parsed) or structured (`--os Ubuntu,Fedora --os-version 24.04,41`,
 cross-producted).
 
-Each expanded job is inserted as a `TestRun` with status `queued`.
-Workers pick them up via `/api/workers/poll`.
+For each expanded job the scheduler looks up (or creates) the matching
+`Test` via `coord_hash` and inserts a queued `TestRun` parented to one
+`TestMatrixRun` umbrella row. Workers pick the TestRuns up via
+`/api/workers/poll`.
 
 ## Execution flow
 
 ### Single CLI run
 
 ```
-opp_ci run --project fifo --test smoke --skip-install
+opp_ci run --project fifo --kind smoke --skip-install
     │
-    ├── create TestRun record (status=running)
+    ├── get-or-create Test row (by coord_hash)
+    ├── create TestRun (lifecycle=running) pointing at that Test
     ├── executor.install_project()  ←  no-op in direct mode / --skip-install
     ├── executor.run_test()         ←  subprocess, captures stdout + JSON details
-    ├── create TestResult record(s)
-    └── update TestRun (status=PASS/FAIL, duration)
+    └── update TestRun (lifecycle=finished, result_code=PASS/FAIL/…,
+                        stdout, stderr, details, duration)
 ```
 
 ### Matrix run (local)
@@ -142,13 +149,14 @@ opp_ci run --project fifo --test smoke --skip-install
 opp_ci run-matrix --matrix inet-default
     │
     ├── load TestMatrix from DB
-    ├── scheduler.expand_matrix() → list of jobs
+    ├── create TestMatrixRun (trigger=manual)
+    ├── scheduler.expand_matrix() → list of job dicts
     ├── for each unique (project, version, deps): executor.install_project()
     └── for each job:
-          ├── create TestRun
+          ├── get-or-create Test (by coord_hash)
+          ├── create TestRun under the TestMatrixRun
           ├── executor.run_test()
-          ├── create TestResult
-          └── update TestRun status
+          └── update TestRun (lifecycle=finished + outcome columns)
 ```
 
 ### Matrix run (remote / worker pool)
@@ -157,13 +165,17 @@ opp_ci run-matrix --matrix inet-default
 opp_ci --remote run-matrix ...        Workers
     │                                    │
     └── POST /api/runs/matrix            │
+          ├── create TestMatrixRun       │
           └── insert N TestRuns (queued) │
+              + their Test rows on first sight
                                          │
                   ┌──────────────────────┘
                   ▼
-          POST /api/workers/poll  → next queued TestRun
+          POST /api/workers/poll     → next queued TestRun (lifecycle=running)
+          POST /api/workers/snapshot → optional system_snapshot at run start
           executor.run_test()
-          POST /api/workers/result → coordinator updates TestRun + posts GitHub status
+          POST /api/workers/result   → coordinator writes outcome onto the
+                                       same TestRun row + posts GitHub status
 ```
 
 ## Web UI

@@ -55,9 +55,11 @@ opp_env-on-host, Podman, and Podman-with-opp_env. Always returns
 
 The matrix-expansion engine
 ([opp_ci/scheduler.py](../opp_ci/scheduler.py)). Turns a
-[TestMatrix](#testmatrix) config into a list of [TestRun](#testrun) rows
-via cross-product over its [axes](#axis). Inserts the resulting rows
-with status `queued`; workers consume them.
+[TestMatrix](#testmatrix) config into a list of job dicts via
+cross-product over its [axes](#axis). For each job it looks up (or
+creates) the matching [Test](#test) and inserts a queued
+[TestRun](#testrun) parented to a single [TestMatrixRun](#testmatrixrun)
+row; workers consume the TestRuns.
 
 ### REST API client
 
@@ -108,9 +110,34 @@ opp_env understands.
 
 A named JSON configuration describing the cross-product to test.
 Attached to a [Project](#project). Defines which [axes](#axis) to vary
-(`tests`, `modes`, `versions`, `refs`, `deps`, `os`, `compiler`,
+(`kinds`, `modes`, `versions`, `refs`, `deps`, `os`, `compiler`,
 `isolation`, `toolchain`, `features`). Expanded by the
-[scheduler](#scheduler) into [jobs](#job).
+[scheduler](#scheduler) into [jobs](#job) that are persisted as
+[Test](#test) + [TestRun](#testrun) rows under one
+[TestMatrixRun](#testmatrixrun) umbrella.
+
+### Test
+
+A deduped row holding the immutable coordinate of "what is being
+tested" — `project`, `kind`, `mode`, the platform stack
+(`os`/`distro`/`flavor` + their versions, `arch`, `compiler`/version),
+the execution environment (`isolation`, `toolchain`), and `opp_file`.
+A SHA-256 `coord_hash` over that field set is the dedup key: matrix
+expansion looks the row up and inserts a new one only on first sight.
+Three columns (`name`, `expected_result_code`,
+`expected_result_description`) are mutable user-editable metadata and
+sit outside the hash. Every [TestRun](#testrun) points at exactly one
+`Test` via `test_id`.
+
+### TestMatrixRun
+
+One row per submission of a [TestMatrix](#testmatrix) — the umbrella
+that groups the child [TestRuns](#testrun) spawned from a single
+expansion. Carries the [Trigger](#trigger) source and the GitHub
+linkage fields (`github_owner`, `github_repo`, `github_commit_sha`,
+`github_pr_number`, `github_status_url`). The matrix's aggregate
+status is rolled up from its children's `lifecycle` values in app
+code — there is no own lifecycle column.
 
 ### TestRun
 
@@ -118,29 +145,44 @@ For an exhaustive field-by-field reference (CLI flag, REST field,
 defaults, validation, and lifecycle), see
 [single_test_parameters.md](single_test_parameters.md).
 
-One row per queued/in-flight/finished job — the unit of work. Records
-the full coordinate (project, version, test, mode, os, distro, flavor,
-compiler, isolation, toolchain, git_ref, commit_sha, resolved_deps), the
-[TestRunStatus](#testrunstatus), the [Worker](#worker-model) that ran
-it, the [Trigger](#trigger) source, and any GitHub linkage fields
-(`github_owner`, `github_repo`, `github_commit_sha`,
-`github_pr_number`, `github_status_url`). Holds zero or more
-[TestResults](#testresult).
+One row per attempt to run a [Test](#test) — the unit of work. Points
+at its `Test` via `test_id` (so all coordinate fields like `project` /
+`kind` / `os` / `compiler` are read off the joined Test row), and
+optionally at its [TestMatrixRun](#testmatrixrun) via `matrix_run_id`
+(NULL for ad-hoc CLI / REST runs). Carries the per-attempt context
+(`git_ref`, `commit_sha`, `version`, `resolved_deps`), the
+[TestRunLifecycle](#testrunlifecycle), the [Worker](#worker-model) that
+ran it, the timestamps, and — once the lifecycle reaches `finished` —
+the outcome columns (`result_code`, `stdout`, `stderr`, `details`).
+Also carries a `system_snapshot` JSON blob captured at run start.
 
-### TestResult
+### TestRunLifecycle
 
-Per-individual-test outcome attached to a [TestRun](#testrun). Carries
-`result_code` (PASS/FAIL/…), raw `stdout`/`stderr` (with ANSI codes
-preserved), and a `details` JSON blob produced by opp_repl. A
-fingerprint run, for example, can yield 48 TestResult rows under a
-single TestRun.
+State-machine enum on TestRun:
 
-### TestRunStatus
+- `queued` — inserted by scheduler / CLI; awaiting a worker.
+- `running` — claimed by a worker via `/api/workers/poll`.
+- `finished` — worker reported a result; `result_code` is populated.
+- `cancelled` — user-cancelled while still queued. (Running runs are
+  left to finish — the worker can't be interrupted.)
+- `timed_out` — coordinator's watchdog reclaimed the run after the
+  worker stopped heartbeating.
 
-Enum on TestRun: `queued`, `running`, `PASS`, `FAIL`, `ERROR`. `queued`
-and `running` are lifecycle states; the latter three are terminal
-outcomes. `ERROR` distinguishes infrastructure failure from test
+### TestResultCode
+
+Outcome enum stored in `TestRun.result_code` (populated iff
+`lifecycle == finished`) and reused in `Test.expected_result_code`:
+`PASS`, `FAIL`, `ERROR`, `SKIPPED`. `ERROR` distinguishes
+infrastructure failure (build, env, worker crash) from genuine test
 failure.
+
+### effective_status
+
+A view-side property on `TestRun` that collapses the two enums into a
+single label for templates and rollup: returns the `result_code`
+value (`"PASS"` / `"FAIL"` / `"ERROR"` / `"SKIPPED"`) when the run is
+finished, otherwise the `lifecycle` value (`"queued"` / `"running"` /
+`"cancelled"` / `"timed_out"`).
 
 ### Worker (model)
 
@@ -210,7 +252,7 @@ axes:
 | Isolation | none, podman |
 | Toolchain | none, nix |
 | Features | INET feature flags — *reserved; not yet implemented by `expand_matrix()`* |
-| Tests | the [tests](#test) defined in `COMMAND_MAP` — see [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test) for the canonical list |
+| Kinds | the test kinds defined in `COMMAND_MAP` (`smoke`, `fingerprint`, …) — see [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-kind) for the canonical list |
 
 Not every combination is tested — the matrix config defines which axes
 to cross. Matrix expansion happens in
@@ -243,12 +285,19 @@ whether the varying dimensions form a complete cross-product. The
 indicator (`●`/`○`) tells the reader at a glance whether the merged
 group is dense or sparse.
 
-### Test
+### Kind
 
-The test the job runs — the canonical list is in
-[test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test) and
-mirrors `executor.COMMAND_MAP`. Determines what opp_repl is told to do.
-Each test can produce one or many [TestResult](#testresult) rows.
+The kind of test the job runs (`smoke`, `fingerprint`, `statistical`,
+`feature`, `chart`, `speed`, `sanitizer`, `release`, `opp`, `build`,
+`all`) — the canonical list is in
+[test_matrix_dimensions.md](test_matrix_dimensions.md#axis-kind) and
+mirrors `executor.COMMAND_MAP`. Determines what opp_repl is told to
+do. Stored on the [Test](#test) row as the `kind` column; the matrix
+axis is `kinds:`, the CLI flag is `--kind` (or `--kinds`), and the
+REST / Python-client field is `kind`. (Before the phase-1 schema
+cutover this was called `test` everywhere.) Each kind can produce one
+or many results inside the same TestRun: the structured per-test
+breakdown lives in `TestRun.details` (JSON), not in separate rows.
 
 ### Mode
 
@@ -506,16 +555,19 @@ This keeps the DB representation lossless and human-replayable.
 A **Project** has many **Versions** and many **TestMatrices**.
 **AutoTestRules** bind a Project + GitHub event pattern to a
 TestMatrix. The **scheduler** expands a TestMatrix's **axes** into
-**TestRuns** (each a **job**). **Workers** poll the **coordinator** for
-queued TestRuns, run them via the **executor** (under chosen
-**Isolation** × **Toolchain**), and post back **TestResults**. Each
-TestRun carries a **trigger** explaining why it exists (manual /
-remote / webhook / schedule). When a webhook triggered the run, the
-**GitHub integration** posts a **commit status** and a **PR comment**;
-when the batch finishes, the `ci-notes.yml` **workflow** is dispatched
-to deliver a **git note** to the developer. **ApiTokens** and worker
-tokens, gated by **role**, control who can do which of these things.
-The **rollup** then summarises many TestRuns into the page-level grid.
+**jobs**, persisting each one as a queued **TestRun** parented to a
+deduped **Test** row and grouped under one **TestMatrixRun** umbrella.
+**Workers** poll the **coordinator** for queued TestRuns, run them via
+the **executor** (under chosen **Isolation** × **Toolchain**), and
+post the outcome (`result_code`, `stdout`, `stderr`, `details`) back
+onto the same TestRun row. Each TestMatrixRun carries a **trigger**
+explaining why it exists (manual / remote / webhook / schedule) and,
+when GitHub-triggered, the linkage fields the **GitHub integration**
+uses to post a **commit status** and a **PR comment**; when the batch
+finishes, the `ci-notes.yml` **workflow** is dispatched to deliver a
+**git note** to the developer. **ApiTokens** and worker tokens, gated
+by **role**, control who can do which of these things. The **rollup**
+then summarises many TestRuns into the page-level grid.
 
 ---
 
