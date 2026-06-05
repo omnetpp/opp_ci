@@ -1336,6 +1336,150 @@ def list_matrix_runs(project, verdict, since, limit):
         session.close()
 
 
+def _parse_where(where_strs):
+    """Parse repeatable --where field=value clauses into a {field: value} dict.
+
+    Each occurrence is one filter; the same field can repeat to match
+    multiple values (turned into an `in_` filter at query time).
+    """
+    out = {}
+    for clause in where_strs or []:
+        if "=" not in clause:
+            raise click.ClickException(
+                f"--where expects field=value, got {clause!r}"
+            )
+        k, v = clause.split("=", 1)
+        out.setdefault(k.strip(), []).append(v.strip())
+    return out
+
+
+_EXPECTATION_FIELDS = {
+    "project", "kind", "mode", "os", "os_version", "distro",
+    "distro_version", "flavor", "flavor_version", "arch", "compiler",
+    "compiler_version", "isolation", "toolchain", "opp_file",
+}
+
+
+@main.command("set-expectation")
+@click.option("--project", default=None,
+              help="Project to constrain matches to (sugar for --where project=NAME)")
+@click.option("--where", "wheres", multiple=True,
+              help="Field=value filter; repeatable. E.g. --where os=Linux --where kind=smoke")
+@click.option("--expect", "expected",
+              type=click.Choice(["pass", "fail", "error", "none"], case_sensitive=False),
+              required=True,
+              help="Expected outcome; 'none' inserts a retraction row")
+@click.option("--reason", default=None, help="Free-form note (issue link, justification)")
+@click.option("--set-by", "set_by", default="cli", help="Account name recorded with the edit")
+@click.option("--limit", default=200, type=int,
+              help="Safety cap on the number of Tests touched (default: 200)")
+@click.option("--dry-run", is_flag=True,
+              help="Print the Tests that would be touched without inserting any rows")
+def set_expectation_cmd(project, wheres, expected, reason, set_by, limit, dry_run):
+    """Insert ExpectedTestResult rows for matching Tests.
+
+    A single invocation writes one row per matching Test, sharing
+    `reason` / `set_by` / `set_at`. `--expect none` (or any retraction
+    use) writes a row with NULL `expected_result_code`, distinguishable
+    from never-set and itself audited.
+
+    The matcher walks every existing Test row and keeps those whose
+    coordinate fields equal the provided --where (and --project) values.
+    Unknown fields raise.
+    """
+    filters = _parse_where(wheres)
+    if project:
+        filters.setdefault("project", []).append(project)
+
+    bad = sorted(k for k in filters if k not in _EXPECTATION_FIELDS)
+    if bad:
+        raise click.ClickException(
+            f"Unknown --where field(s): {bad!r}. "
+            f"Allowed: {sorted(_EXPECTATION_FIELDS)}"
+        )
+
+    code = None if expected.lower() == "none" else TestResultCode(expected.upper())
+
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        query = select(Test)
+        for field, values in filters.items():
+            col = getattr(Test, field)
+            if len(values) == 1:
+                query = query.where(col == values[0])
+            else:
+                query = query.where(col.in_(values))
+        tests = session.execute(query.limit(limit + 1)).scalars().all()
+        if len(tests) > limit:
+            raise click.ClickException(
+                f"More than {limit} matching Tests; refine the filters or "
+                f"raise --limit."
+            )
+        if not tests:
+            click.echo("No Tests matched the filters.")
+            return
+
+        click.echo(f"{'Would set' if dry_run else 'Setting'} expectation "
+                   f"{'<retract>' if code is None else code.value} for "
+                   f"{len(tests)} Test(s):")
+        for t in tests[:20]:
+            click.echo(f"  #{t.id} {t.project}/{t.kind}/{t.mode or '-'} "
+                       f"{t.distro or t.os or '-'} {t.compiler or '-'}")
+        if len(tests) > 20:
+            click.echo(f"  ... and {len(tests) - 20} more")
+
+        if dry_run:
+            return
+        now = datetime.datetime.utcnow()
+        for t in tests:
+            insert_expectation(
+                session, test_id=t.id,
+                expected_result_code=code,
+                reason=reason,
+                set_by=set_by,
+                set_at=now,
+            )
+        session.commit()
+        click.echo(f"Inserted {len(tests)} ExpectedTestResult row(s).")
+    finally:
+        session.close()
+
+
+@main.command("show-expectations")
+@click.option("--test-id", "test_id", type=int, required=True,
+              help="Test row id")
+@click.option("--limit", default=20, type=int, help="Max history rows")
+def show_expectations(test_id, limit):
+    """List the expectation history of one Test row."""
+    session = SessionLocal()
+    try:
+        test = session.get(Test, test_id)
+        if test is None:
+            click.echo(f"Test #{test_id} not found.")
+            return
+        rows = session.execute(
+            select(ExpectedTestResult)
+            .where(ExpectedTestResult.test_id == test_id)
+            .order_by(ExpectedTestResult.set_at.desc())
+            .limit(limit)
+        ).scalars().all()
+        click.echo(f"Test #{test.id}: {test.project}/{test.kind}/{test.mode or '-'} "
+                   f"{test.distro or test.os or '-'} {test.compiler or '-'}")
+        if not rows:
+            click.echo("  (no expectation ever declared)")
+            return
+        click.echo(f"  {'When':<20} {'Code':<10} {'By':<14} Reason")
+        click.echo("  " + "-" * 80)
+        for r in rows:
+            code = r.expected_result_code.value if r.expected_result_code else "(retract)"
+            when = r.set_at.strftime("%Y-%m-%d %H:%M:%S") if r.set_at else "-"
+            click.echo(f"  {when:<20} {code:<10} {(r.set_by or '-')[:14]:<14} "
+                       f"{r.reason or '-'}")
+    finally:
+        session.close()
+
+
 @main.command("show-matrix-run")
 @click.argument("matrix_run_id", type=int)
 @click.option("--unexpected-only", is_flag=True,

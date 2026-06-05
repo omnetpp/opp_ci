@@ -1143,6 +1143,91 @@ async def get_matrix_run_api(
         session.close()
 
 
+# ── Expectations ───────────────────────────────────────────────────────
+
+
+class ExpectationRequest(BaseModel):
+    expected_result_code: str | None = None  # PASS/FAIL/ERROR/SKIPPED, or null = retract
+    expected_result_description: str | None = None
+    reason: str | None = None
+
+
+def _expectation_to_dict(row):
+    return {
+        "id": row.id,
+        "test_id": row.test_id,
+        "expected_result_code": row.expected_result_code.value if row.expected_result_code else None,
+        "expected_result_description": row.expected_result_description,
+        "reason": row.reason,
+        "set_by": row.set_by,
+        "set_at": row.set_at.isoformat() if row.set_at else None,
+    }
+
+
+@router.post("/tests/{test_id}/expectations")
+async def post_expectation(
+    test_id: int,
+    req: ExpectationRequest,
+    identity: dict = Depends(require_role("submitter")),
+):
+    """Append a new ExpectedTestResult row for `test_id`.
+
+    `expected_result_code: null` records an explicit retraction —
+    distinguishable from never-set and itself audited.
+    """
+    code = None
+    if req.expected_result_code is not None:
+        try:
+            code = TestResultCode(req.expected_result_code)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid expected_result_code: {req.expected_result_code!r}",
+            )
+
+    session = SessionLocal()
+    try:
+        test = session.get(Test, test_id)
+        if test is None:
+            raise HTTPException(status_code=404, detail=f"Test #{test_id} not found")
+        row = insert_expectation(
+            session, test_id=test_id,
+            expected_result_code=code,
+            expected_result_description=req.expected_result_description,
+            reason=req.reason,
+            set_by=identity.get("name"),
+        )
+        session.commit()
+        _logger.info(
+            "Expectation for Test #%d set to %s by %s",
+            test_id, code.value if code else "(retract)", identity.get("name"),
+        )
+        return _expectation_to_dict(row)
+    finally:
+        session.close()
+
+
+@router.get("/tests/{test_id}/expectations")
+async def list_expectations(
+    test_id: int,
+    limit: int = 50,
+    _identity: dict = Depends(require_role("readonly")),
+):
+    """Return the expectation edit log for one Test, newest first."""
+    session = SessionLocal()
+    try:
+        rows = session.execute(
+            select(ExpectedTestResult)
+            .where(ExpectedTestResult.test_id == test_id)
+            .order_by(ExpectedTestResult.set_at.desc(),
+                      ExpectedTestResult.id.desc())
+            .limit(limit)
+        ).scalars().all()
+        return [_expectation_to_dict(r) for r in rows]
+    finally:
+        session.close()
+
+
 # ── Git notes ──────────────────────────────────────────────────────────
 
 @router.get("/notes/{owner}/{repo}")

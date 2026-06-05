@@ -1296,6 +1296,81 @@ def matrix_run_detail(
         session.close()
 
 
+@web_router.post("/tests/{test_id}/expectations", dependencies=[Depends(require_csrf)])
+def web_post_expectation(
+    test_id: int,
+    current_user: User = Depends(require_user("submitter")),
+    expected_result_code: str = Form(default=""),
+    expected_result_description: str = Form(default=""),
+    reason: str = Form(default=""),
+    return_to: str = Form(default=""),
+):
+    """Append an ExpectedTestResult row from the inline editor.
+
+    Empty `expected_result_code` records a retraction (NULL in the
+    column). On success redirects back to `return_to` (typically the
+    matrix-run detail page that posted the form).
+    """
+    code = None
+    if expected_result_code:
+        try:
+            code = TestResultCode(expected_result_code)
+        except ValueError:
+            target = return_to or "/matrix-runs"
+            sep = "&" if "?" in target else "?"
+            return RedirectResponse(
+                url=f"{target}{sep}message=Invalid+result+code&message_type=error",
+                status_code=303,
+            )
+
+    session = SessionLocal()
+    try:
+        test = session.get(Test, test_id)
+        if test is None:
+            return RedirectResponse(url=return_to or "/matrix-runs", status_code=303)
+        insert_expectation(
+            session, test_id=test_id,
+            expected_result_code=code,
+            expected_result_description=expected_result_description or None,
+            reason=reason or None,
+            set_by=current_user.display_name,
+        )
+        session.commit()
+        return RedirectResponse(
+            url=return_to or f"/tests/{test_id}/expectations",
+            status_code=303,
+        )
+    finally:
+        session.close()
+
+
+@web_router.get("/tests/{test_id}/expectations", response_class=HTMLResponse)
+def web_show_expectations(
+    request: Request, test_id: int,
+    current_user: User = Depends(require_user()),
+):
+    """Per-Test expectation history, rendered straight from
+    `expected_test_results`."""
+    session = SessionLocal()
+    try:
+        test = session.get(Test, test_id)
+        if test is None:
+            return HTMLResponse("<h1>Test not found</h1>", status_code=404)
+        rows = session.execute(
+            select(ExpectedTestResult)
+            .where(ExpectedTestResult.test_id == test_id)
+            .order_by(ExpectedTestResult.set_at.desc(),
+                      ExpectedTestResult.id.desc())
+        ).scalars().all()
+        return templates.TemplateResponse(request, "expectations.html", {
+            "test": test,
+            "rows": rows,
+            **_template_globals(request, current_user),
+        })
+    finally:
+        session.close()
+
+
 @web_router.get("/os", response_class=HTMLResponse)
 def os_list(
     request: Request,
