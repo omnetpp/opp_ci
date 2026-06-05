@@ -24,12 +24,12 @@ read-only scripts.
 
 ```python
 # Single run
-run = ci.submit_run(project="inet", test="smoke", git_ref="topic/my-feature")
+run = ci.submit_run(project="inet", kind="smoke", git_ref="topic/my-feature")
 print(run)  # {"id": 42, "status": "queued"}
 
 # Fully-specified run on a podman/host-toolchain worker
 ci.submit_run(
-    project="inet-4.5", test="fingerprint",
+    project="inet-4.5", kind="fingerprint",
     mode="release", git_ref="master",
     os="Ubuntu", os_version="26.04", arch="amd64",
     compiler="clang", compiler_version="22",
@@ -37,17 +37,29 @@ ci.submit_run(
     force=True,
 )
 
-# All jobs in a named matrix
+# All jobs in a named matrix — returns the matrix_run_id and the list
+# of run_ids spawned under it.
 ci.submit_matrix(matrix_name="inet-full")
 ```
+
+The `kind` parameter is what used to be called `test` before the
+phase-1 schema cutover. It picks the opp_repl entry point via
+`COMMAND_MAP` — see
+[test_matrix_dimensions.md → Axis: kind](test_matrix_dimensions.md#axis-kind)
+for the canonical list.
 
 ## Querying
 
 ```python
 ci.get_run(42)
-ci.list_runs(project="inet", status="FAIL")
+ci.list_runs(project="inet", kind="fingerprint", status="FAIL")
 ci.list_workers()
 ```
+
+`list_runs(status=…)` accepts either a `TestRunLifecycle` value
+(`"queued"` / `"running"` / `"finished"` / `"cancelled"` /
+`"timed_out"`) or a `TestResultCode` (`"PASS"` / `"FAIL"` / `"ERROR"`
+/ `"SKIPPED"`).
 
 ## Admin operations (admin token required)
 
@@ -65,7 +77,7 @@ locally:
 export OPP_CI_COORDINATOR_URL=https://ci.omnetpp.org
 export OPP_CI_API_TOKEN=<submitter-token>
 
-opp_ci --remote run --project inet-4.5 --test smoke,fingerprint --ref master
+opp_ci --remote run --project inet-4.5 --kind smoke,fingerprint --ref master
 opp_ci --remote list-runs --project inet --status FAIL
 ```
 

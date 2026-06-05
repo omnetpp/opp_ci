@@ -17,7 +17,7 @@ source setenv
 pip install -e .
 opp_ci init-db
 opp_ci create-matrix --name fifo-default --project fifo \
-  --builds "release,debug" --tests "smoke,fingerprint"
+  --builds "release,debug" --kinds "smoke,fingerprint"
 opp_ci run-matrix --matrix fifo-default --skip-install
 opp_ci serve
 ```

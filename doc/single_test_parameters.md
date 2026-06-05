@@ -2,11 +2,15 @@
 
 A *single test* in opp_ci is one [TestRun](concepts.md#testrun) row —
 one queued/running/finished job, the smallest unit of work the system
-schedules. Whether it was created by `opp_ci run`, the REST API,
-matrix expansion, or a webhook, the row carries the same set of
-fields. This guide documents every field: what it is, how it is set,
-what controls it, what values are legal, and how it interacts with
-the other fields.
+schedules. The coordinate the run targets (`project`, `kind`, `mode`,
+platform stack, …) actually lives on the joined
+[Test](concepts.md#test) row, deduped by `coord_hash`; the per-attempt
+fields (`git_ref`, `commit_sha`, `version`, `resolved_deps`,
+lifecycle, outcome) live on the `TestRun`. Whether the row was
+created by `opp_ci run`, the REST API, matrix expansion, or a
+webhook, the parameter set is the same. This guide documents every
+field: what it is, how it is set, what controls it, what values are
+legal, and how it interacts with the other fields.
 
 For the matrix-level (cross-product) view of the same dimensions, see
 [test_matrix_dimensions.md](test_matrix_dimensions.md). For the
@@ -17,33 +21,43 @@ and [architecture.md](architecture.md#database-schema).
 
 ## Parameters at a glance
 
-| Parameter | CLI flag | TestRun column | Default | Group |
-|---|---|---|---|---|
-| [`project`](#project) | `--project` *(required)* | `project` | — | Required |
-| [`test`](#test) | `--test` *(required)* | `test` | — | Required |
-| [`mode`](#mode) | `--mode` | `mode` | `None` | Identity |
-| [`git_ref`](#git_ref) | `--ref` | `git_ref` | `None` | Identity |
-| [`version`](#version) | *(matrix-only)* | `version` | `None` | Identity |
-| [`os`](#os-distro-and-flavor) | `--os` | `os` | `None` | Platform |
-| [`os_version`](#os-distro-and-flavor) | `--os-version` | `os_version` | `None` | Platform |
-| [`distro`](#os-distro-and-flavor) | `--distro` | `distro` | `None` | Platform |
-| [`distro_version`](#os-distro-and-flavor) | `--distro-version` | `distro_version` | `None` | Platform |
-| [`flavor`](#os-distro-and-flavor) | `--flavor` | `flavor` | `None` | Platform |
-| [`flavor_version`](#os-distro-and-flavor) | `--flavor-version` | `flavor_version` | `None` | Platform |
-| [`arch`](#arch) | `--arch` | `arch` | `None` | Platform |
-| [`compiler`](#compiler-and-compiler_version) | `--compiler` | `compiler` | `None` | Platform |
-| [`compiler_version`](#compiler-and-compiler_version) | `--compiler-version` | `compiler_version` | `None` | Platform |
-| [`isolation`](#isolation) | `--isolation` | `isolation` | `none` | Execution |
-| [`toolchain`](#toolchain) | `--toolchain` | `toolchain` | `none` | Execution |
-| [`pin`](#pin-cli--resolved_deps-column) | `--pin` *(repeatable)* | `resolved_deps` | `None` | Dependencies |
-| [`opp_file`](#opp_file) | *(matrix-only)* | `opp_file` | `None` | Descriptor |
-| [`force`](#force) | `--force` | *(not stored)* | `false` | Behavior |
-| [`skip_install`](#skip_install) | `--skip-install` | *(not stored)* | `false` | Behavior |
+The "Stored on" column shows where the value lands: the deduped
+[Test](concepts.md#test) row (the coordinate) vs. the
+[TestRun](concepts.md#testrun) row (the per-attempt context).
 
-Server-set fields not listed above — `platform_desc`, `status`,
-`trigger`, `worker_id`, `matrix_id`, `started_at`, `finished_at`,
-`duration_seconds`, `commit_sha`, and the `github_*` columns — are
-covered under [Lifecycle fields](#lifecycle-fields-system-set) and
+| Parameter | CLI flag | Stored on | Column | Default | Group |
+|---|---|---|---|---|---|
+| [`project`](#project) | `--project` *(required)* | `Test` | `project` | — | Required |
+| [`kind`](#kind) | `--kind` *(required)* | `Test` | `kind` | — | Required |
+| [`mode`](#mode) | `--mode` | `Test` | `mode` | `None` | Identity |
+| [`git_ref`](#git_ref) | `--ref` | `TestRun` | `git_ref` | `None` | Identity |
+| [`version`](#version) | *(matrix-only)* | `TestRun` | `version` | `None` | Identity |
+| [`os`](#os-distro-and-flavor) | `--os` | `Test` | `os` | `None` | Platform |
+| [`os_version`](#os-distro-and-flavor) | `--os-version` | `Test` | `os_version` | `None` | Platform |
+| [`distro`](#os-distro-and-flavor) | `--distro` | `Test` | `distro` | `None` | Platform |
+| [`distro_version`](#os-distro-and-flavor) | `--distro-version` | `Test` | `distro_version` | `None` | Platform |
+| [`flavor`](#os-distro-and-flavor) | `--flavor` | `Test` | `flavor` | `None` | Platform |
+| [`flavor_version`](#os-distro-and-flavor) | `--flavor-version` | `Test` | `flavor_version` | `None` | Platform |
+| [`arch`](#arch) | `--arch` | `Test` | `arch` | `None` | Platform |
+| [`compiler`](#compiler-and-compiler_version) | `--compiler` | `Test` | `compiler` | `None` | Platform |
+| [`compiler_version`](#compiler-and-compiler_version) | `--compiler-version` | `Test` | `compiler_version` | `None` | Platform |
+| [`isolation`](#isolation) | `--isolation` | `Test` | `isolation` | `none` | Execution |
+| [`toolchain`](#toolchain) | `--toolchain` | `Test` | `toolchain` | `none` | Execution |
+| [`pin`](#pin-cli--resolved_deps-column) | `--pin` *(repeatable)* | `TestRun` | `resolved_deps` | `None` | Dependencies |
+| [`opp_file`](#opp_file) | *(matrix-only)* | `Test` | `opp_file` | `None` | Descriptor |
+| [`skip_install`](#skip_install) | `--skip-install` | — | *(not stored)* | `false` | Behavior |
+
+Templates and the rollup read every coordinate field straight off the
+`TestRun` (`run.project`, `run.kind`, `run.os`, …) via view-side
+proxy properties that delegate to the joined Test, so day-to-day
+queries don't have to spell the join out.
+
+Server-set fields not listed above — `lifecycle`, `result_code`,
+`stdout`, `stderr`, `details`, `system_snapshot`, `worker_id`,
+`started_at`, `finished_at`, `duration_seconds`, `commit_sha`
+(on `TestRun`), `trigger`, the `github_*` columns (on the parent
+`TestMatrixRun`) — are covered under
+[Lifecycle fields](#lifecycle-fields-system-set) and
 [GitHub linkage](#github-linkage-webhook-only).
 
 ---
@@ -55,8 +69,8 @@ fits your workflow:
 
 | Surface | Entry point | Trigger value |
 |---|---|---|
-| CLI (local) | `opp_ci run --project … --test …` | `manual` |
-| CLI (remote) | `opp_ci --remote run --project … --test …` | `remote` |
+| CLI (local) | `opp_ci run --project … --kind …` | `manual` |
+| CLI (remote) | `opp_ci --remote run --project … --kind …` | `remote` |
 | REST | `POST /api/runs` (or [OppCiClient.submit_run()](../opp_ci/client.py)) | `remote` |
 
 Matrix expansion produces single tests too — one per cell of the
@@ -79,31 +93,34 @@ project.
 |---|---|
 | CLI flag | `--project` (required) |
 | REST field | `project` (required) |
-| TestRun column | `project` |
+| Test column | `project` |
 | Default | none |
 
 The project must exist in the database. For projects not in the
 opp_env catalog, register one with `opp_ci add-project` (see
 [cli_reference.md](cli_reference.md#projects-and-versions)).
 
-### `test`
+### `kind`
 
-What test to run. The executor uses this to dispatch into
-opp_repl via [COMMAND_MAP](../opp_ci/executor.py).
+What kind of test to run. The executor uses this to dispatch into
+opp_repl via [COMMAND_MAP](../opp_ci/executor.py). Renamed from the
+legacy `test` field in the phase-1 schema cutover; matrix YAML axis
+`kinds:`, CLI flag `--kind` / `--kinds`, REST / SDK field `kind`,
+column `Test.kind`.
 
 | Aspect | Value |
 |---|---|
-| CLI flag | `--test` (required, comma-separated for multiple) |
-| REST field | `test` (required) |
-| TestRun column | `test` |
+| CLI flag | `--kind` (required, comma-separated for multiple) |
+| REST field | `kind` (required) |
+| Test column | `kind` |
 | Default | none |
 
 Recognized values: `smoke`, `build`, `fingerprint`, `statistical`,
 `feature`, `chart`, `speed`, `sanitizer`, `release`, `opp`, `all`.
-See [Axis: test](test_matrix_dimensions.md#axis-test) for
-what each entry point does.
+See [Axis: kind](test_matrix_dimensions.md#axis-kind) for what each
+entry point does.
 
-Note: the CLI accepts a comma-separated list (`--test smoke,fingerprint`)
+Note: the CLI accepts a comma-separated list (`--kind smoke,fingerprint`)
 and creates one TestRun per value, sharing the install step. The REST
 API accepts one value per call.
 
@@ -111,13 +128,18 @@ API accepts one value per call.
 
 ## Identity parameters
 
-These together determine whether the run is considered a duplicate of
-an earlier one — `find_existing_run()` in
-[executor.py](../opp_ci/executor.py) keys on the full tuple.
-Use `--force` to bypass the duplicate check. The full tuple is
-`(project, version, test, mode, git_ref, os, os_version, distro,
-distro_version, flavor, flavor_version, arch,
-compiler, compiler_version, isolation, toolchain)`.
+These together define the `Test` row's identity. Matrix expansion and
+the REST submitter look the row up by SHA-256 `coord_hash` over the
+closed field set
+`(project, kind, mode, os, os_version, distro, distro_version,
+flavor, flavor_version, arch, compiler, compiler_version,
+isolation, toolchain, opp_file)`, creating a new `Test` row only on
+first sight. `git_ref` / `version` / `resolved_deps` are *not* part of
+the hash — they live on the `TestRun` as per-attempt context, so two
+runs of the same coordinate against different refs share one `Test`.
+There is no submission-time dedup against existing TestRuns in phase 1:
+every submission inserts a new TestRun (the legacy `--force`/
+`find_existing_run()` behaviour was removed).
 
 ### `mode`
 
@@ -127,7 +149,7 @@ Build mode. Two canonical values:
 |---|---|
 | CLI flag | `--mode {debug\|release}` |
 | REST field | `mode` |
-| TestRun column | `mode` |
+| Test column | `mode` |
 | Default | `None` (executor picks; usually `release`) |
 
 Passed through to opp_repl as `build_mode`. `debug` enables debug
@@ -212,7 +234,7 @@ CLI:
 |---|---|
 | CLI flags | `--os`, `--os-version`, `--distro`, `--distro-version`, `--flavor`, `--flavor-version` |
 | REST fields | `os`, `os_version`, `distro`, `distro_version`, `flavor`, `flavor_version` |
-| TestRun columns | (same names) |
+| Test columns | (same names) |
 | Default | `None` at every level |
 
 Combined shorthand on `--distro` / `--flavor` works:
@@ -242,7 +264,7 @@ CPU architecture. Free-form string; common values are `amd64` and
 |---|---|
 | CLI flag | `--arch` |
 | REST field | `arch` |
-| TestRun column | `arch` |
+| Test column | `arch` |
 | Default | `None` (no constraint) |
 
 When omitted, the run is unconstrained on architecture — any worker
@@ -258,7 +280,7 @@ The C++ compiler.
 |---|---|
 | CLI flags | `--compiler`, `--compiler-version` |
 | REST fields | `compiler`, `compiler_version` |
-| TestRun columns | `compiler`, `compiler_version` |
+| Test columns | `compiler`, `compiler_version` |
 | Default | `None` |
 
 Under `isolation=podman`, both are required and form part of the
@@ -280,16 +302,16 @@ will fail at install/run time rather than at submit time.
 ### `platform_desc` (derived)
 
 A human-readable summary, e.g. `Ubuntu 24.04 / amd64 / clang-22`,
-built by
-[_build_platform_desc()](../opp_ci/scheduler.py) from the four
-platform columns. Not settable directly; recomputed on every
-submission.
+built by [platforms.build_platform_desc()](../opp_ci/platforms.py)
+from the platform fields. Not stored as a column on the new `Test` /
+`TestRun` schema — recomputed at render time so renaming a row's
+platform metadata can't drift the cached label.
 
 | Aspect | Value |
 |---|---|
 | CLI flag | *(none — derived)* |
 | REST field | *(none — server-computed)* |
-| TestRun column | `platform_desc` |
+| Stored on | *(not stored — computed from `Test` columns at render time)* |
 
 ---
 
@@ -303,7 +325,7 @@ How the job's filesystem and OS are isolated from the host.
 |---|---|
 | CLI flag | `--isolation {none\|podman}` |
 | REST field | `isolation` |
-| TestRun column | `isolation` |
+| Test column | `isolation` |
 | Default | `none` (CLI); `None` → treated as `none` (REST) |
 
 - `none` — direct subprocess on the worker, host packages.
@@ -319,7 +341,7 @@ Where the C++ toolchain comes from.
 |---|---|
 | CLI flag | `--toolchain {none\|nix}` |
 | REST field | `toolchain` |
-| TestRun column | `toolchain` |
+| Test column | `toolchain` |
 | Default | `none` (CLI); `None` → `none` (REST) |
 
 - `none` — whatever compiler is installed (on the host or inside the
@@ -352,7 +374,7 @@ stores the result as a JSON map on the TestRun.
 Example:
 
 ```bash
-opp_ci run --project inet-4.5 --test smoke \
+opp_ci run --project inet-4.5 --kind smoke \
            --pin omnetpp=6.1 --pin some-lib=1.2
 ```
 
@@ -380,7 +402,7 @@ Used by the executor to locate the source tree, set
 |---|---|
 | CLI flag | *(not exposed on `opp_ci run`)* |
 | REST field | *(not exposed on `/api/runs`)* |
-| TestRun column | `opp_file` |
+| Test column | `opp_file` |
 | Default | `None` |
 
 Set today only via the matrix (the matrix's `opp_file` field is
@@ -394,24 +416,9 @@ order.
 ## Behavior controls
 
 These do not appear on the TestRun row — they only affect submission
-behavior.
-
-### `force`
-
-Bypass the duplicate-run check.
-
-| Aspect | Value |
-|---|---|
-| CLI flag | `--force` |
-| REST field | `force` (default `false`) |
-
-Without `--force`, the submitter asks
-[find_existing_run()](../opp_ci/executor.py) whether a run with
-the same `(project, version, test, mode, git_ref, os, os_version,
-arch, compiler, compiler_version, isolation, toolchain)` already
-exists. If it does, the new submission is skipped (CLI prints a
-message; REST returns `{"skipped": true}` with the existing run's
-ID).
+behavior. (There is no submission-time duplicate check in phase 1:
+every submission inserts a new `TestRun`, so the legacy `--force`
+flag and the `find_existing_run()` helper are gone.)
 
 ### `skip_install`
 
@@ -435,40 +442,70 @@ TestRun progresses. They are not user inputs but they appear on every
 row, so they round out the picture of "everything attached to a
 single test."
 
-### `status`
+### `lifecycle`
 
-Lifecycle state: `queued` → `running` → terminal
-(`PASS` / `FAIL` / `ERROR`). Enum in
-[TestRunStatus](../opp_ci/db/models.py). `ERROR` distinguishes
-infrastructure failure (executor crash, install failure) from
-genuine test failure.
+State machine on `TestRun.lifecycle` — `queued` → `running` →
+`finished`, with `cancelled` and `timed_out` as alternative terminals.
+See [TestRunLifecycle](concepts.md#testrunlifecycle). Cancellation
+applies only to queued runs; once the lifecycle is `running` the
+worker can't be interrupted and the run finishes normally.
+
+### outcome columns: `result_code` / `stdout` / `stderr` / `details`
+
+Populated by the worker iff `lifecycle == finished`. `result_code`
+is the [TestResultCode](concepts.md#testresultcode) enum (`PASS` /
+`FAIL` / `ERROR` / `SKIPPED`); `stdout` / `stderr` are raw with ANSI
+codes preserved; `details` is opp_repl's free-form per-test breakdown
+(`to_dict()`), populated only on the direct-import executor path.
+There is no separate `TestResult` table — these columns live directly
+on the same `TestRun` row.
+
+### `effective_status` (derived)
+
+The view-side property templates use as a single status label:
+returns the `result_code` value when the run is finished, otherwise
+the `lifecycle` value. Not stored.
+
+### `system_snapshot`
+
+Optional JSON blob of best-effort host facts captured by the worker
+at claim time and posted via `POST /api/workers/snapshot`. On
+PostgreSQL the column is TOASTed out-of-line and lazy-loaded, so it
+costs nothing on queries that don't touch it.
 
 ### `trigger`
 
-Why the run exists. Set at submission time, never changes:
+Why the run exists. Set at submission time and read off the parent
+`TestMatrixRun.trigger` via a proxy property (so single-Test runs
+have `trigger == None`):
 
 | Value | Source |
 |---|---|
 | `manual` | Local `opp_ci run` / `run-matrix`. |
-| `remote` | REST submission (CLI `--remote`, `OppCiClient`, web UI). |
+| `web` | Web UI submission. |
+| `remote` | REST submission (CLI `--remote`, `OppCiClient`). |
 | `webhook` | Created by [github/webhook.py](../opp_ci/github/webhook.py). |
 | `schedule` | Reserved for the periodic scheduler. |
+| `rerun` | Created by the rerun helpers. |
 
 ### `worker_id`
 
 Foreign key to [Worker](concepts.md#worker-model). `NULL` until a
-worker picks up the queued job; set when the worker posts its first
-status update for the run.
+worker picks up the queued job; set when the worker claims the run
+via `/api/workers/poll`.
 
-### `matrix_id`
+### `matrix_run_id`
 
-Foreign key to the [TestMatrix](concepts.md#testmatrix) the run was
-expanded from. `NULL` for ad-hoc single-test submissions.
+Foreign key to the [TestMatrixRun](concepts.md#testmatrixrun) that
+expanded this run. `NULL` for ad-hoc single-test submissions. The
+parent `TestMatrixRun` carries the matrix FK (`run.matrix_id` is a
+proxy property delegating through it).
 
 ### `started_at` / `finished_at` / `duration_seconds`
 
-UTC timestamps and wall-clock duration. Written by the worker (or the
-local CLI in direct mode) as the run transitions through states.
+UTC timestamps and wall-clock duration. `started_at` is set at claim
+time by `/api/workers/poll`; `finished_at` and `duration_seconds` are
+set on `/api/workers/result`.
 
 ### `commit_sha`
 
@@ -480,21 +517,24 @@ worker reports results, regardless of pass/fail. Used by the
 
 ## GitHub linkage (webhook-only)
 
-These columns are populated only when the run was created by the
-[webhook receiver](concepts.md#webhook-receiver). For
-manual/remote runs they remain `NULL`.
+These columns are populated only when the parent matrix submission
+came from the [webhook receiver](concepts.md#webhook-receiver). They
+live on the parent `TestMatrixRun`, not on the `TestRun` itself — for
+manual / remote runs (and for any TestRun whose `matrix_run_id` is
+NULL) they read back as `None`.
 
-| Column | Meaning |
-|---|---|
-| `github_owner` | GitHub repository owner. |
-| `github_repo` | GitHub repository name. |
-| `github_commit_sha` | Head SHA of the triggering event. |
-| `github_pr_number` | PR number, when the trigger was a `pull_request` event. |
-| `github_status_url` | The `statuses_url` to post commit status updates to. |
+| Column (on `TestMatrixRun`) | TestRun proxy property | Meaning |
+|---|---|---|
+| `github_owner` | `run.github_owner` | GitHub repository owner. |
+| `github_repo` | `run.github_repo` | GitHub repository name. |
+| `github_commit_sha` | `run.github_commit_sha` | Head SHA of the triggering event. |
+| `github_pr_number` | `run.github_pr_number` | PR number, when the trigger was a `pull_request` event. |
+| `github_status_url` | *(no proxy — read off matrix_run)* | The `statuses_url` to post commit-status updates to. |
 
-The worker uses these to post commit statuses, PR comments, and git
-notes after the run finishes. They are the only path by which a
-single-test row knows it came from a GitHub event.
+The status updater uses these to post commit statuses, PR comments,
+and git notes after the run (or the whole matrix run) finishes. They
+are the only path by which a single TestRun knows it came from a
+GitHub event.
 
 ---
 
@@ -503,7 +543,7 @@ single-test row knows it came from a GitHub event.
 | Field | Required for `opp_ci run` | Required for `POST /api/runs` | Required under `isolation=podman` |
 |---|---|---|---|
 | `project` | yes | yes | yes |
-| `test` | yes | yes | yes |
+| `kind` | yes | yes | yes |
 | `mode` | no | no | no |
 | `git_ref` | no | no | no |
 | `os` | no | no | **yes** |
@@ -514,7 +554,6 @@ single-test row knows it came from a GitHub event.
 | `isolation` | no (defaults `none`) | no | yes (to select `podman`) |
 | `toolchain` | no (defaults `none`) | no | no |
 | `pin` | no | n/a | no |
-| `force` | no | no | no |
 | `skip_install` | no | n/a | no |
 
 ---
@@ -526,7 +565,7 @@ A single test exercising every settable parameter:
 ```bash
 opp_ci run \
     --project inet-4.5 \
-    --test fingerprint \
+    --kind fingerprint \
     --mode release \
     --ref topic/my-feature \
     --os Ubuntu --os-version 26.04 \
@@ -537,26 +576,32 @@ opp_ci run \
     --skip-install
 ```
 
-Produces one TestRun row with:
+Produces one `TestRun` row pointing at one `Test` row:
 
 ```
-project          inet-4.5
-test             fingerprint
-mode             release
-git_ref          topic/my-feature
-os               Ubuntu
-os_version       26.04
-arch             amd64
-compiler         clang
-compiler_version 22
-isolation        podman
-toolchain        none
-platform_desc    Ubuntu 26.04 / amd64 / clang-22
-resolved_deps    {"omnetpp": "6.1"}
-trigger          manual
-status           running → PASS / FAIL / ERROR
-worker_id        (assigned)
-commit_sha       (resolved from topic/my-feature)
+Test (looked up / created via coord_hash):
+    project          inet-4.5
+    kind             fingerprint
+    mode             release
+    os               Ubuntu
+    os_version       26.04
+    arch             amd64
+    compiler         clang
+    compiler_version 22
+    isolation        podman
+    toolchain        none
+
+TestRun (one row per attempt):
+    test_id          → above Test row
+    matrix_run_id    NULL (ad-hoc submission)
+    git_ref          topic/my-feature
+    commit_sha       (resolved from topic/my-feature by the worker)
+    resolved_deps    {"omnetpp": "6.1"}
+    lifecycle        queued → running → finished
+    result_code      (on finish) PASS / FAIL / ERROR / SKIPPED
+    stdout, stderr, details   (on finish) populated from opp_repl
+    system_snapshot  (optional) host facts captured at claim time
+    worker_id        (assigned)
 ```
 
 The equivalent REST submission:
@@ -567,13 +612,12 @@ from opp_ci.client import OppCiClient
 ci = OppCiClient(url="https://ci.omnetpp.org/api", token="…")
 ci.submit_run(
     project="inet-4.5",
-    test="fingerprint",
+    kind="fingerprint",
     mode="release",
     git_ref="topic/my-feature",
     os="Ubuntu", os_version="26.04", arch="amd64",
     compiler="clang", compiler_version="22",
     isolation="podman", toolchain="none",
-    force=False,
 )
 # `--pin` is currently CLI-only (resolves dependencies locally before
 # submission); pass already-resolved pins via the matrix path instead.

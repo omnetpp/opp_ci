@@ -2,9 +2,14 @@
 
 A test matrix in opp_ci is a named cross-product over a set of
 *axes* — independent dimensions whose values are multiplied together
-to produce one [TestRun](concepts.md#testrun) per combination. Matrix
-expansion happens in
-[scheduler.expand_matrix()](../opp_ci/scheduler.py).
+to produce one [TestRun](concepts.md#testrun) per combination, all
+grouped under one [TestMatrixRun](concepts.md#testmatrixrun) row.
+Matrix expansion happens in
+[scheduler.expand_matrix()](../opp_ci/scheduler.py); persistence
+goes through `enqueue_job()` in
+[opp_ci/persistence.py](../opp_ci/persistence.py), which looks up (or
+creates) the matching [Test](concepts.md#test) by `coord_hash` and
+inserts the queued `TestRun`.
 
 This guide walks through every axis: what it controls, the JSON config
 syntax, the matching `opp_ci create-matrix` CLI flag, the defaults, and
@@ -24,7 +29,7 @@ value (typically `None` or a hard-coded default).
 
 ```json
 {
-  "tests": ["smoke", "fingerprint"],
+  "kinds": ["smoke", "fingerprint"],
   "modes": ["release", "debug"],
   "versions": ["inet-4.5", "inet-4.4"],
   "refs": ["master", "topic/my-feature"],
@@ -156,17 +161,19 @@ toolchains, the ref is fed straight to git.
 
 ---
 
-## Axis: test
+## Axis: kind
 
 | Aspect | Value |
 |---|---|
-| JSON key | `tests` |
-| CLI flag | `--tests` (required) |
+| JSON key | `kinds` |
+| CLI flag | `--kinds` (required) |
 | Default | `["smoke"]` if the JSON key is absent |
 | Cross-product | yes |
 
-What test each job runs. Recorded on the `TestRun` as
-`test`; the executor uses it to pick the opp_repl entry point via
+What kind of test each job runs. Recorded on the deduped
+[Test](concepts.md#test) row as `kind` (renamed from the legacy
+`test` column in the phase-1 schema cutover); the executor uses it to
+pick the opp_repl entry point via
 [COMMAND_MAP](../opp_ci/executor.py).
 
 | Value | What it runs | opp_repl entry point |
@@ -181,13 +188,15 @@ What test each job runs. Recorded on the `TestRun` as
 | `sanitizer` | ASan/UBSan/TSan runs. | `opp_run_sanitizer_tests` |
 | `release` | Pre-release sanity bundle. | `opp_run_release_tests` |
 | `opp` | OMNeT++ internal regression tests. | `opp_run_opp_tests` |
-| `all` | Run every applicable test type in sequence. | `opp_run_all_tests` |
+| `all` | Run every applicable kind in sequence. | `opp_run_all_tests` |
 
-A single `TestRun` may produce many `TestResult` rows — a fingerprint
-run, for example, can yield 48 results under one TestRun. See
-[TestResult](concepts.md#testresult).
+A single `TestRun` can produce many sub-results — a fingerprint run,
+for example, can yield 48 sub-results — but they are written into the
+same `TestRun.details` JSON column on the same row, not into a
+separate `TestResult` table. The single-string verdict on the row is
+[`TestRun.result_code`](concepts.md#testresultcode).
 
-Some test types have hardware or environment requirements (`speed`
+Some kinds have hardware or environment requirements (`speed`
 benefits from physical perf counters; `sanitizer` needs a compatible
 toolchain). These are enforced via
 [capability tags](concepts.md#capability-tag) on the worker, not by
@@ -209,11 +218,10 @@ Build mode for the C++ compilation. Typical values are `release` and
 value is passed through to opp_repl's `build_mode` argument and is
 recorded on the `TestRun` as `mode`.
 
-Build mode is orthogonal to [Test](#axis-test). For
-example, `tests: ["fingerprint"], modes: ["release", "debug"]`
-produces two fingerprint runs — one against a release build, one
-against a debug build — and is the standard way to catch
-mode-dependent regressions.
+Build mode is orthogonal to [kind](#axis-kind). For example,
+`kinds: ["fingerprint"], modes: ["release", "debug"]` produces two
+fingerprint runs — one against a release build, one against a debug
+build — and is the standard way to catch mode-dependent regressions.
 
 ---
 
@@ -331,9 +339,9 @@ container image: `opp_ci image build` produces images tagged
 | Cross-product | yes |
 
 CPU architecture of the host kernel (e.g. `amd64`, `aarch64`). Stored
-on the `TestRun.arch` column and folded into `platform_desc`. See
-[single_test_parameters.md](single_test_parameters.md#arch) for the
-single-run reference.
+on the `Test.arch` column and folded into `platform_desc` at render
+time. See [single_test_parameters.md](single_test_parameters.md#arch)
+for the single-run reference.
 
 ### Worker dispatch
 
@@ -543,23 +551,25 @@ Version's stored map (or to live resolution via
 Listed in [concepts.md](concepts.md#test-matrix-concepts) as a
 standard axis, but currently treated as a passthrough — the scheduler
 does not cross-product it. INET-style feature flags are exercised via
-the `feature` [test](#axis-test) instead, which opp_repl
+the `feature` [kind](#axis-kind) instead, which opp_repl
 expands internally. Reserved for future per-feature matrix
 control.
 
 ---
 
-## Implicit dimensions on every TestRun
+## Implicit dimensions on every job
 
-A few fields appear on the resulting `TestRun` rows even though no
-axis names them, because they are derived from the others:
+A few fields land on the resulting `Test` / `TestRun` / `TestMatrixRun`
+rows even though no axis names them, because they are derived from
+the others:
 
-| Field | Source |
-|---|---|
-| `platform_desc` | `"<os> <os_version> / <compiler>-<compiler_version>"` — built by [_build_platform_desc()](../opp_ci/scheduler.py). |
-| `commit_sha` | Filled in at worker time once `git_ref` resolves to a concrete SHA. |
-| `resolved_deps` | Either the `deps` axis pin or, if absent, the Version's stored `resolved_dependencies`. |
-| `trigger` | Set by the caller — `manual`, `remote`, `webhook`, or `schedule`. Not part of the matrix. |
+| Field | Where it lives | Source |
+|---|---|---|
+| `platform_desc` | *(not stored)* | `"<os> <os_version> / <compiler>-<compiler_version>"` — built by [platforms.build_platform_desc()](../opp_ci/platforms.py) at render time. |
+| `commit_sha` | `TestRun.commit_sha` | Filled in at worker time once `git_ref` resolves to a concrete SHA. |
+| `resolved_deps` | `TestRun.resolved_deps` | Either the `deps` axis pin or, if absent, the Version's stored `resolved_dependencies`. |
+| `coord_hash` | `Test.coord_hash` | SHA-256 over the closed coordinate field list — the dedup key matrix expansion looks up before inserting a new `Test` row. |
+| `trigger` | `TestMatrixRun.trigger` | Set by the caller — `manual`, `web`, `remote`, `webhook`, `schedule`, or `rerun`. Not part of the matrix. |
 
 These show up in the [rollup](concepts.md#rollup) as either *primary*
 or *extra* dimensions; see
@@ -575,7 +585,7 @@ mental model:
 ```
 jobs = |versions|
      × |refs|              (or len(ref_range))
-     × |tests|
+     × |kinds|
      × |modes|
      × |platform_cells|    (union over the os/distro/flavor levels)
      × |compiler| (× |compiler_version| in structured style)
@@ -589,7 +599,7 @@ product) — `os: [Linux, Windows]` plus `distro: [Ubuntu]` contributes
 3 cells, not 4.
 
 It is easy to get this very large by accident. Defining
-`versions: 4`, `refs: 10` (via `ref_range`), `tests: 3`,
+`versions: 4`, `refs: 10` (via `ref_range`), `kinds: 3`,
 `modes: 2`, `distro: 2`, `compiler: 2`, `isolation: 2`, `toolchain: 2`
 produces 3 840 jobs from a config that *looks* small. Cross-products
 are pure multiplication — there is no implicit filter to discard
@@ -598,8 +608,8 @@ are pure multiplication — there is no implicit filter to discard
 Strategies for keeping the matrix tractable:
 
 1. **Split into several matrices.** Use one for fast PR feedback
-   (smoke + fingerprint on the reference platform) and a separate
-   nightly one for the broad cross-product.
+   (`kinds: [smoke, fingerprint]` on the reference platform) and a
+   separate nightly one for the broad cross-product.
 2. **Avoid cross-producting axes that don't interact.** A
    `toolchain` × `os` cross-product is usually wasteful — pick one
    axis to vary per matrix.
@@ -622,7 +632,7 @@ axis and the special `name=v1,v2;name=v1` syntax for `--deps`.
 | `--project-versions` | `versions` | Defaults to `[<project>]`. |
 | `--refs` | `refs` | Mutually exclusive with `--ref-range`. |
 | `--ref-range` | `ref_range` | `base..head`; resolved at expansion. |
-| `--tests` | `tests` | Required. |
+| `--kinds` | `kinds` | Required. |
 | `--builds` | `modes` | |
 | `--os` | `os` | One of `Linux`, `Windows`, `MacOS`. |
 | `--os-version` | `os_version` | Windows/MacOS only. Triggers structured cross-product within the OS axis. |

@@ -24,11 +24,11 @@ For full per-command flags, run `opp_ci <command> --help`.
 
 | Command | Purpose |
 |---|---|
-| `opp_ci run` | Run a single test for a project. Required: `--project`, `--test`. Common: `--ref`, `--mode`, `--isolation {none\|podman}`, `--toolchain {none\|nix}`, `--os`, `--os-version`, `--arch`, `--compiler`, `--compiler-version`, `--pin <dep>=<ver>` (repeatable), `--force`, `--skip-install`. |
+| `opp_ci run` | Run a single test for a project. Required: `--project`, `--kind`. Common: `--ref`, `--mode`, `--isolation {none\|podman}`, `--toolchain {none\|nix}`, `--os`, `--os-version`, `--arch`, `--compiler`, `--compiler-version`, `--pin <dep>=<ver>` (repeatable), `--force`, `--skip-install`. |
 | `opp_ci run-matrix --matrix NAME` | Expand a named matrix and run all jobs. Options: `--force`, `--skip-install`. |
 
-Supported tests (comma-separated for `--test`) — see the canonical list
-in [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test):
+Supported test kinds (comma-separated for `--kind`) — see the canonical
+list in [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-kind):
 `smoke`, `fingerprint`, `statistical`, `feature`, `speed`, `sanitizer`,
 `chart`, `release`, `build`, `opp`, `all`.
 
@@ -36,7 +36,7 @@ in [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test):
 
 | Command | Purpose |
 |---|---|
-| `opp_ci create-matrix` | Create a named matrix. Required: `--name`, `--project`, `--tests`. Axes: `--project-versions`, `--builds`, `--os` [`--os-version`], `--arch`, `--compiler` [`--compiler-version`], `--refs`, `--ref-range`, `--deps`, `--isolation`, `--toolchain`, `--opp-file`. `--replace` overwrites an existing matrix of the same name. |
+| `opp_ci create-matrix` | Create a named matrix. Required: `--name`, `--project`, `--kinds`. Axes: `--project-versions`, `--builds`, `--os` [`--os-version`], `--arch`, `--compiler` [`--compiler-version`], `--refs`, `--ref-range`, `--deps`, `--isolation`, `--toolchain`, `--opp-file`. `--replace` overwrites an existing matrix of the same name. |
 | `opp_ci list-matrices` | List matrices with expanded job count. |
 | `opp_ci seed-matrices` | Seed default matrices for the core projects. |
 
@@ -49,11 +49,11 @@ Platform axes accept two styles:
 
 | Command | Purpose |
 |---|---|
-| `opp_ci list-runs` | List runs. Filters: `--project`, `--ref`, `--test`, `--status`, `--limit`. |
-| `opp_ci show-run RUN_ID` | Run detail + stdout/stderr. |
-| `opp_ci show-results` | Same filters as `list-runs`; presents stored results. |
+| `opp_ci list-runs` | List runs. Filters: `--project`, `--ref`, `--kind`, `--status`, `--limit`. `--status` matches `TestRun.lifecycle` (`queued` / `running` / `finished` / `cancelled` / `timed_out`) or a `TestResultCode` (`PASS` / `FAIL` / `ERROR` / `SKIPPED`). |
+| `opp_ci show-run RUN_ID` | Run detail + stdout/stderr (read off the TestRun row directly). |
+| `opp_ci show-results` | Same filters as `list-runs`; presents stored outcomes. |
 | `opp_ci delete-run RUN_ID --yes` | Delete a single run. |
-| `opp_ci delete-runs` | Bulk delete. Filters: `--project`, `--ref`, `--test`, `--status`, `--before YYYY-MM-DD`, `--yes`. |
+| `opp_ci delete-runs` | Bulk delete. Filters: `--project`, `--ref`, `--kind`, `--status`, `--before YYYY-MM-DD`, `--yes`. |
 
 ## Projects and versions
 
@@ -124,7 +124,7 @@ The CLI reads its configuration from environment variables. See
 
 ```bash
 opp_ci init-db
-opp_ci run --project fifo --test smoke --skip-install
+opp_ci run --project fifo --kind smoke --skip-install
 opp_ci serve  # browse at http://localhost:8080
 ```
 
@@ -132,7 +132,7 @@ opp_ci serve  # browse at http://localhost:8080
 
 ```bash
 opp_ci create-matrix --name fifo-default --project fifo \
-  --builds "release,debug" --tests "smoke,fingerprint"
+  --builds "release,debug" --kinds "smoke,fingerprint"
 opp_ci run-matrix --matrix fifo-default --skip-install
 ```
 
@@ -142,7 +142,7 @@ opp_ci run-matrix --matrix fifo-default --skip-install
 export OPP_CI_COORDINATOR_URL=https://ci.omnetpp.org
 export OPP_CI_API_TOKEN=<submitter-token>
 
-opp_ci --remote run --project inet-4.5 --test smoke,fingerprint --ref master \
+opp_ci --remote run --project inet-4.5 --kind smoke,fingerprint --ref master \
     --mode release --isolation podman --toolchain none \
     --os Ubuntu --os-version 26.04 --arch amd64 \
     --compiler clang --compiler-version 22 --force

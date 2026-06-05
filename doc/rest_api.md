@@ -28,10 +28,10 @@ Implementation: `opp_ci/auth.py`.
 
 | Endpoint | Method | Role | Purpose |
 |---|---|---|---|
-| `/api/runs` | POST | submitter | Submit a single test run to the queue |
-| `/api/runs/matrix` | POST | submitter | Expand a named matrix and queue all jobs |
-| `/api/runs` | GET | readonly | List runs (filterable by project, test, status) |
-| `/api/runs/{id}` | GET | readonly | Run detail including results |
+| `/api/runs` | POST | submitter | Submit a single test run to the queue. Body fields: `project`, `kind` (required); plus the same coordinate fields that appear on a [Test](data_model.md#test). |
+| `/api/runs/matrix` | POST | submitter | Expand a named matrix and queue all jobs as one `TestMatrixRun`. Body: `{"matrix_name": "..."}`. Response includes `matrix_run_id` and `run_ids`. |
+| `/api/runs` | GET | readonly | List runs. Filters: `project`, `kind`, `status` (matches `lifecycle`), `os`, `os_version`, `distro`, `distro_version`, `flavor`, `flavor_version`, `limit`. |
+| `/api/runs/{id}` | GET | readonly | Run detail including `stdout`, `stderr`, and `details` (read off the same `TestRun` row). |
 
 ### Workers
 
@@ -40,8 +40,9 @@ Implementation: `opp_ci/auth.py`.
 | `/api/workers/register` | POST | admin | Register a new worker, returns its token |
 | `/api/workers/me` | GET | worker | Worker fetches its own registered name, tags, and concurrency at startup |
 | `/api/workers/heartbeat` | POST | worker | Keepalive — updates `last_heartbeat` |
-| `/api/workers/poll` | POST | worker | Poll for the next queued job |
-| `/api/workers/result` | POST | worker | Report job completion with results |
+| `/api/workers/poll` | POST | worker | Poll for the next queued job. Returns the job spec with the joined Test's coordinate fields (including `kind`). |
+| `/api/workers/snapshot` | POST | worker | Optional: post the `system_snapshot` JSON captured at run start. Body: `{"run_id": ..., "snapshot": {...}}`. |
+| `/api/workers/result` | POST | worker | Report job completion: writes `result_code` / `stdout` / `stderr` / `details` / `duration_seconds` / `commit_sha` directly onto the same TestRun row and flips lifecycle to `finished`. |
 | `/api/workers` | GET | readonly | List registered workers |
 
 ### Tokens
@@ -73,13 +74,13 @@ Implementation: `opp_ci/auth.py`.
 curl -X POST https://ci.omnetpp.org/api/runs \
   -H "Authorization: Bearer $OPP_CI_API_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"project": "inet", "test": "smoke", "git_ref": "master"}'
+  -d '{"project": "inet", "kind": "smoke", "git_ref": "master"}'
 ```
 
 Or via the CLI in remote mode:
 
 ```bash
-opp_ci --remote run --project inet --test smoke --ref master
+opp_ci --remote run --project inet --kind smoke --ref master
 ```
 
 See [python_client.md](python_client.md) for the Python wrapper around

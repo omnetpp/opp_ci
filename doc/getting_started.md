@@ -46,19 +46,21 @@ below.)
 
 ```bash
 opp_ci init-db
-opp_ci run --project fifo --test smoke --skip-install
+opp_ci run --project fifo --kind smoke --skip-install
 ```
 
 This will:
 1. Create `opp_ci.db` (SQLite) in the current directory
-2. Import `opp_repl.test.smoke.run_smoke_tests` and call it in-process (no Nix/opp_env needed)
-3. Read structured per-test details from the returned result's `to_dict()`
-4. Store the result (pass/fail, stdout, stderr, per-test details) in the database
+2. Get-or-create a `Test` row for the `(project=fifo, kind=smoke, …)` coordinate
+3. Import `opp_repl.test.smoke.run_smoke_tests` and call it in-process (no Nix/opp_env needed)
+4. Read structured per-test details from the returned result's `to_dict()`
+5. Write the outcome (pass/fail, stdout, stderr, per-test details) onto the
+   matching `TestRun` row in the database
 
-The full list of tests (`smoke`, `fingerprint`, `statistical`, `feature`,
-`speed`, `sanitizer`, `chart`, `release`, `build`, `opp`, `all`) and what each
-one does is in
-[test_matrix_dimensions.md](test_matrix_dimensions.md#axis-test).
+The full list of test kinds (`smoke`, `fingerprint`, `statistical`,
+`feature`, `speed`, `sanitizer`, `chart`, `release`, `build`, `opp`,
+`all`) and what each one does is in
+[test_matrix_dimensions.md](test_matrix_dimensions.md#axis-kind).
 
 ### Pointing opp_ci at a real project
 
@@ -107,8 +109,15 @@ The web UI shows:
 
 ### Direct DB inspection
 
+The coordinate fields live on `tests`; the lifecycle and outcome on
+`test_runs`. Join the two to see "what was run, how did it end":
+
 ```bash
-sqlite3 opp_ci.db "SELECT id, project, test, status FROM test_runs;"
+sqlite3 opp_ci.db "
+  SELECT r.id, t.project, t.kind, r.lifecycle, r.result_code
+  FROM test_runs r
+  JOIN tests t ON t.id = r.test_id;
+"
 ```
 
 ## Test Matrices
@@ -120,7 +129,7 @@ opp_ci create-matrix \
   --name fifo-default \
   --project fifo \
   --builds "release,debug" \
-  --tests "smoke,fingerprint"
+  --kinds "smoke,fingerprint"
 
 opp_ci run-matrix --matrix fifo-default --skip-install
 ```
@@ -133,7 +142,7 @@ opp_ci create-matrix \
   --project inet \
   --os "Ubuntu 24.04,Fedora 41" \
   --compiler "gcc-14,clang-18" \
-  --tests "smoke,fingerprint"
+  --kinds "smoke,fingerprint"
 ```
 
 See [CLI Reference](cli_reference.md) for the full `create-matrix` options.
@@ -173,7 +182,7 @@ Example: test INET on Ubuntu 26.04 + clang 22 in a container
 ```bash
 opp_ci image build --os ubuntu --os-version 26.04 \
                    --compiler clang --compiler-version 22 --toolchain host
-opp_ci run --project inet-4.5 --test smoke \
+opp_ci run --project inet-4.5 --kind smoke \
            --isolation podman --toolchain none \
            --os Ubuntu --os-version 26.04 --compiler clang --compiler-version 22
 ```
@@ -182,7 +191,7 @@ Same axes work in matrix configs (lists are cross-producted):
 
 ```bash
 opp_ci create-matrix --name inet-platforms --project inet \
-    --tests smoke --builds release \
+    --kinds smoke --builds release \
     --os Ubuntu,Fedora --os-version 26.04,42 \
     --compiler clang --compiler-version 22 \
     --isolation podman --toolchain none
@@ -217,5 +226,5 @@ To start fresh (drops all data):
 ```bash
 rm -f opp_ci.db
 opp_ci init-db
-opp_ci create-matrix --name fifo-default --project fifo --builds "release,debug" --tests "smoke,fingerprint"
+opp_ci create-matrix --name fifo-default --project fifo --builds "release,debug" --kinds "smoke,fingerprint"
 ```
