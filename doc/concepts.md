@@ -124,20 +124,67 @@ tested" — `project`, `kind`, `mode`, the platform stack
 the execution environment (`isolation`, `toolchain`), and `opp_file`.
 A SHA-256 `coord_hash` over that field set is the dedup key: matrix
 expansion looks the row up and inserts a new one only on first sight.
-Three columns (`name`, `expected_result_code`,
-`expected_result_description`) are mutable user-editable metadata and
-sit outside the hash. Every [TestRun](#testrun) points at exactly one
+A single `name` column is the only mutable field and sits outside the
+hash. Expected outcomes live in
+[ExpectedTestResult](#expectedtestresult), keyed by `test_id`, *not*
+on the Test row. Every [TestRun](#testrun) points at exactly one
 `Test` via `test_id`.
+
+### ExpectedTestResult
+
+An append-only edit log of expected outcomes per [Test](#test). Each
+row carries an `expected_result_code` ([TestResultCode](#testresultcode)
+or NULL for an explicit *retraction*), an optional
+`expected_result_description`, `reason`, `set_by`, and `set_at`.
+"Current expectation" is the row with the highest `set_at`; no row at
+all means "no expectation ever declared". Edits apply forward-only:
+historical [TestVerdict](#testverdict) cells pin the specific row
+that was in force at recording time via `expectation_id`, so old
+matrix-run rollups stay reconstructible after a re-grade.
 
 ### TestMatrixRun
 
 One row per submission of a [TestMatrix](#testmatrix) — the umbrella
-that groups the child [TestRuns](#testrun) spawned from a single
-expansion. Carries the [Trigger](#trigger) source and the GitHub
-linkage fields (`github_owner`, `github_repo`, `github_commit_sha`,
-`github_pr_number`, `github_status_url`). The matrix's aggregate
-status is rolled up from its children's `lifecycle` values in app
-code — there is no own lifecycle column.
+that groups the child [TestRuns](#testrun) and [TestVerdicts](#testverdict)
+spawned from a single expansion. Carries the [Trigger](#trigger)
+source (`tag` for release-tag pushes; see
+[Release-tag trigger](#release-tag-trigger)), a `ref` snapshot of the
+triggering tag, the GitHub linkage fields, and a **stored** rollup —
+counter columns (`pass_count`/`fail_count`/`error_count`,
+`expected_count`/`unexpected_count`/`unknown_count`, `cache_hit_count`,
+`total_count`) plus `actual_summary` and the three-state
+[Verdict](#verdict) — refreshed transactionally as each child cell
+finalizes. `completed_at` is set when every cell is done.
+
+### TestVerdict
+
+One row per cell of a [TestMatrixRun](#testmatrixrun). Pins the
+[TestRun](#testrun) whose outcome this cell attributes (a fresh row
+on a cache miss, a pre-existing finished row on a [Cache hit](#cache)
+— marked by `cache_hit=True`) plus the
+[ExpectedTestResult](#expectedtestresult) row in force at recording
+time. Carries the three-state [Verdict](#verdict) and `recorded_at`.
+The cell's lifecycle (queued / running / finished / cancelled) is
+derived from the underlying `TestRun.lifecycle` — not stored — so
+there is only ever one source of truth for "is it done yet".
+
+### Verdict
+
+Three-state grade for a [TestVerdict](#testverdict) (and, rolled up,
+for its parent [TestMatrixRun](#testmatrixrun)):
+
+- **EXPECTED** — actual outcome matched the expectation in force at
+  recording time. Release-ready.
+- **UNEXPECTED** — actual diverged from the expectation (wrong
+  outcome, or unexpected ERROR). Regression candidate.
+- **UNKNOWN** — actual known, but no expectation existed (or the most
+  recent ExpectedTestResult was a retraction). Declare an expectation
+  to characterise the cell.
+
+The rollup verdict on a `TestMatrixRun` is `UNEXPECTED` if any cell
+is, else `UNKNOWN` if any cell is, else `EXPECTED`. "Release-ready"
+is then a one-liner: `TestMatrixRun.verdict == EXPECTED` on the row
+triggered by the release tag.
 
 ### TestRun
 
@@ -171,10 +218,12 @@ State-machine enum on TestRun:
 ### TestResultCode
 
 Outcome enum stored in `TestRun.result_code` (populated iff
-`lifecycle == finished`) and reused in `Test.expected_result_code`:
-`PASS`, `FAIL`, `ERROR`, `SKIPPED`. `ERROR` distinguishes
-infrastructure failure (build, env, worker crash) from genuine test
-failure.
+`lifecycle == finished`), in
+[ExpectedTestResult](#expectedtestresult)`.expected_result_code`, and
+as the `actual_summary` rollup on
+[TestMatrixRun](#testmatrixrun): `PASS`, `FAIL`, `ERROR`, `SKIPPED`.
+`ERROR` distinguishes infrastructure failure (build, env, worker
+crash) from genuine test failure.
 
 ### effective_status
 
@@ -205,7 +254,42 @@ A "if this kind of event matching this pattern hits this project, run
 this matrix" record. Fields: `project_id`, `rule_type`
 (`branch`/`pr`/`tag`), `pattern` (fnmatch glob), `matrix_id`
 (nullable — null means smoke-only). Evaluated by the
-[webhook receiver](#webhook-receiver).
+[webhook receiver](#webhook-receiver). Tag-rule matches set
+`TestMatrixRun.trigger="tag"` and `TestMatrixRun.ref=<tag-name>`; see
+[Release-tag trigger](#release-tag-trigger).
+
+### Release-tag trigger
+
+The standard "is this release ready to publish?" workflow. A
+maintainer pushes a release tag (e.g. `v4.5.3`); the GitHub webhook
+matches any [AutoTestRule](#autotestrule) with `rule_type=tag` and a
+fitting `pattern`; the bound matrix expands into a fresh
+[TestMatrixRun](#testmatrixrun) with `trigger="tag"` and
+`ref="v4.5.3"`. The [Cache](#cache) absorbs unchanged cells; new ones
+run on workers. When every cell finalizes, the stored
+[Verdict](#verdict) is the answer — `EXPECTED` ⇒ ship; `UNEXPECTED` ⇒
+a regression to investigate; `UNKNOWN` ⇒ at least one cell isn't yet
+characterised, declare an expectation and re-run. The project page's
+"Latest release run" card surfaces this without a click.
+
+### Cache
+
+Content-addressable result cache on [TestRun](#testrun). At submit
+time each cell's
+[`cache_fingerprint`](data_model.md#cache-fingerprint) is computed
+over its full input set — coordinates, resolved git SHA, resolved dep
+SHAs, version. A finished `TestRun` with the same fingerprint is
+reused: a new [TestVerdict](#testverdict) is inserted with
+`cache_hit=True` pointing at that prior run, graded immediately
+against the currently-in-force [expectation](#expectedtestresult). No
+new `TestRun` row is created. Re-running an unchanged matrix is
+near-instant; moving refs (`master`, `inet-git`) are detected via the
+SHA in the fingerprint and re-executed. `--no-cache` on
+`opp_ci run-matrix` (and `no_cache` on `POST /api/matrix-runs`)
+forces a fresh `TestRun` per cell. Expectations are deliberately
+*not* in the cache key — a cached cell still grades against today's
+expectation, not the one that was in force when the cached run
+finished.
 
 ---
 
