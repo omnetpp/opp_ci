@@ -9,7 +9,8 @@ pass/fail results from TestRun records where available.
 import logging
 from collections import defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import and_, exists, select
+from sqlalchemy.orm import aliased
 
 from opp_ci.db.models import (
     Project, Test, TestRun, TestRunLifecycle,
@@ -28,7 +29,8 @@ _DIMENSIONS = (
 )
 
 
-def get_compatibility_matrix(session, project_name, filters=None):
+def get_compatibility_matrix(session, project_name, filters=None,
+                             show_obsolete=False):
     """
     Build compatibility matrices for a project against each of its dependencies.
 
@@ -45,6 +47,10 @@ def get_compatibility_matrix(session, project_name, filters=None):
     only revert a tested cell back toward `compatible` when no run on the
     selected platform exists. Empty/None filters reproduce the unfiltered
     page exactly.
+
+    `show_obsolete` (default False) controls whether runs overridden by a
+    newer finished run at the same (test_id, commit_sha) are included in the
+    overlay — same semantics as the Results page.
 
     Returns a dict:
         {
@@ -95,7 +101,8 @@ def get_compatibility_matrix(session, project_name, filters=None):
     if not versions:
         return empty
 
-    test_overlays = _collect_test_overlays(session, project_name, versions)
+    test_overlays = _collect_test_overlays(session, project_name, versions,
+                                           show_obsolete)
     options = _collect_options(test_overlays)
 
     # Drop blank/None filter values so an unset dropdown is a no-op.
@@ -224,7 +231,7 @@ def _run_dict(run):
     return rec
 
 
-def _collect_test_overlays(session, project_name, versions):
+def _collect_test_overlays(session, project_name, versions, show_obsolete=False):
     """
     Group finished test runs by the dependency version they pinned.
 
@@ -236,6 +243,10 @@ def _collect_test_overlays(session, project_name, versions):
     version/ref identity. A run therefore lands in its dep-version column on
     every project-version row that declares that column (see
     `_build_declared_matrix`).
+
+    `show_obsolete` (default False) keeps the same semantics as the Results
+    page: by default, drop runs overridden by a newer finished run at the
+    same (test_id, commit_sha).
 
     Returns: {(dep_name, dep_version): [run-dict, ...]} where each run-dict is
     produced by `_run_dict` (carries result_code, verdict, and every
@@ -249,14 +260,27 @@ def _collect_test_overlays(session, project_name, versions):
         if v.label:
             project_keys.add(v.label)
 
-    runs = session.execute(
+    query = (
         select(TestRun)
         .join(Test, TestRun.test_id == Test.id)
         .where(
             Test.project.in_(project_keys),
             TestRun.lifecycle == TestRunLifecycle.finished,
         )
-    ).scalars().all()
+    )
+    if not show_obsolete:
+        # Drop runs superseded by a newer finished run at the same
+        # (test_id, commit_sha) — is_not_distinct_from so NULL shas (legacy
+        # rows) compare equal. Mirrors the Results page.
+        newer = aliased(TestRun)
+        query = query.where(~exists().where(and_(
+            newer.test_id == TestRun.test_id,
+            newer.commit_sha.is_not_distinct_from(TestRun.commit_sha),
+            newer.lifecycle == TestRunLifecycle.finished,
+            newer.id > TestRun.id,
+        )))
+
+    runs = session.execute(query).scalars().all()
 
     overlays = defaultdict(list)
     for run in runs:

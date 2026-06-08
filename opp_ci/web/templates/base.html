@@ -67,20 +67,20 @@
         .cm-error { color: var(--error); }
         .cm-none { color: var(--border); }
 
-        /* Two-channel compatibility cell: color = status, symbol = verdict.
-           Outcome colors match the rest of the app: FAIL=yellow, ERROR=red. */
-        .cm2 { position: relative; display: inline-block; width: 1.4rem; height: 1.4rem;
-               line-height: 1.4rem; text-align: center; }
-        .cm2 .cm2-disc { font-size: 1.4rem; }
-        .cm2 .cm2-sym { position: absolute; inset: 0; font-size: 0.65rem; font-weight: 700;
+        /* Two-channel compatibility cell: a CSS disc (color = status) with the
+           verdict symbol flex-centered inside it (so it never drifts off the
+           dot). Outcome colors match the app: FAIL=yellow, ERROR=red. */
+        .cm2 { display: inline-flex; align-items: center; justify-content: center;
+               width: 1.2rem; height: 1.2rem; border-radius: 50%; vertical-align: middle; }
+        .cm2 .cm2-sym { font-size: 0.72rem; font-weight: 700; line-height: 1;
                         color: #fff; text-shadow: 0 0 1px rgba(0,0,0,0.55); }
-        .cm2-compatible .cm2-disc { color: var(--primary); }
-        .cm2-pass .cm2-disc { color: var(--pass); }
-        .cm2-fail .cm2-disc { color: var(--warn); }
-        .cm2-error .cm2-disc { color: var(--error); }
-        .cm2-skipped .cm2-disc { color: var(--muted); }
-        .cm2-mixed .cm2-disc { color: var(--mixed); }
-        .cm2-none { color: var(--border); }
+        .cm2-compatible { background: var(--primary); }
+        .cm2-pass { background: var(--pass); }
+        .cm2-fail { background: var(--warn); }
+        .cm2-error { background: var(--error); }
+        .cm2-skipped { background: var(--muted); }
+        .cm2-mixed { background: var(--mixed); }
+        .cm2-none { background: var(--border); }
 
         .dim-set { font-size: 0.85em; color: var(--primary); }
 

@@ -24,7 +24,6 @@
     {%- endfor -%}
     {%- set title = parts|join("; ") if parts else cell.status -%}
     <span class="cm2 {{ status_class.get(cell.status, 'cm2-none') }}" title="{{ title }}">
-        <span class="cm2-disc">&#x25cf;</span>
         {%- if cell.verdict %}<span class="cm2-sym">{{ verdict_sym.get(cell.verdict, "") }}</span>{% endif -%}
     </span>
 {%- endif -%}
@@ -55,6 +54,9 @@
         {% if filters.values()|select|list %}
         <a href="/compatibility/{{ project_name }}" class="btn btn-secondary btn-sm">Clear</a>
         {% endif %}
+        <label style="font-size:0.85rem; margin-left:0.5rem;" title="Include results overridden by a newer run at the same commit (hidden by default)">
+            <input type="checkbox" name="show_obsolete" value="1" {{ "checked" if show_obsolete }} onchange="this.form.submit()"> Show obsolete
+        </label>
     </div>
 </form>
 {% endif %}
@@ -100,20 +102,20 @@
 <div style="font-size: 0.8rem; color: var(--muted); margin-top: 0.75rem; line-height: 1.9;">
     <div>
         <strong style="color: var(--text);">Status (color):</strong>
-        <span class="cm2 cm2-compatible"><span class="cm2-disc">&#x25cf;</span></span> compatible &nbsp;
-        <span class="cm2 cm2-pass"><span class="cm2-disc">&#x25cf;</span></span> PASS &nbsp;
-        <span class="cm2 cm2-fail"><span class="cm2-disc">&#x25cf;</span></span> FAIL &nbsp;
-        <span class="cm2 cm2-error"><span class="cm2-disc">&#x25cf;</span></span> ERROR &nbsp;
-        <span class="cm2 cm2-skipped"><span class="cm2-disc">&#x25cf;</span></span> SKIPPED &nbsp;
-        <span class="cm2 cm2-mixed"><span class="cm2-disc">&#x25cf;</span></span> mixed &nbsp;
+        <span class="cm2 cm2-compatible"></span> compatible &nbsp;
+        <span class="cm2 cm2-pass"></span> PASS &nbsp;
+        <span class="cm2 cm2-fail"></span> FAIL &nbsp;
+        <span class="cm2 cm2-error"></span> ERROR &nbsp;
+        <span class="cm2 cm2-skipped"></span> SKIPPED &nbsp;
+        <span class="cm2 cm2-mixed"></span> mixed &nbsp;
         <span class="cm-dot cm-none">·</span> n/a
     </div>
     <div>
         <strong style="color: var(--text);">Verdict (symbol):</strong>
-        <span class="cm2 cm2-skipped"><span class="cm2-disc">&#x25cf;</span><span class="cm2-sym">✓</span></span> expected &nbsp;
-        <span class="cm2 cm2-skipped"><span class="cm2-disc">&#x25cf;</span><span class="cm2-sym">?</span></span> unknown &nbsp;
-        <span class="cm2 cm2-skipped"><span class="cm2-disc">&#x25cf;</span><span class="cm2-sym">!</span></span> unexpected &nbsp;
-        <span class="cm2 cm2-skipped"><span class="cm2-disc">&#x25cf;</span><span class="cm2-sym">*</span></span> mixed
+        <span class="cm2 cm2-skipped"><span class="cm2-sym">✓</span></span> expected &nbsp;
+        <span class="cm2 cm2-skipped"><span class="cm2-sym">?</span></span> unknown &nbsp;
+        <span class="cm2 cm2-skipped"><span class="cm2-sym">!</span></span> unexpected &nbsp;
+        <span class="cm2 cm2-skipped"><span class="cm2-sym">*</span></span> mixed
     </div>
     <div style="margin-top: 0.35rem;">
         Filters narrow the <em>tested</em> overlay only;

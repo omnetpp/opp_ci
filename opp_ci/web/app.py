@@ -1080,7 +1080,8 @@ def compatibility_page(request: Request, project_name: str,
                        kind: str = Query(default=None),
                        toolchain: str = Query(default=None),
                        isolation: str = Query(default=None),
-                       arch: str = Query(default=None)):
+                       arch: str = Query(default=None),
+                       show_obsolete: bool = Query(default=False)):
     from opp_ci.compatibility import _DIMENSIONS, get_compatibility_matrix
     session = SessionLocal()
     try:
@@ -1095,12 +1096,14 @@ def compatibility_page(request: Request, project_name: str,
             "toolchain": toolchain, "isolation": isolation, "arch": arch,
         }
         filters = {dim: dims[dim] for dim in _DIMENSIONS if dims.get(dim)}
-        result = get_compatibility_matrix(session, project_name, filters)
+        result = get_compatibility_matrix(session, project_name, filters,
+                                          show_obsolete=show_obsolete)
         return templates.TemplateResponse(request, "compatibility.html", {
             "project_name": project_name,
             "matrices": result["matrices"],
             "options": result["options"],
             "filters": {dim: dims.get(dim) or "" for dim in _DIMENSIONS},
+            "show_obsolete": show_obsolete,
             **_template_globals(request, current_user),
         })
     finally:

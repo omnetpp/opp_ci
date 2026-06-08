@@ -85,8 +85,9 @@ class CompatibilityMatrixTests(unittest.TestCase):
             finalize_verdict_for_run(self.s, run.id)
         return run
 
-    def _cell(self, filters=None):
-        result = get_compatibility_matrix(self.s, "inet", filters)
+    def _cell(self, filters=None, show_obsolete=False):
+        result = get_compatibility_matrix(self.s, "inet", filters,
+                                          show_obsolete=show_obsolete)
         matrix = result["matrices"][0]
         self.assertEqual(matrix["dependency"], "omnetpp")
         return matrix["rows"][0]["cells"][DEPVER]
@@ -136,6 +137,14 @@ class CompatibilityMatrixTests(unittest.TestCase):
         cell = self._cell()
         self.assertEqual(cell["status"], "compatible")
         self.assertEqual(cell["runs"], [])
+
+    def test_obsolete_runs_hidden_by_default(self):
+        # Two runs at the same test coord + commit_sha (NULL): the older is
+        # obsolete. Default hides it; show_obsolete includes it.
+        self._add_run(TestResultCode.PASS, compiler="gcc")   # older
+        self._add_run(TestResultCode.FAIL, compiler="gcc")   # newer, same coord
+        self.assertEqual(self._cell()["status"], "FAIL")                  # newest only
+        self.assertEqual(self._cell(show_obsolete=True)["status"], "mixed")  # both
 
     # ── verdict channel ───────────────────────────────────────────────
 
