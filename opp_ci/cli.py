@@ -1,4 +1,5 @@
 import datetime
+import functools
 import logging
 
 import click
@@ -20,17 +21,609 @@ from opp_ci.notes import update_ci_note
 
 @click.group()
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
-@click.option("--remote", is_flag=True, help="Submit to remote coordinator instead of running locally")
+@click.option("--remote/--local", "remote", default=None,
+              help="Drive a remote coordinator over the REST API instead of "
+                   "the local database (default from $OPP_CI_REMOTE)")
 @click.pass_context
 def main(ctx, verbose, remote):
     """opp_ci — CI for OMNeT++ simulation projects."""
+    from opp_ci import config as cfg
     ctx.ensure_object(dict)
-    ctx.obj["remote"] = remote
+    ctx.obj["remote"] = cfg.REMOTE if remote is None else remote
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
+# ── Remote dispatch infrastructure ──────────────────────────────────────
+#
+# `@remoteable(handler)` makes a command dual-mode: when `--remote` (or
+# `OPP_CI_REMOTE=1`) is set the decorator dispatches to `handler` with the
+# same keyword arguments click parsed; otherwise the plain local body runs
+# against the local database. Decorating a command wires *both* paths by
+# construction, so a command can't accidentally ship with a half-wired
+# remote mode. The click @options must sit ABOVE @remoteable so they
+# attach to the wrapper click actually invokes.
+
+
+def remoteable(remote_handler):
+    """Dispatch to `remote_handler(**kwargs)` when --remote is set."""
+    def decorator(local_fn):
+        argnames = local_fn.__code__.co_varnames[:local_fn.__code__.co_argcount]
+        wants_ctx = "ctx" in argnames
+
+        @functools.wraps(local_fn)
+        @click.pass_context
+        def wrapper(ctx, **kwargs):
+            if ctx.obj.get("remote"):
+                return remote_handler(**kwargs)
+            if wants_ctx:
+                return local_fn(ctx=ctx, **kwargs)
+            return local_fn(**kwargs)
+        return wrapper
+    return decorator
+
+
+def _refuse_remote(name):
+    """Build a remote handler that refuses: this command is host-local."""
+    def handler(**kwargs):
+        click.echo(f"ERROR: {name} is local-only; ignoring --remote", err=True)
+        raise SystemExit(2)
+    return handler
+
+
+def _remote_client():
+    """Construct an OppCiClient from config, or exit with a friendly error."""
+    from opp_ci.config import COORDINATOR_URL, API_TOKEN
+    from opp_ci.client import OppCiClient
+
+    if not API_TOKEN:
+        click.echo("ERROR: Set OPP_CI_API_TOKEN env var for remote operations.",
+                   err=True)
+        raise SystemExit(1)
+    base = COORDINATOR_URL.rstrip("/")
+    api_url = base if base.endswith("/api") else base + "/api"
+    return OppCiClient(url=api_url, token=API_TOKEN)
+
+
+def _remote(op):
+    """Run `op(client)`, surfacing OppCiClientError as a tidy ERROR line."""
+    from opp_ci.client import OppCiClientError
+    client = _remote_client()
+    try:
+        return op(client)
+    except OppCiClientError as e:
+        click.echo(f"ERROR: {e.detail}", err=True)
+        raise SystemExit(1)
+
+
+# ── Shared output formatters (dict in → click.echo out) ─────────────────
+#
+# These take plain dicts so the same rendering serves both the REST
+# responses (remote mode) and, where adopted, the local DB rows. The
+# remote handlers below use them so `--remote` output matches the local
+# command's layout.
+
+
+def _row_status(d):
+    """effective_status from a /runs dict: outcome if finished, else lifecycle."""
+    return d.get("result_code") or d.get("lifecycle") or "-"
+
+
+def _fmt_started(value):
+    """Render an ISO timestamp (or datetime) as 'YYYY-MM-DD HH:MM', or '-'."""
+    if not value:
+        return "-"
+    if isinstance(value, str):
+        try:
+            value = datetime.datetime.fromisoformat(value)
+        except ValueError:
+            return value
+    return value.strftime("%Y-%m-%d %H:%M")
+
+
+def _fmt_duration(seconds):
+    return f"{seconds:.1f}s" if seconds else "-"
+
+
+def _format_runs(rows):
+    if not rows:
+        click.echo("No runs found.")
+        return
+    click.echo(f"{'ID':<6} {'Project':<20} {'Ref':<16} {'Kind':<14} "
+               f"{'Status':<10} {'Duration':<10} {'Started'}")
+    click.echo("-" * 106)
+    for r in rows:
+        click.echo(f"{r['id']:<6} {(r.get('project') or '-'):<20} "
+                   f"{(r.get('git_ref') or '-'):<16} {(r.get('kind') or '-'):<14} "
+                   f"{_row_status(r):<10} {_fmt_duration(r.get('duration_seconds')):<10} "
+                   f"{_fmt_started(r.get('started_at'))}")
+
+
+def _format_run_detail(r):
+    click.echo(f"Run #{r['id']}")
+    click.echo(f"  Project:  {r.get('project') or '-'}")
+    click.echo(f"  Ref:      {r.get('git_ref') or '-'}")
+    click.echo(f"  Commit:   {r.get('commit_sha') or '-'}")
+    click.echo(f"  Version:  {r.get('version') or '-'}")
+    click.echo(f"  Kind:     {r.get('kind') or '-'}")
+    click.echo(f"  Lifecycle:{r.get('lifecycle') or '-'}")
+    click.echo(f"  Result:   {r.get('result_code') or '-'}")
+    click.echo(f"  Duration: {_fmt_duration(r.get('duration_seconds'))}")
+    click.echo(f"  Started:  {r.get('started_at') or '-'}")
+    click.echo(f"  Finished: {r.get('finished_at') or '-'}")
+    stdout = r.get("stdout")
+    stderr = r.get("stderr")
+    if stdout:
+        click.echo(f"\n  stdout ({len(stdout)} chars):")
+        click.echo("    " + stdout[:500].replace("\n", "\n    "))
+        if len(stdout) > 500:
+            click.echo("    ...")
+    if stderr:
+        click.echo(f"\n  stderr ({len(stderr)} chars):")
+        click.echo("    " + stderr[:500].replace("\n", "\n    "))
+        if len(stderr) > 500:
+            click.echo("    ...")
+
+
+def _format_projects(rows):
+    if not rows:
+        click.echo("No projects.")
+        return
+    click.echo(f"{'Name':<20} {'opp_env':<16} {'Deps':<24} {'GitHub'}")
+    click.echo("-" * 80)
+    for p in rows:
+        deps = ", ".join(p.get("deps") or []) or "-"
+        click.echo(f"{(p.get('name') or '-'):<20} {(p.get('opp_env_name') or '-'):<16} "
+                   f"{deps[:24]:<24} {p.get('github') or '-'}")
+
+
+def _format_versions(rows):
+    if not rows:
+        click.echo("No versions registered.")
+        return
+    click.echo(f"{'ID':<6} {'Project':<16} {'Label':<20} {'Git Ref':<24} "
+               f"{'opp_env':<16} {'Dependencies'}")
+    click.echo("-" * 110)
+    for v in rows:
+        deps = str(v.get("deps")) if v.get("deps") else "-"
+        click.echo(f"{v['id']:<6} {(v.get('project') or '-'):<16} "
+                   f"{(v.get('label') or '-'):<20} {(v.get('git_ref') or '-'):<24} "
+                   f"{(v.get('opp_env_version') or '-'):<16} {deps}")
+
+
+def _format_matrices(rows):
+    if not rows:
+        click.echo("No matrices defined.")
+        return
+    click.echo(f"{'Name':<24} {'Project':<16} {'Jobs'}")
+    click.echo("-" * 60)
+    from opp_ci.scheduler import expand_matrix
+    for m in rows:
+        try:
+            jobs = len(expand_matrix(m["project"], m.get("config") or {}))
+        except Exception:
+            jobs = "?"
+        click.echo(f"{m['name']:<24} {m['project']:<16} {jobs}")
+
+
+def _format_workers(rows):
+    if not rows:
+        click.echo("No workers registered.")
+        return
+    click.echo(f"{'ID':<6} {'Name':<20} {'Status':<10} {'Jobs':<6} {'Cap':<6} "
+               f"{'Tags':<30} {'Last Heartbeat'}")
+    click.echo("-" * 110)
+    for w in rows:
+        tags = ", ".join(w.get("tags") or []) or "-"
+        hb = w.get("last_heartbeat")
+        if hb:
+            try:
+                hb = datetime.datetime.fromisoformat(hb).strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+        click.echo(f"{w['id']:<6} {w['name']:<20} {(w.get('status') or '-'):<10} "
+                   f"{w.get('current_job_count', 0):<6} {w.get('concurrency', 0):<6} "
+                   f"{tags:<30} {hb or '-'}")
+
+
+def _format_tokens(rows):
+    if not rows:
+        click.echo("No tokens.")
+        return
+    click.echo(f"{'ID':<6} {'Name':<20} {'Role':<12} {'Enabled':<10} "
+               f"{'Token (prefix)':<20} {'Created'}")
+    click.echo("-" * 90)
+    for t in rows:
+        enabled = "yes" if t.get("enabled") else "no"
+        prefix = t.get("token_prefix") or "-"
+        click.echo(f"{t['id']:<6} {t['name']:<20} {t['role']:<12} {enabled:<10} "
+                   f"{prefix:<20} {_fmt_started(t.get('created_at'))}")
+
+
+def _format_users(rows):
+    if not rows:
+        click.echo("No users.")
+        return
+    click.echo(f"{'ID':<4} {'Login':<24} {'Role':<10} {'Locked':<7} "
+               f"{'Enabled':<8} {'Last Login'}")
+    click.echo("-" * 80)
+    for u in rows:
+        login = u.get("username") or (
+            f"@{u['github_username']}" if u.get("github_username") else "-")
+        click.echo(f"{u['id']:<4} {login:<24} {u['role']:<10} "
+                   f"{('yes' if u.get('role_locked') else 'no'):<7} "
+                   f"{('yes' if u.get('enabled') else 'no'):<8} "
+                   f"{_fmt_started(u.get('last_login_at'))}")
+
+
+def _format_rules(rows):
+    if not rows:
+        click.echo("No auto-test rules.")
+        return
+    click.echo(f"{'ID':<6} {'Project':<20} {'Type':<8} {'Pattern':<20} "
+               f"{'Matrix':<20} {'Enabled'}")
+    click.echo("-" * 90)
+    for r in rows:
+        enabled = "yes" if r.get("enabled") else "no"
+        click.echo(f"{r['id']:<6} {(r.get('project_name') or '?'):<20} "
+                   f"{r['rule_type']:<8} {r['pattern']:<20} "
+                   f"{(r.get('matrix_name') or '-'):<20} {enabled}")
+
+
+# ── Remote command handlers ─────────────────────────────────────────────
+
+
+def _list_runs_remote(project, git_ref, kind, status, limit):
+    def op(c):
+        rows = c.list_runs(project=project, kind=kind, status=status, limit=limit)
+        if git_ref:
+            rows = [r for r in rows if r.get("git_ref") == git_ref]
+        _format_runs(rows)
+    _remote(op)
+
+
+def _show_run_remote(run_id):
+    def op(c):
+        _format_run_detail(c.get_run(run_id))
+    _remote(op)
+
+
+def _show_results_remote(project, git_ref, kind, status, limit):
+    def op(c):
+        rows = c.list_runs(project=project, kind=kind, status=status, limit=limit)
+        if git_ref:
+            rows = [r for r in rows if r.get("git_ref") == git_ref]
+        if not rows:
+            click.echo("No results found.")
+            return
+        click.echo(f"{'ID':<6} {'Project':<20} {'Kind':<14} {'Status':<10} "
+                   f"{'Duration':<10} {'Started'}")
+        click.echo("-" * 90)
+        for r in rows:
+            click.echo(f"{r['id']:<6} {(r.get('project') or '-'):<20} "
+                       f"{(r.get('kind') or '-'):<14} {_row_status(r):<10} "
+                       f"{_fmt_duration(r.get('duration_seconds')):<10} "
+                       f"{_fmt_started(r.get('started_at'))}")
+    _remote(op)
+
+
+def _delete_run_remote(run_id, yes):
+    def op(c):
+        if not yes:
+            click.confirm(f"Delete run #{run_id}?", abort=True)
+        c.delete_run(run_id)
+        click.echo(f"Run #{run_id} deleted.")
+    _remote(op)
+
+
+def _delete_runs_remote(project, git_ref, kind, status, before_date, yes):
+    if git_ref:
+        click.echo("WARNING: --ref is not supported over --remote; ignoring.")
+    if not any([project, kind, status, before_date]):
+        click.echo("ERROR: At least one filter is required "
+                   "(--project, --kind, --status, --before).", err=True)
+        raise SystemExit(1)
+    if not yes:
+        click.confirm("Delete all matching runs on the coordinator?", abort=True)
+
+    def op(c):
+        result = c.delete_runs(project=project, kind=kind, status=status,
+                               before=before_date, confirm=True)
+        click.echo(f"Deleted {result.get('deleted', 0)} run(s).")
+    _remote(op)
+
+
+def _list_projects_remote():
+    _remote(lambda c: _format_projects(c.list_projects()))
+
+
+def _add_project_remote(name, github, git_url, opp_env_name, deps):
+    dep_list = [d.strip() for d in deps.split(",") if d.strip()] if deps else []
+
+    def op(c):
+        p = c.add_project(name, github=github, git_url=git_url,
+                          opp_env_name=opp_env_name, deps=dep_list)
+        click.echo(f"Project '{p['name']}' added (deps={p.get('deps')}).")
+    _remote(op)
+
+
+def _sync_catalog_remote():
+    def op(c):
+        result = c.sync_catalog()
+        click.echo(f"Catalog sync complete: {result.get('new_projects', 0)} new "
+                   f"projects, {result.get('new_versions', 0)} new versions.")
+    _remote(op)
+
+
+def _list_versions_remote(project):
+    _remote(lambda c: _format_versions(c.list_versions(project=project)))
+
+
+def _add_version_remote(project, label, git_ref, opp_env_version, deps):
+    import json as _json
+    resolved = _json.loads(deps) if deps else None
+
+    def op(c):
+        v = c.add_version(project, label, git_ref=git_ref,
+                          opp_env_version=opp_env_version, deps=resolved)
+        click.echo(f"Version '{label}' added for project '{project}' "
+                   f"(ref: {v.get('git_ref')})")
+    _remote(op)
+
+
+def _list_matrices_remote():
+    _remote(lambda c: _format_matrices(c.list_matrices()))
+
+
+def _create_matrix_remote(name, project, kinds, modes, os_names, os_versions,
+                          distros, distro_versions, flavors, flavor_versions,
+                          compilers, compiler_versions, arches, versions, refs,
+                          ref_range, deps, isolation, toolchain, opp_file, replace):
+    from opp_ci.scheduler import _build_matrix_config
+
+    try:
+        config = _build_matrix_config(
+            project=project, kinds=kinds, modes=modes, versions=versions,
+            os_names=os_names, os_versions=os_versions,
+            distros=distros, distro_versions=distro_versions,
+            flavors=flavors, flavor_versions=flavor_versions,
+            compilers=compilers, compiler_versions=compiler_versions,
+            arches=arches, refs=refs, ref_range=ref_range,
+            deps=deps, isolation=isolation, toolchain=toolchain,
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+    # The config carries ref_range under its own key; the REST create
+    # endpoint takes it as a sibling field, so lift it out.
+    ref_range_dict = config.pop("ref_range", None)
+
+    from opp_ci.client import OppCiClientError
+
+    def op(c):
+        try:
+            result = c.create_matrix(name, project, config,
+                                     opp_file=opp_file, ref_range=ref_range_dict)
+        except OppCiClientError as e:
+            if e.status_code == 409 and replace:
+                # Matrices are immutable server-side (no matrix-delete
+                # endpoint), so the local delete-then-create --replace
+                # affordance has no remote equivalent.
+                click.echo("ERROR: --replace is not supported over --remote "
+                           "(the coordinator has no matrix-delete endpoint). "
+                           "Use a different --name, or replace it on the "
+                           "coordinator host.", err=True)
+                raise SystemExit(1)
+            raise
+        click.echo(f"Matrix '{result['name']}' created "
+                   f"({result.get('jobs_count', '?')} jobs when expanded).")
+    _remote(op)
+
+
+def _run_matrix_remote(matrix_name, **kwargs):
+    if not matrix_name:
+        click.echo("ERROR: --remote run-matrix requires --matrix NAME "
+                   "(inline/anonymous specs are local-only).", err=True)
+        raise SystemExit(1)
+
+    def op(c):
+        result = c.run_matrix(matrix_name)
+        click.echo(f"Matrix '{result['matrix']}' queued "
+                   f"{result['jobs_queued']} job(s): {result['run_ids']}")
+    _remote(op)
+
+
+def _seed_projects_remote():
+    def op(c):
+        r = c.seed_projects()
+        click.echo(f"Core projects seeded ({r.get('inserted', 0)} new).")
+    _remote(op)
+
+
+def _seed_platforms_remote():
+    def op(c):
+        r = c.seed_platforms()
+        click.echo(f"Platforms seeded: {r.get('os_inserted', 0)} new OS row(s), "
+                   f"{r.get('compilers_inserted', 0)} new compiler row(s).")
+    _remote(op)
+
+
+def _seed_matrices_remote():
+    def op(c):
+        r = c.seed_matrices()
+        click.echo(f"Seeded {r.get('inserted', 0)} default matrices.")
+    _remote(op)
+
+
+def _user_create_remote(username, role, password, update_password):
+    if password is None:
+        password = click.prompt("Password", hide_input=True,
+                                confirmation_prompt=True)
+
+    def op(c):
+        u = c.create_user(username, password, role=role,
+                          update_password=update_password)
+        click.echo(f"User '{u['username']}' "
+                   f"{'updated' if update_password else 'created'} "
+                   f"(role={u['role']}).")
+    _remote(op)
+
+
+def _user_list_remote():
+    _remote(lambda c: _format_users(c.list_users()))
+
+
+def _user_disable_remote(username):
+    def op(c):
+        c.update_user(username, enabled=False)
+        click.echo(f"User '{username}' disabled.")
+    _remote(op)
+
+
+def _worker_register_remote(name, tags, auto_tags, concurrency):
+    explicit = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    detected = _detect_capability_tags() if auto_tags else []
+    seen, tag_list = set(), []
+    for t in detected + explicit:
+        if t not in seen:
+            tag_list.append(t)
+            seen.add(t)
+
+    def op(c):
+        w = c.register_worker(name, tags=tag_list, concurrency=concurrency)
+        click.echo(f"Worker '{w['name']}' registered.")
+        click.echo(f"  ID:    {w['id']}")
+        click.echo(f"  Token: {w['token']}")
+        click.echo(f"  Tags:  {tag_list}")
+        if auto_tags and detected:
+            click.echo(f"  (detected: {', '.join(detected)} on THIS host — "
+                       f"usually not the worker host under --remote)")
+    _remote(op)
+
+
+def _worker_list_remote():
+    _remote(lambda c: _format_workers(c.list_workers()))
+
+
+def _token_create_remote(name, role):
+    def op(c):
+        t = c.create_token(name, role=role)
+        click.echo("Token created:")
+        click.echo(f"  Name:  {t['name']}")
+        click.echo(f"  Role:  {t['role']}")
+        click.echo(f"  Token: {t['token']}")
+    _remote(op)
+
+
+def _token_list_remote():
+    _remote(lambda c: _format_tokens(c.list_tokens()))
+
+
+def _token_revoke_remote(token_id):
+    def op(c):
+        c.revoke_token(token_id)
+        click.echo(f"Token #{token_id} revoked.")
+    _remote(op)
+
+
+def _rule_create_remote(project, rule_type, pattern, matrix_name, replace):
+    def op(c):
+        if replace:
+            for r in c.list_rules():
+                if (r.get("project_name") == project
+                        and r.get("rule_type") == rule_type
+                        and r.get("pattern") == pattern
+                        and (r.get("matrix_name") or None) == (matrix_name or None)):
+                    c.delete_rule(r["id"])
+        r = c.create_rule(project, rule_type, pattern, matrix_name=matrix_name)
+        matrix_desc = r.get("matrix_name") or "(smoke only)"
+        click.echo(f"Rule #{r['id']}: {project} {rule_type} '{pattern}' "
+                   f"-> {matrix_desc}")
+    _remote(op)
+
+
+def _rule_list_remote():
+    _remote(lambda c: _format_rules(c.list_rules()))
+
+
+def _rule_delete_remote(rule_id):
+    def op(c):
+        c.delete_rule(rule_id)
+        click.echo(f"Rule #{rule_id} deleted.")
+    _remote(op)
+
+
+def _rule_test_webhook_remote(project, ref, event_type, sha, pr_number):
+    api_event = "pr" if event_type == "pr" else "push"
+
+    def op(c):
+        result = c.test_webhook(project, ref, api_event, sha=sha,
+                                pr_number=pr_number)
+        click.echo(f"Result: {result}")
+    _remote(op)
+
+
+def _image_build_matrix_remote(matrix_name, push):
+    """Remote handler for `image build-matrix`: read the matrix from the
+    coordinator, then build the images locally (podman lives here, not on
+    the coordinator host)."""
+    from opp_ci.scheduler import expand_matrix
+
+    def op(c):
+        matrices = [m for m in c.list_matrices() if m["name"] == matrix_name]
+        if not matrices:
+            click.echo(f"Matrix '{matrix_name}' not found on coordinator.")
+            return
+        matrix = matrices[0]
+        jobs = expand_matrix(matrix["project"], matrix.get("config") or {})
+        _build_matrix_images(jobs, matrix_name, push)
+    _remote(op)
+
+
+def _resolve_deps_info(project_version, pins):
+    """`resolve-deps` is a pure local computation over opp_env metadata."""
+    click.echo("resolve-deps runs locally (it queries opp_env metadata); "
+               "--remote has no effect. Re-run without --remote.")
+
+
+def _build_matrix_images(jobs, matrix_name, push):
+    """Build every opp-ci-runner image referenced by a matrix's expansion.
+
+    Shared by the local and remote `image build-matrix` paths — the only
+    difference is where the matrix definition came from. Building always
+    happens on THIS host (podman is local).
+    """
+    seen = set()
+    for job in jobs:
+        if (job.get("isolation") or "none") != "podman":
+            continue
+        deps = job.get("resolved_deps") or {}
+        omnetpp_version = deps.get("omnetpp") if isinstance(deps, dict) else None
+        key = (
+            job.get("toolchain") or "none",
+            job.get("os"), job.get("os_version"),
+            job.get("distro"), job.get("distro_version"),
+            job.get("flavor"), job.get("flavor_version"),
+            job.get("compiler"), job.get("compiler_version"),
+            omnetpp_version,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        toolchain_arg = "nix" if key[0] == "nix" else "host"
+        click.echo(f"  → building image for {key}")
+        _build_one_image(
+            os_name=key[1], os_version=key[2],
+            distro=key[3], distro_version=key[4],
+            flavor=key[5], flavor_version=key[6],
+            compiler=key[7], compiler_version=key[8],
+            omnetpp_version=key[9], toolchain=toolchain_arg, push=push,
+        )
+    click.echo(f"Built {len(seen)} image(s) for matrix '{matrix_name}'")
+
+
 @main.command()
+@remoteable(_refuse_remote("init-db"))
 def init_db():
     """Create database tables."""
     Base.metadata.create_all(engine)
@@ -42,6 +635,7 @@ def init_db():
 @click.option("--preserve-tokens", is_flag=True,
               help="Snapshot api_tokens and workers rows and restore them after the reset, "
                    "so external systems (GitHub Actions, remote workers) keep working.")
+@remoteable(_refuse_remote("reset-db"))
 def reset_db(yes, preserve_tokens):
     """Drop all tables and recreate them (destructive!)."""
     if not yes:
@@ -321,6 +915,7 @@ def _run_remote(project, kinds, git_ref, *, mode=None,
               help="TLS certificate file (default $OPP_CI_SERVE_TLS_CERT_FILE)")
 @click.option("--key", "key_file", default=None,
               help="TLS private key file (default $OPP_CI_SERVE_TLS_KEY_FILE)")
+@remoteable(_refuse_remote("serve"))
 def serve(host, port, cert_file, key_file):
     """Start the web UI server."""
     import os
@@ -395,6 +990,7 @@ def serve(host, port, cert_file, key_file):
 @click.option("--bits", default=4096, type=int, help="RSA key size.")
 @click.option("--dry-run", is_flag=True,
               help="Print the PEMs to stdout instead of writing to --out.")
+@remoteable(_refuse_remote("tls-selfsign"))
 def tls_selfsign(host, extra_sans, out_dir, days, bits, dry_run):
     """Generate a self-signed TLS cert + key for lab / smoke-test use.
 
@@ -542,6 +1138,7 @@ def _status_where(query, status):
 @click.option("--kind", default=None, help="Filter by test kind")
 @click.option("--status", default=None, help="Filter by status (PASS/FAIL/ERROR/queued/running/cancelled)")
 @click.option("--limit", default=20, help="Max rows to show")
+@remoteable(_list_runs_remote)
 def list_runs(project, git_ref, kind, status, limit):
     """List test runs."""
     session = SessionLocal()
@@ -579,6 +1176,7 @@ def list_runs(project, git_ref, kind, status, limit):
 
 @main.command("show-run")
 @click.argument("run_id", type=int)
+@remoteable(_show_run_remote)
 def show_run(run_id):
     """Show details of a specific test run."""
     session = SessionLocal()
@@ -620,6 +1218,7 @@ def show_run(run_id):
 @main.command("delete-run")
 @click.argument("run_id", type=int)
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+@remoteable(_delete_run_remote)
 def delete_run(run_id, yes):
     """Delete a single test run by ID."""
     session = SessionLocal()
@@ -646,6 +1245,7 @@ def delete_run(run_id, yes):
 @click.option("--status", default=None, help="Filter by status (PASS/FAIL/ERROR/running/queued)")
 @click.option("--before", "before_date", default=None, help="Delete runs started before this date (YYYY-MM-DD)")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+@remoteable(_delete_runs_remote)
 def delete_runs(project, git_ref, kind, status, before_date, yes):
     """Delete multiple test runs matching the given filters."""
     if not any([project, git_ref, kind, status, before_date]):
@@ -696,6 +1296,7 @@ def delete_runs(project, git_ref, kind, status, before_date, yes):
 @click.option("--kind", default=None, help="Filter by test kind")
 @click.option("--status", default=None, help="Filter by status (PASS/FAIL/ERROR)")
 @click.option("--limit", default=20, help="Max rows to show")
+@remoteable(_show_results_remote)
 def show_results(project, git_ref, kind, status, limit):
     """Show test run results (alias for list-runs)."""
     session = SessionLocal()
@@ -731,6 +1332,7 @@ def show_results(project, git_ref, kind, status, limit):
 
 
 @main.command("seed-projects")
+@remoteable(_seed_projects_remote)
 def seed_projects_cmd():
     """Seed the database with core projects from the catalog."""
     from opp_ci.catalog import seed_projects
@@ -744,6 +1346,7 @@ def seed_projects_cmd():
 
 
 @main.command("seed-platforms")
+@remoteable(_seed_platforms_remote)
 def seed_platforms_cmd():
     """Seed the OS and Compiler tables from opp_ci/podman/platforms.yml.
 
@@ -768,6 +1371,7 @@ def seed_platforms_cmd():
 @click.option("--git-url", default=None, help="Git clone URL")
 @click.option("--opp-env-name", default=None, help="opp_env project name (defaults to --name)")
 @click.option("--deps", default=None, help="Comma-separated dependency project names (e.g. omnetpp,inet)")
+@remoteable(_add_project_remote)
 def add_project_cmd(name, github, git_url, opp_env_name, deps):
     """Register a new project in the database."""
     Base.metadata.create_all(engine)
@@ -808,6 +1412,7 @@ def add_project_cmd(name, github, git_url, opp_env_name, deps):
 
 
 @main.command("sync-catalog")
+@remoteable(_sync_catalog_remote)
 def sync_catalog_cmd():
     """Sync projects from the opp_env catalog into the database.
 
@@ -825,6 +1430,7 @@ def sync_catalog_cmd():
 
 
 @main.command("list-projects")
+@remoteable(_list_projects_remote)
 def list_projects():
     """List known projects with last test status and GitHub info."""
     Base.metadata.create_all(engine)
@@ -863,31 +1469,6 @@ def list_projects():
         session.close()
 
 
-def _parse_deps_axis(deps_str):
-    """Parse 'omnetpp=6.3.0,6.2.0;inet=4.5' into {"omnetpp": ["6.3.0","6.2.0"], "inet": ["4.5"]}."""
-    result = {}
-    for part in deps_str.split(";"):
-        part = part.strip()
-        if not part:
-            continue
-        if "=" not in part:
-            raise click.ClickException(f"Invalid --deps format: expected 'name=ver1,ver2', got '{part}'")
-        name, versions = part.split("=", 1)
-        result[name.strip()] = [v.strip() for v in versions.split(",") if v.strip()]
-    return result
-
-
-def _parse_ref_range(ref_range_str):
-    """Parse a 'base..head' string into a {"base": ..., "head": ...} dict."""
-    if ".." not in ref_range_str:
-        raise click.ClickException(f"Invalid --ref-range format: expected 'base..head', got '{ref_range_str}'")
-    base, head = ref_range_str.split("..", 1)
-    base, head = base.strip(), head.strip()
-    if not base or not head:
-        raise click.ClickException(f"Invalid --ref-range format: both base and head must be non-empty")
-    return {"base": base, "head": head}
-
-
 @main.command("create-matrix")
 @click.option("--name", required=True, help="Matrix name (e.g. inet-default)")
 @click.option("--project", required=True, help="Project name")
@@ -916,6 +1497,7 @@ def _parse_ref_range(ref_range_str):
 @click.option("--toolchain", default=None, help="Comma-separated toolchain values: 'none' and/or 'nix' (cross-product axis)")
 @click.option("--opp-file", "opp_file", default=None, help="Path to the project's .opp file (for opp_repl project discovery)")
 @click.option("--replace", is_flag=True, help="Replace existing matrix with the same name")
+@remoteable(_create_matrix_remote)
 def create_matrix(name, project, kinds, modes, os_names, os_versions,
                   distros, distro_versions, flavors, flavor_versions,
                   compilers, compiler_versions, arches, versions, refs,
@@ -933,46 +1515,23 @@ def create_matrix(name, project, kinds, modes, os_names, os_versions,
     (--distro Ubuntu,Fedora --distro-version 24.04,41) styles.
     Same for --compiler / --compiler-version.
     """
-    if refs and ref_range:
-        click.echo("ERROR: --refs and --ref-range are mutually exclusive.")
-        return
+    from opp_ci.scheduler import _build_matrix_config
+    try:
+        config = _build_matrix_config(
+            project=project, kinds=kinds, modes=modes, versions=versions,
+            os_names=os_names, os_versions=os_versions,
+            distros=distros, distro_versions=distro_versions,
+            flavors=flavors, flavor_versions=flavor_versions,
+            compilers=compilers, compiler_versions=compiler_versions,
+            arches=arches, refs=refs, ref_range=ref_range,
+            deps=deps, isolation=isolation, toolchain=toolchain,
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e))
 
     Base.metadata.create_all(engine)
     session = SessionLocal()
     try:
-        config = {
-            "kinds": [k.strip() for k in kinds.split(",")],
-            "modes": [m.strip() for m in modes.split(",")],
-            "versions": [v.strip() for v in versions.split(",")] if versions else [project],
-        }
-        if ref_range:
-            config["ref_range"] = _parse_ref_range(ref_range)
-        elif refs:
-            config["refs"] = [r.strip() for r in refs.split(",")]
-        if os_names:
-            config["os"] = [o.strip() for o in os_names.split(",")]
-        if os_versions:
-            config["os_version"] = [o.strip() for o in os_versions.split(",")]
-        if distros:
-            config["distro"] = [d.strip() for d in distros.split(",")]
-        if distro_versions:
-            config["distro_version"] = [d.strip() for d in distro_versions.split(",")]
-        if flavors:
-            config["flavor"] = [f.strip() for f in flavors.split(",")]
-        if flavor_versions:
-            config["flavor_version"] = [f.strip() for f in flavor_versions.split(",")]
-        if compilers:
-            config["compiler"] = [c.strip() for c in compilers.split(",")]
-        if compiler_versions:
-            config["compiler_version"] = [c.strip() for c in compiler_versions.split(",")]
-        if arches:
-            config["arch"] = [a.strip() for a in arches.split(",")]
-        if deps:
-            config["deps"] = _parse_deps_axis(deps)
-        if isolation:
-            config["isolation"] = [v.strip() for v in isolation.split(",")]
-        if toolchain:
-            config["toolchain"] = [v.strip() for v in toolchain.split(",")]
         existing = session.execute(
             select(TestMatrix).where(TestMatrix.name == name)
         ).scalar_one_or_none()
@@ -1007,6 +1566,7 @@ def create_matrix(name, project, kinds, modes, os_names, os_versions,
 
 
 @main.command("list-matrices")
+@remoteable(_list_matrices_remote)
 def list_matrices():
     """List defined test matrices."""
     Base.metadata.create_all(engine)
@@ -1121,6 +1681,7 @@ def _generate_anonymous_matrix_name(project):
 @click.option("--follow", is_flag=True,
               help="Stream per-cell progress until the matrix terminates")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
+@remoteable(_run_matrix_remote)
 def run_matrix(matrix_name, spec_file, project, kinds, modes, refs, single_ref,
                versions, os_names, os_versions, distros, distro_versions,
                flavors, flavor_versions, compilers, compiler_versions, arches,
@@ -1618,6 +2179,7 @@ def show_matrix_run(matrix_run_id, unexpected_only):
 
 
 @main.command("seed-matrices")
+@remoteable(_seed_matrices_remote)
 def seed_matrices_cmd():
     """Seed the database with default matrix configurations."""
     from opp_ci.scheduler import DEFAULT_MATRICES
@@ -1643,6 +2205,7 @@ def seed_matrices_cmd():
 @click.option("--ref", "git_ref", default=None, help="Git ref (branch, tag, or SHA)")
 @click.option("--opp-env-version", default=None, help="opp_env version string (e.g. inet-4.5)")
 @click.option("--deps", default=None, help="Resolved dependencies as JSON (e.g. '{\"omnetpp\": \"6.1\"}')")
+@remoteable(_add_version_remote)
 def add_version(project, label, git_ref, opp_env_version, deps):
     """Register a version (git ref / opp_env version) for a project."""
     import json as _json
@@ -1673,6 +2236,7 @@ def add_version(project, label, git_ref, opp_env_version, deps):
 
 @main.command("list-versions")
 @click.option("--project", default=None, help="Filter by project name")
+@remoteable(_list_versions_remote)
 def list_versions(project):
     """List registered versions for projects."""
     Base.metadata.create_all(engine)
@@ -1708,6 +2272,7 @@ def list_versions(project):
 @main.command("resolve-deps")
 @click.argument("project_version")
 @click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
+@remoteable(_resolve_deps_info)
 def resolve_deps_cmd(project_version, pins):
     """Resolve dependencies for a project version via opp_env.
 
@@ -1760,6 +2325,7 @@ _USER_ROLES = ("readonly", "submitter", "admin")
 @click.option("--password", default=None, help="Password (prompted if omitted)")
 @click.option("--update-password", is_flag=True,
               help="If the user already exists, update their password and role")
+@remoteable(_user_create_remote)
 def user_create(username, role, password, update_password):
     """Create (or update) a local web UI user.
 
@@ -1806,6 +2372,7 @@ def user_create(username, role, password, update_password):
 
 
 @user_group.command("list")
+@remoteable(_user_list_remote)
 def user_list():
     """List web UI users."""
     from opp_ci.db.models import User
@@ -1831,6 +2398,7 @@ def user_list():
 
 @user_group.command("disable")
 @click.argument("username")
+@remoteable(_user_disable_remote)
 def user_disable(username):
     """Disable a user (logs them out and blocks future logins)."""
     from opp_ci.db.models import User
@@ -1941,6 +2509,7 @@ def _detect_capability_tags():
 
 
 @worker_group.command("detect-tags")
+@remoteable(_refuse_remote("worker detect-tags"))
 def worker_detect_tags():
     """Print the capability tags this host would advertise (one per line)."""
     for tag in _detect_capability_tags():
@@ -1954,6 +2523,7 @@ def worker_detect_tags():
               help="Worker token (default from $OPP_CI_WORKER_TOKEN)")
 @click.option("--poll-interval", default=10, help="Seconds between polls (default: 10)")
 @click.option("--heartbeat-interval", default=30, help="Seconds between heartbeats (default: 30)")
+@remoteable(_refuse_remote("worker start"))
 def worker_start(coordinator, token, poll_interval, heartbeat_interval):
     """Start a worker agent that polls the coordinator for jobs.
 
@@ -1990,6 +2560,7 @@ def worker_start(coordinator, token, poll_interval, heartbeat_interval):
 @click.option("--auto-tags/--no-auto-tags", default=False,
               help="Detect os:/compiler:/podman/nix tags from this host and union them with --tags")
 @click.option("--concurrency", default=1, help="Max concurrent jobs")
+@remoteable(_worker_register_remote)
 def worker_register(name, tags, auto_tags, concurrency):
     """Register a new worker in the local database and print its token."""
     Base.metadata.create_all(engine)
@@ -2028,6 +2599,7 @@ def worker_register(name, tags, auto_tags, concurrency):
 
 
 @worker_group.command("list")
+@remoteable(_worker_list_remote)
 def worker_list():
     """List registered workers."""
     Base.metadata.create_all(engine)
@@ -2061,6 +2633,7 @@ def token_group():
 @token_group.command("create")
 @click.option("--name", required=True, help="Token name/description")
 @click.option("--role", required=True, type=click.Choice(["readonly", "submitter", "worker", "admin"]), help="Token role")
+@remoteable(_token_create_remote)
 def token_create(name, role):
     """Create a new API token."""
     Base.metadata.create_all(engine)
@@ -2078,6 +2651,7 @@ def token_create(name, role):
 
 
 @token_group.command("list")
+@remoteable(_token_list_remote)
 def token_list():
     """List API tokens."""
     Base.metadata.create_all(engine)
@@ -2103,6 +2677,7 @@ def token_list():
 
 @token_group.command("revoke")
 @click.argument("token_id", type=int)
+@remoteable(_token_revoke_remote)
 def token_revoke(token_id):
     """Disable an API token by ID."""
     Base.metadata.create_all(engine)
@@ -2135,6 +2710,7 @@ def rule_group():
 @click.option("--pattern", required=True, help="Glob pattern (e.g. 'master', 'topic/*', '*')")
 @click.option("--matrix", "matrix_name", default=None, help="Matrix name to run (omit for smoke-only)")
 @click.option("--replace", is_flag=True, help="Replace existing rule with the same project/type/pattern/matrix")
+@remoteable(_rule_create_remote)
 def rule_create(project, rule_type, pattern, matrix_name, replace):
     """Create an auto-test rule for GitHub events."""
     Base.metadata.create_all(engine)
@@ -2186,6 +2762,7 @@ def rule_create(project, rule_type, pattern, matrix_name, replace):
 
 
 @rule_group.command("list")
+@remoteable(_rule_list_remote)
 def rule_list():
     """List auto-test rules."""
     Base.metadata.create_all(engine)
@@ -2211,6 +2788,7 @@ def rule_list():
 
 @rule_group.command("delete")
 @click.argument("rule_id", type=int)
+@remoteable(_rule_delete_remote)
 def rule_delete(rule_id):
     """Delete an auto-test rule by ID."""
     Base.metadata.create_all(engine)
@@ -2235,6 +2813,7 @@ def rule_delete(rule_id):
 @click.option("--type", "event_type", default="push", type=click.Choice(["push", "pr"]), help="Event type")
 @click.option("--sha", default="0000000000000000000000000000000000000000", help="Commit SHA (default: dummy)")
 @click.option("--pr-number", default=None, type=int, help="PR number (for pr events)")
+@remoteable(_rule_test_webhook_remote)
 def rule_test_webhook(project, ref, event_type, sha, pr_number):
     """Simulate a webhook event to test rule matching (dry-run style)."""
     Base.metadata.create_all(engine)
@@ -2296,6 +2875,7 @@ def internal_group():
 @click.option("--mode", default=None)
 @click.option("--opp-file", default=None)
 @click.option("--git-ref", default=None)
+@remoteable(_refuse_remote("internal run-direct"))
 def internal_run_direct(project, kind, mode, opp_file, git_ref):
     """Run a single test by calling opp_repl directly (host-toolchain path).
 
@@ -2339,9 +2919,28 @@ def image_group():
 @click.option("--toolchain", type=click.Choice(["host", "nix"]), required=True,
               help="Whether the compiler comes from the OS package manager (host) or opp_env/Nix")
 @click.option("--push", is_flag=True, help="Push the built image to the configured registry")
+@remoteable(_refuse_remote("image build"))
 def image_build(os_name, os_version, distro, distro_version, flavor, flavor_version,
                 compiler, compiler_version, omnetpp_version, toolchain, push):
     """Build one opp-ci-runner image for a (toolchain, platform, compiler, omnetpp) combination."""
+    _build_one_image(
+        os_name=os_name, os_version=os_version,
+        distro=distro, distro_version=distro_version,
+        flavor=flavor, flavor_version=flavor_version,
+        compiler=compiler, compiler_version=compiler_version,
+        omnetpp_version=omnetpp_version, toolchain=toolchain, push=push,
+    )
+
+
+def _build_one_image(*, os_name, os_version, distro, distro_version,
+                     flavor, flavor_version, compiler, compiler_version,
+                     omnetpp_version, toolchain, push):
+    """Resolve a platform, derive the runner image tag, and build it locally.
+
+    Plain function (no click context) so both the `image build` command
+    and `_build_matrix_images` share one build path. Building always runs
+    against the local podman daemon.
+    """
     from opp_ci.executor import build_runner_image
     from opp_ci import platforms
 
@@ -2391,12 +2990,14 @@ def image_build(os_name, os_version, distro, distro_version, flavor, flavor_vers
 @image_group.command("build-matrix")
 @click.option("--matrix", "matrix_name", required=True, help="Name of a matrix whose images to build")
 @click.option("--push", is_flag=True, help="Push each built image to the configured registry")
-@click.pass_context
-def image_build_matrix(ctx, matrix_name, push):
+@remoteable(_image_build_matrix_remote)
+def image_build_matrix(matrix_name, push):
     """Build every opp-ci-runner image referenced by a matrix's expansion.
 
     Walks the expanded job list, derives the unique image tags for jobs
-    with isolation=podman, and invokes 'opp_ci image build' for each one.
+    with isolation=podman, and builds each one locally. With --remote the
+    matrix definition is read from the coordinator (since the laptop's DB
+    doesn't have it) but the build still happens on this host.
     """
     from opp_ci.scheduler import expand_matrix
 
@@ -2409,40 +3010,6 @@ def image_build_matrix(ctx, matrix_name, push):
             click.echo(f"Matrix '{matrix_name}' not found.")
             return
         jobs = expand_matrix(matrix.project, matrix.config)
-
-        seen = set()
-        for job in jobs:
-            if (job.get("isolation") or "none") != "podman":
-                continue
-            deps = job.get("resolved_deps") or {}
-            omnetpp_version = deps.get("omnetpp") if isinstance(deps, dict) else None
-            key = (
-                job.get("toolchain") or "none",
-                job.get("os"), job.get("os_version"),
-                job.get("distro"), job.get("distro_version"),
-                job.get("flavor"), job.get("flavor_version"),
-                job.get("compiler"), job.get("compiler_version"),
-                omnetpp_version,
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            toolchain_arg = "nix" if key[0] == "nix" else "host"
-            click.echo(f"  → building image for {key}")
-            ctx.invoke(
-                image_build,
-                os_name=key[1],
-                os_version=key[2],
-                distro=key[3],
-                distro_version=key[4],
-                flavor=key[5],
-                flavor_version=key[6],
-                compiler=key[7],
-                compiler_version=key[8],
-                omnetpp_version=key[9],
-                toolchain=toolchain_arg,
-                push=push,
-            )
-        click.echo(f"Built {len(seen)} image(s) for matrix '{matrix_name}'")
+        _build_matrix_images(jobs, matrix_name, push)
     finally:
         session.close()
