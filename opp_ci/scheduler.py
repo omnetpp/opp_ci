@@ -86,6 +86,87 @@ def _parse_compiler(combined):
     return (combined, None)
 
 
+def _parse_deps_axis(deps_str):
+    """Parse 'omnetpp=6.3.0,6.2.0;inet=4.5' into a deps-axis dict.
+
+    Returns {"omnetpp": ["6.3.0", "6.2.0"], "inet": ["4.5"]}. Raises
+    ValueError on a malformed clause. Framework-agnostic so both the CLI
+    and the REST handler can call it.
+    """
+    result = {}
+    for part in deps_str.split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise ValueError(
+                f"Invalid deps format: expected 'name=ver1,ver2', got '{part}'")
+        name, versions = part.split("=", 1)
+        result[name.strip()] = [v.strip() for v in versions.split(",") if v.strip()]
+    return result
+
+
+def _parse_ref_range(ref_range_str):
+    """Parse a 'base..head' string into {"base": ..., "head": ...}.
+
+    Raises ValueError if the format is wrong or either side is empty.
+    """
+    if ".." not in ref_range_str:
+        raise ValueError(
+            f"Invalid ref-range format: expected 'base..head', got '{ref_range_str}'")
+    base, head = ref_range_str.split("..", 1)
+    base, head = base.strip(), head.strip()
+    if not base or not head:
+        raise ValueError("Invalid ref-range format: both base and head must be non-empty")
+    return {"base": base, "head": head}
+
+
+def _build_matrix_config(*, project, kinds, modes="release", versions=None,
+                         os_names=None, os_versions=None,
+                         distros=None, distro_versions=None,
+                         flavors=None, flavor_versions=None,
+                         compilers=None, compiler_versions=None,
+                         arches=None, refs=None, ref_range=None,
+                         deps=None, isolation=None, toolchain=None):
+    """Compose a matrix-config dict from `create-matrix`'s flat CLI flags.
+
+    The single source of truth for "CLI flags → matrix config": both the
+    local `opp_ci create-matrix` body and its `--remote` handler (which
+    composes the config client-side, then posts it to `POST /matrices`)
+    call this, so the two paths can never drift. Each flag is a
+    comma-separated string (or None);
+    `deps` is the `name=v1,v2;…` axis syntax and `ref_range` is
+    `base..head`. Raises ValueError on conflicting or malformed input.
+    """
+    if refs and ref_range:
+        raise ValueError("refs and ref-range are mutually exclusive.")
+
+    def _split(s):
+        return [x.strip() for x in s.split(",") if x.strip()]
+
+    config = {
+        "kinds": _split(kinds),
+        "modes": _split(modes),
+        "versions": _split(versions) if versions else [project],
+    }
+    if ref_range:
+        config["ref_range"] = _parse_ref_range(ref_range)
+    elif refs:
+        config["refs"] = _split(refs)
+    for key, value in (
+        ("os", os_names), ("os_version", os_versions),
+        ("distro", distros), ("distro_version", distro_versions),
+        ("flavor", flavors), ("flavor_version", flavor_versions),
+        ("compiler", compilers), ("compiler_version", compiler_versions),
+        ("arch", arches), ("isolation", isolation), ("toolchain", toolchain),
+    ):
+        if value:
+            config[key] = _split(value)
+    if deps:
+        config["deps"] = _parse_deps_axis(deps)
+    return config
+
+
 def _resolve_level_axis(config, name_key, version_key):
     """Return a list of ``(name, version)`` tuples for one platform level.
 
