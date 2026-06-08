@@ -41,7 +41,7 @@ tests with hardware perf counters). See the [full comparison](doc/concepts.md#wh
 - **Result storage** — PostgreSQL database for structured querying and historical tracking
 - **GitHub integration** — webhook-driven testing on push/PR, status checks
 - **Web dashboard** — browse results, start tests, compare runs
-- **Remote workers** — distributed execution on self-hosted or cloud machines
+- **Remote workers and remote CLI control** — distributed execution on self-hosted or cloud machines, plus full coordinator control from your laptop via `opp_ci --remote`
 
 ## Related Projects
 
@@ -64,6 +64,7 @@ Day-to-day:
 - [Deployment](doc/deployment.md) — local, cloud, hybrid
 - [systemd service](doc/systemd.md) — run as a service on Ubuntu
 - [Workers](doc/workers.md) — register and run remote workers
+- [Remote CLI control](doc/remote_cli.md) — drive the coordinator from your laptop with `opp_ci --remote`
 - [GitHub integration](doc/github_integration.md) — webhooks, statuses, rules
 - [Git notes](doc/git_notes.md) — per-commit CI summaries delivered via `git fetch`
 - [Python client](doc/python_client.md) — programmatic API access

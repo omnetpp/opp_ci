@@ -66,15 +66,46 @@ ci.list_workers()
 ```python
 ci.register_worker(name="builder-1", tags=["linux", "amd64"], concurrency=4)
 ci.create_token(name="github-bot", role="submitter")
+
+ci.add_project("mm1k", github="levy/mm1k", deps=["omnetpp"])
+ci.add_version("mm1k", "v1.0", git_ref="main")
+ci.sync_catalog()
+ci.create_user("alice", "secret", role="admin")
+ci.update_user("alice", enabled=False)
+ci.revoke_token(7)
+ci.delete_run(42)
+ci.delete_runs(project="mm1k", status="FAIL", before="2025-01-01", confirm=True)
+ci.create_rule("inet", "tag", "*", matrix_name="inet-default")
+```
+
+Every `opp_ci --remote <command>` is one-to-one with an `OppCiClient`
+method, so the client covers the full coordinator surface: projects,
+versions, matrices, runs, workers, tokens, users, and GitHub rules. See
+[Remote CLI Control](remote_cli.md) for the command↔method mapping and
+role requirements.
+
+## Errors
+
+Every method raises `OppCiClientError` on failure, with a tidy `.detail`
+(the server's `detail:` field on a 4xx/5xx, or the transport error
+message) and a `.status_code` (None for connection errors / timeouts):
+
+```python
+from opp_ci.client import OppCiClient, OppCiClientError
+
+try:
+    ci.list_users()
+except OppCiClientError as e:
+    print(e.detail, e.status_code)   # "Requires role 'admin', got 'readonly'" 403
 ```
 
 ## CLI equivalent
 
-The CLI accepts `--remote` to route through the API instead of running
-locally:
+The CLI accepts `--remote` (or `OPP_CI_REMOTE=1`) to route through the
+API instead of running locally:
 
 ```bash
-export OPP_CI_COORDINATOR_URL=https://ci.omnetpp.org
+export OPP_CI_COORDINATOR_URL=https://ci.omnetpp.org   # no /api suffix
 export OPP_CI_API_TOKEN=<submitter-token>
 
 opp_ci --remote run --project inet-4.5 --kind smoke,fingerprint --ref master
@@ -82,4 +113,4 @@ opp_ci --remote list-runs --project inet --status FAIL
 ```
 
 Useful for one-off submissions, cron jobs, or scripting around the CI
-without writing Python.
+without writing Python. Full walkthrough: [Remote CLI Control](remote_cli.md).

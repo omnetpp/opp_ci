@@ -11,7 +11,20 @@ For full per-command flags, run `opp_ci <command> --help`.
 | Option | Description |
 |---|---|
 | `-v`, `--verbose` | Enable debug-level logging |
-| `--remote` | Submit to a remote coordinator instead of running locally. Uses `OPP_CI_COORDINATOR_URL` and `OPP_CI_API_TOKEN`. |
+| `--remote` / `--local` | Drive a remote coordinator over the REST API instead of the local DB. Default from `OPP_CI_REMOTE`; uses `OPP_CI_COORDINATOR_URL` and `OPP_CI_API_TOKEN`. See [Remote CLI Control](remote_cli.md). |
+
+## Remote control
+
+Almost every command is dual-mode: with `--remote` it calls the
+coordinator's REST API; without it, it runs against the local database.
+Read commands need a `readonly` token, submission needs `submitter`, and
+management (`delete-*`, `seed-*`, `user`, `token`, `worker register`,
+`rule`) needs `admin`. Host-local commands (`init-db`, `reset-db`,
+`serve`, `tls-selfsign`, `worker start`, `worker detect-tags`,
+`image build`, `internal run-direct`) refuse `--remote` with a non-zero
+exit. See [Remote CLI Control](remote_cli.md) for the full matrix,
+role mapping, and notes (e.g. `run-matrix --remote` is named-matrix-only;
+`image build-matrix --remote` reads remotely but builds locally).
 
 ## Database
 

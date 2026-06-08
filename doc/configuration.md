@@ -8,8 +8,10 @@ All configuration is via environment variables, read by
 | Variable | Default | Description |
 |---|---|---|
 | `OPP_CI_DATABASE_URL` | `sqlite:///opp_ci.db` | SQLAlchemy connection string. Use `postgresql://user:pass@host/db` in production. |
-| `OPP_CI_COORDINATOR_URL` | auto-detected `http://<host-ip>:8080` | Coordinator API base URL. Read by `--remote` CLI mode and by workers. |
-| `OPP_CI_API_TOKEN` | *(empty)* | API token used by `--remote` CLI submissions. |
+| `OPP_CI_COORDINATOR_URL` | auto-detected `http://<host-ip>:8080` | Coordinator API base URL (bare origin; the CLI appends `/api`). Read by `--remote` CLI mode and by workers. |
+| `OPP_CI_API_TOKEN` | *(empty)* | Bearer token used by `--remote` CLI calls. |
+| `OPP_CI_REMOTE` | `0` | Default for the `--remote` flag. Set to `1` to make every command remote without typing `--remote`; override per-command with `--local`. See [Remote CLI Control](remote_cli.md). |
+| `OPP_CI_HTTP_DEBUG` | `0` | When `1`, allow `urllib3` request logging under `--verbose` (off by default so bearer tokens don't leak into scrollback). |
 | `OPP_CI_REFERENCE_PLATFORM` | `Ubuntu 24.04/gcc-13` | Default platform spec for auto-generated default matrices. |
 
 ## Executor: project source location

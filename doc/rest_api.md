@@ -32,6 +32,34 @@ Implementation: `opp_ci/auth.py`.
 | `/api/runs/matrix` | POST | submitter | (Legacy) Expand a named matrix and queue all jobs as one `TestMatrixRun`. Body: `{"matrix_name": "..."}`. Response includes `matrix_run_id` and `run_ids`. Prefer the more flexible `/api/matrix-runs` below. |
 | `/api/runs` | GET | readonly | List runs. Filters: `project`, `kind`, `status` (matches `lifecycle`), `os`, `os_version`, `distro`, `distro_version`, `flavor`, `flavor_version`, `limit`. |
 | `/api/runs/{id}` | GET | readonly | Run detail including `stdout`, `stderr`, and `details` (read off the same `TestRun` row). |
+| `/api/runs/{id}` | DELETE | admin | Delete a single run. 204 on success, 404 if missing. |
+| `/api/runs` | DELETE | admin | Bulk-delete by filter (`project`, `kind`, `status`, `before` = `YYYY-MM-DD`). Requires `confirm=true`, and at least one filter unless `all=true`. Returns `{"deleted": <n>}`. |
+
+### Projects & versions
+
+| Endpoint | Method | Role | Purpose |
+|---|---|---|---|
+| `/api/projects` | GET | readonly | List projects (`name`, `opp_env_name`, `github`, `git_url`, `deps`). |
+| `/api/projects` | POST | submitter | Create a project. Body: `{"name", "github": "owner/repo"?, "git_url"?, "opp_env_name"?, "deps": [...]}`. 409 on duplicate. |
+| `/api/projects/sync-catalog` | POST | admin | Refresh the catalog from opp_env server-side. Synchronous (30+ s). Returns `{"new_projects", "new_versions"}`. |
+| `/api/projects/{name}/versions` | GET | readonly | Versions registered for one project. |
+| `/api/projects/{name}/versions` | POST | submitter | Register a version. Body: `{"label", "git_ref"?, "opp_env_version"?, "deps"?}`. |
+| `/api/versions` | GET | readonly | All versions across every project. |
+
+### Matrices
+
+| Endpoint | Method | Role | Purpose |
+|---|---|---|---|
+| `/api/matrices` | GET | readonly | List matrices with their `config`. |
+| `/api/matrices` | POST | submitter | Create a matrix from a pre-built `config` dict. Optional `opp_file`, `ref_range`. The `opp_ci --remote create-matrix` command composes this `config` client-side via `scheduler._build_matrix_config` (same code as the local command) and posts it here. |
+
+### Admin seed
+
+| Endpoint | Method | Role | Purpose |
+|---|---|---|---|
+| `/api/admin/seed/projects` | POST | admin | Seed core projects. Returns `{"inserted", "total"}`. |
+| `/api/admin/seed/platforms` | POST | admin | Seed OS/Compiler rows from `platforms.yml`. Returns `{"os_inserted", "compilers_inserted"}`. |
+| `/api/admin/seed/matrices` | POST | admin | Seed the default matrices. Returns `{"inserted", "total"}`. |
 
 ### Matrix runs (rollup view + anonymous launcher)
 
@@ -75,6 +103,15 @@ applies forward-only; historical verdicts pin their own
 |---|---|---|---|
 | `/api/tokens` | POST | admin | Create a new API token |
 | `/api/tokens` | GET | admin | List API tokens (values masked) |
+| `/api/tokens/{id}` | DELETE | admin | Disable (revoke) a token. Does not hard-delete the row. 204 on success. |
+
+### Users
+
+| Endpoint | Method | Role | Purpose |
+|---|---|---|---|
+| `/api/users` | POST | admin | Create (or, with `update_password: true`, update) a local-login user. Body: `{"username", "password", "role", "update_password"?}`. Password is hashed before storage and never echoed back. |
+| `/api/users` | GET | admin | List web UI users. |
+| `/api/users/{username}` | PATCH | admin | Patch `enabled`, `role`, and/or `password`. |
 
 ### GitHub
 
@@ -84,6 +121,7 @@ applies forward-only; historical verdicts pin their own
 | `/api/github/rules` | GET | readonly | List AutoTestRule entries |
 | `/api/github/rules` | POST | admin | Create an AutoTestRule |
 | `/api/github/rules/{id}` | DELETE | admin | Delete a rule |
+| `/api/github/rules/test-webhook` | POST | admin | Drive the webhook handler with a synthesized payload. Body: `{"project", "ref", "event_type": "push"\|"pr", "sha"?, "pr_number"?}`. Returns the handler's result dict. |
 
 ### Git notes
 
