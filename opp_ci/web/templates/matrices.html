@@ -33,7 +33,7 @@
         {% for m in matrices %}
         <tr data-href="/matrices/{{ m.id }}" style="cursor:pointer;">
             <td>{{ m.id }}</td>
-            <td>{{ m.name }}</td>
+            <td>{{ m.display_name }}</td>
             <td>{{ m.project }}</td>
             <td>{{ m.config.get("tests", [])|join(", ") }}</td>
             <td>{{ m.config.get("modes", [])|join(", ") }}</td>
@@ -45,7 +45,7 @@
                 <form method="post" action="/matrices/{{ m.id }}/delete" class="inline-form">
 
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete matrix {{ m.name }}?')">Delete</button>
+                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete matrix {{ m.display_name }}?')">Delete</button>
                 </form>
             </td>
         </tr>

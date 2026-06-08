@@ -8,10 +8,62 @@
 {% endif %}
 
 <div class="card">
-    <h2>Single Run</h2>
+    <h2>Run a named test</h2>
+    <form method="get" action="/runs/new" class="filters">
+        <input type="text" name="name" value="{{ filter_name }}" placeholder="Name contains…">
+        <input type="text" name="project" value="{{ filter_project }}" placeholder="Project contains…">
+        <button type="submit">Filter</button>
+        {% if filter_name or filter_project %}<a href="/runs/new" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+    </form>
+    {% if named_tests %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Project</th>
+                <th>Kind</th>
+                <th>Mode</th>
+                <th>OS / Distro</th>
+                <th>Compiler</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for t in named_tests %}
+            <tr>
+                <td>{{ t.name }}</td>
+                <td>{{ t.project }}</td>
+                <td>{{ t.kind }}</td>
+                <td>{{ t.mode or "-" }}</td>
+                <td>{{ t.distro or t.os or "-" }}{% if t.distro_version %} {{ t.distro_version }}{% endif %}</td>
+                <td>{{ t.compiler or "-" }}{% if t.compiler_version %} {{ t.compiler_version }}{% endif %}</td>
+                <td>
+                    <form method="post" action="/runs/new/named" class="inline-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="test_id" value="{{ t.id }}">
+                        <button type="submit" class="btn btn-success btn-sm">Run</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No named tests{% if filter_name or filter_project %} match the filter{% endif %}. Name a test below to make it reusable.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Run an anonymous test</h2>
     <form method="post" action="/runs/new">
 
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="name">Name (optional)</label>
+                <input type="text" name="name" id="name" placeholder="leave blank for anonymous">
+            </div>
+        </div>
         <div class="form-row">
             <div class="form-group">
                 <label for="project">Project</label>
@@ -155,26 +207,6 @@
             </div>
         </div>
         <button type="submit" class="btn btn-success">Queue Run</button>
-    </form>
-</div>
-
-<div class="card">
-    <h2>Run from Matrix</h2>
-    <form method="post" action="/runs/new/matrix">
-
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="form-row">
-            <div class="form-group">
-                <label for="matrix_name">Matrix</label>
-                <select name="matrix_name" id="matrix_name" required>
-                    <option value="">— select matrix —</option>
-                    {% for m in matrices %}
-                    <option value="{{ m.name }}">{{ m.name }} ({{ m.project }})</option>
-                    {% endfor %}
-                </select>
-            </div>
-        </div>
-        <button type="submit" class="btn btn-primary">Queue Matrix</button>
     </form>
 </div>
 

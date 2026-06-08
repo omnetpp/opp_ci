@@ -6,6 +6,26 @@
     <span class="badge badge-{{ run.effective_status }}">{{ run.effective_status }}</span>
 </h2>
 
+{% if message %}
+<div class="flash flash-{{ message_type or 'success' }}">{{ message }}</div>
+{% endif %}
+
+{% if current_user and current_user.role in ("submitter", "admin") %}
+<div class="card">
+    <h2>Test name</h2>
+    <form method="post" action="/tests/{{ run.test_id }}/rename" class="filters">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="return_to" value="/runs/{{ run.id }}">
+        <input type="text" name="name" value="{{ run.test.name or '' }}" placeholder="(anonymous — set a name to find &amp; re-run it)">
+        <button type="submit" class="btn btn-primary btn-sm">Save name</button>
+    </form>
+    <p style="font-size:0.85rem; color:var(--muted); margin-top:0.25rem;">
+        Naming this test lets you run it by name later. The name is a label on the
+        test's coordinates; leaving it blank keeps the test anonymous.
+    </p>
+</div>
+{% endif %}
+
 <div class="card">
     <table>
         <tr><th style="width:150px;">Project</th><td>{{ run.project }}</td></tr>

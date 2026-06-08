@@ -1,9 +1,25 @@
 {% extends "base.html" %}
 {% block title %}opp_ci — Matrix run #{{ mr.id }}{% endblock %}
 {% block content %}
-<h2 style="margin-bottom: 1rem;">Matrix run #{{ mr.id }}
-    {% if matrix %}— <a href="/matrices/{{ matrix.id }}">{{ matrix.name }}</a>{% endif %}
-</h2>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+    <h2 style="margin:0;">Matrix run #{{ mr.id }}
+        {% if matrix %}— <a href="/matrices/{{ matrix.id }}">{{ matrix.display_name }}</a>{% endif %}
+    </h2>
+    {% if current_user and current_user.role in ("submitter", "admin") %}
+    <div style="display:flex; gap:0.5rem;">
+        <form method="post" action="/matrix-runs/{{ mr.id }}/rerun" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-primary btn-sm">Re-run</button>
+        </form>
+        {% if not mr.completed_at %}
+        <form method="post" action="/matrix-runs/{{ mr.id }}/cancel" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-danger btn-sm">Cancel</button>
+        </form>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
 
 <div class="card">
     <h2>Rollup</h2>

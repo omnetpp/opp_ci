@@ -20,8 +20,9 @@ from opp_ci.db.models import (
     TestVerdict, TestVerdictKind, User, Version, Worker,
 )
 from opp_ci.persistence import (
-    create_matrix_run, create_test_run, enqueue_job, get_current_expectation,
-    get_or_create_test, insert_expectation,
+    create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
+    get_current_expectation, get_matrix_by_name, get_or_create_test,
+    get_test_by_name, insert_expectation, set_matrix_name, set_test_name,
 )
 
 _ANSI_RE = re.compile(r'\x1b\[([0-9;]*)m')
@@ -371,12 +372,19 @@ def results_page(
 @web_router.get("/runs/new", response_class=HTMLResponse)
 def run_new_form(request: Request,
                  current_user: User = Depends(require_user("submitter")),
-                 message: str = Query(default=None), message_type: str = Query(default=None)):
+                 message: str = Query(default=None), message_type: str = Query(default=None),
+                 name: str = Query(default=None), project: str = Query(default=None)):
     from opp_ci import platforms
     session = SessionLocal()
     try:
         projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
-        matrices = session.execute(select(TestMatrix).order_by(TestMatrix.name)).scalars().all()
+        # Named tests for the "run by name" table (filterable by name/project).
+        named_q = select(Test).where(Test.name.isnot(None)).order_by(Test.name)
+        if name:
+            named_q = named_q.where(Test.name.ilike(f"%{name}%"))
+        if project:
+            named_q = named_q.where(Test.project.ilike(f"%{project}%"))
+        named_tests = session.execute(named_q).scalars().all()
         os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
         compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
 
@@ -418,7 +426,9 @@ def run_new_form(request: Request,
 
         return templates.TemplateResponse(request, "run_new.html", {
             "projects": projects,
-            "matrices": matrices,
+            "named_tests": named_tests,
+            "filter_name": name or "",
+            "filter_project": project or "",
             "os_entries": os_entries,
             "compilers": compilers,
             "os_suggestions": os_suggestions,
@@ -444,6 +454,7 @@ def run_new_submit(
     current_user: User = Depends(require_user("submitter")),
     project: str = Form(...),
     kind: str = Form(...),
+    name: str = Form(default=""),
     mode: str = Form(default=""),
     git_ref: str = Form(default=""),
     version: str = Form(default=""),
@@ -498,6 +509,15 @@ def run_new_submit(
             "opp_file": None,
         }
         test = get_or_create_test(session, coord)
+        if name.strip():
+            try:
+                set_test_name(session, test, name)
+            except ValueError as e:
+                session.rollback()
+                return RedirectResponse(
+                    url=f"/runs/new?message={e}&message_type=error",
+                    status_code=303,
+                )
         run = create_test_run(
             session,
             test_id=test.id,
@@ -511,59 +531,30 @@ def run_new_submit(
         session.close()
 
 
-@web_router.post("/runs/new/matrix", dependencies=[Depends(require_csrf)])
-def run_new_matrix(request: Request,
-                   current_user: User = Depends(require_user("submitter")),
-                   matrix_name: str = Form(...)):
-    from opp_ci.scheduler import expand_matrix
-
+@web_router.post("/runs/new/named", dependencies=[Depends(require_csrf)])
+def run_new_named(request: Request,
+                  current_user: User = Depends(require_user("submitter")),
+                  test_id: int = Form(...),
+                  git_ref: str = Form(default=""),
+                  version: str = Form(default="")):
+    """Queue a fresh TestRun for a previously-named Test (picked from the
+    by-name table on the run page)."""
     session = SessionLocal()
     try:
-        matrix = session.execute(
-            select(TestMatrix).where(TestMatrix.name == matrix_name)
-        ).scalar_one_or_none()
-        if matrix is None:
+        test = session.get(Test, test_id)
+        if test is None:
             return RedirectResponse(
-                url=f"/runs/new?message=Matrix+not+found&message_type=error",
+                url="/runs/new?message=Test+not+found&message_type=error",
                 status_code=303,
             )
-
-        proj = session.execute(
-            select(Project).where(Project.name == matrix.project)
-        ).scalar_one_or_none()
-        matrix_run = create_matrix_run(
+        run = create_test_run(
             session,
-            matrix_id=matrix.id,
-            trigger="web",
-            github_owner=proj.github_owner if proj else None,
-            github_repo=proj.github_repo if proj else None,
+            test_id=test.id,
+            git_ref=git_ref or None,
+            version=version or None,
         )
-
-        from opp_ci.fingerprint import compute_cache_fingerprint
-
-        jobs = expand_matrix(matrix.project, matrix.config)
-        queued = 0
-        for job in jobs:
-            fp = compute_cache_fingerprint(
-                job, project=matrix.project, opp_file=matrix.opp_file,
-            )
-            enqueue_job(
-                session, job,
-                project=matrix.project,
-                opp_file=matrix.opp_file,
-                matrix_run_id=matrix_run.id,
-                use_cache=True,
-                cache_fingerprint=fp,
-            )
-            queued += 1
         session.commit()
-        # enqueue_job returns (TestRun, TestVerdict); we discard both — the
-        # rollup is refreshed inside enqueue_job and the IDs aren't needed here.
-        msg = f"Queued+{queued}+jobs+from+matrix+{matrix_name}"
-        return RedirectResponse(
-            url=f"/queue?message={msg}&message_type=success",
-            status_code=303,
-        )
+        return RedirectResponse(url=f"/runs/{run.id}", status_code=303)
     finally:
         session.close()
 
@@ -613,7 +604,8 @@ def run_cancel(run_id: int, current_user: User = Depends(require_user("submitter
 
 
 @web_router.get("/runs/{run_id}", response_class=HTMLResponse)
-def run_detail(request: Request, run_id: int, current_user: User = Depends(require_user())):
+def run_detail(request: Request, run_id: int, current_user: User = Depends(require_user()),
+               message: str = Query(default=None), message_type: str = Query(default=None)):
     session = SessionLocal()
     try:
         run = session.execute(
@@ -624,8 +616,36 @@ def run_detail(request: Request, run_id: int, current_user: User = Depends(requi
 
         return templates.TemplateResponse(request, "run_detail.html", {
             "run": run,
+            "message": message,
+            "message_type": message_type,
             **_template_globals(request, current_user),
         })
+    finally:
+        session.close()
+
+
+@web_router.post("/tests/{test_id}/rename", dependencies=[Depends(require_csrf)])
+def test_rename(test_id: int,
+                current_user: User = Depends(require_user("submitter")),
+                name: str = Form(default=""),
+                return_to: str = Form(default="/runs")):
+    """Set or clear a Test's name. Blank clears it (back to anonymous)."""
+    session = SessionLocal()
+    try:
+        test = session.get(Test, test_id)
+        if test is None:
+            return RedirectResponse(url=return_to, status_code=303)
+        try:
+            set_test_name(session, test, name)
+            session.commit()
+        except ValueError as e:
+            session.rollback()
+            sep = "&" if "?" in return_to else "?"
+            return RedirectResponse(
+                url=f"{return_to}{sep}message={e}&message_type=error",
+                status_code=303,
+            )
+        return RedirectResponse(url=return_to, status_code=303)
     finally:
         session.close()
 
@@ -889,55 +909,55 @@ def matrices_list(
         session.close()
 
 
+def _matrix_form_context(session):
+    """Shared template context for the matrix axis form (suggestions +
+    per-project versions). Used by both `matrix_new_form` (save a matrix)
+    and `matrix_run_new_form` (run a matrix)."""
+    from opp_ci import platforms
+    projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
+    os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
+    compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
+
+    project_by_id = {p.id: p.name for p in projects}
+    versions_by_project = {p.name: [] for p in projects}
+    for v in session.execute(select(Version)).scalars().all():
+        pname = project_by_id.get(v.project_id)
+        if pname is None:
+            continue
+        versions_by_project[pname].append({
+            "opp_env_version": v.opp_env_version or "",
+            "git_ref": v.git_ref or "",
+            "label": v.label or v.opp_env_version or v.git_ref or "",
+        })
+    for pname in versions_by_project:
+        versions_by_project[pname].sort(key=lambda d: d["label"])
+
+    omnetpp_versions = sorted({
+        v["opp_env_version"] for v in versions_by_project.get("omnetpp", []) if v["opp_env_version"]
+    })
+
+    return {
+        "projects": projects,
+        "os_suggestions": list(platforms.OS_NAMES),
+        "os_version_suggestions": sorted({o.version for o in os_entries if o.version}),
+        "distro_suggestions": sorted({platforms.display_name(n) for n in platforms.DISTROS}),
+        "flavor_suggestions": sorted({platforms.display_name(n) for n in platforms.FLAVORS}),
+        "arch_suggestions": _arch_suggestions(os_entries),
+        "compiler_suggestions": sorted({c.name for c in compilers if c.name}),
+        "compiler_version_suggestions": sorted({c.version for c in compilers if c.version}),
+        "versions_by_project": versions_by_project,
+        "omnetpp_versions": omnetpp_versions,
+    }
+
+
 @web_router.get("/matrices/new", response_class=HTMLResponse)
 def matrix_new_form(request: Request,
                     current_user: User = Depends(require_user("submitter")),
                     error: str = Query(default=None)):
-    from opp_ci import platforms
     session = SessionLocal()
     try:
-        projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
-        os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
-        compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
-
-        os_suggestions = list(platforms.OS_NAMES)
-        os_version_suggestions = sorted({o.version for o in os_entries if o.version})
-        distro_suggestions = sorted({platforms.display_name(n) for n in platforms.DISTROS})
-        flavor_suggestions = sorted({platforms.display_name(n) for n in platforms.FLAVORS})
-        arch_suggestions = _arch_suggestions(os_entries)
-        compiler_suggestions = sorted({c.name for c in compilers if c.name})
-        compiler_version_suggestions = sorted({c.version for c in compilers if c.version})
-
-        all_versions = session.execute(select(Version)).scalars().all()
-        project_by_id = {p.id: p.name for p in projects}
-        versions_by_project = {p.name: [] for p in projects}
-        for v in all_versions:
-            pname = project_by_id.get(v.project_id)
-            if pname is None:
-                continue
-            versions_by_project[pname].append({
-                "opp_env_version": v.opp_env_version or "",
-                "git_ref": v.git_ref or "",
-                "label": v.label or v.opp_env_version or v.git_ref or "",
-            })
-        for pname in versions_by_project:
-            versions_by_project[pname].sort(key=lambda d: d["label"])
-
-        omnetpp_versions = sorted({
-            v["opp_env_version"] for v in versions_by_project.get("omnetpp", []) if v["opp_env_version"]
-        })
-
         return templates.TemplateResponse(request, "matrix_new.html", {
-            "projects": projects,
-            "os_suggestions": os_suggestions,
-            "os_version_suggestions": os_version_suggestions,
-            "distro_suggestions": distro_suggestions,
-            "flavor_suggestions": flavor_suggestions,
-            "arch_suggestions": arch_suggestions,
-            "compiler_suggestions": compiler_suggestions,
-            "compiler_version_suggestions": compiler_version_suggestions,
-            "versions_by_project": versions_by_project,
-            "omnetpp_versions": omnetpp_versions,
+            **_matrix_form_context(session),
             "error": error,
             **_template_globals(request, current_user),
         })
@@ -947,7 +967,8 @@ def matrix_new_form(request: Request,
 
 @web_router.get("/matrices/{matrix_id}", response_class=HTMLResponse)
 def matrix_detail(request: Request, matrix_id: int,
-                  current_user: User = Depends(require_user())):
+                  current_user: User = Depends(require_user()),
+                  error: str = Query(default=None)):
     from opp_ci.scheduler import expand_matrix
 
     session = SessionLocal()
@@ -971,6 +992,7 @@ def matrix_detail(request: Request, matrix_id: int,
             "matrix": matrix,
             "jobs": jobs,
             "recent_runs": recent_runs,
+            "error": error,
             **_template_globals(request, current_user),
         })
     finally:
@@ -982,6 +1004,49 @@ def _split_csv(value):
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _build_matrix_config_from_form(*, project, kinds, modes, versions,
+                                   omnetpp_versions, refs, os, os_version,
+                                   distro, distro_version, flavor, flavor_version,
+                                   arch, compiler, compiler_version, isolation,
+                                   toolchain, ref_range_base, ref_range_head):
+    """Assemble a matrix `config` dict from the axis form fields.
+
+    Shared by `matrix_create` (save) and `matrix_run_new_anonymous` (run)
+    so both interpret the CSV axes, omnetpp deps, and ref-range the same
+    way."""
+    config = {}
+    axes = {
+        "kinds": _split_csv(kinds),
+        "modes": _split_csv(modes),
+        "versions": _split_csv(versions),
+        "refs": _split_csv(refs),
+        "os": _split_csv(os),
+        "os_version": _split_csv(os_version),
+        "distro": _split_csv(distro),
+        "distro_version": _split_csv(distro_version),
+        "flavor": _split_csv(flavor),
+        "flavor_version": _split_csv(flavor_version),
+        "arch": _split_csv(arch),
+        "compiler": _split_csv(compiler),
+        "compiler_version": _split_csv(compiler_version),
+        "isolation": _split_csv(isolation),
+        "toolchain": _split_csv(toolchain),
+    }
+    for key, values in axes.items():
+        if values:
+            config[key] = values
+
+    omnetpp_values = _split_csv(omnetpp_versions)
+    if omnetpp_values and project != "omnetpp":
+        config["deps"] = {"omnetpp": omnetpp_values}
+
+    if ref_range_base.strip() and ref_range_head.strip():
+        config["ref_range"] = {"base": ref_range_base.strip(), "head": ref_range_head.strip()}
+        config.pop("refs", None)
+
+    return config
 
 
 @web_router.post("/matrices/create", dependencies=[Depends(require_csrf)])
@@ -1010,47 +1075,24 @@ def matrix_create(
 ):
     session = SessionLocal()
     try:
-        existing = session.execute(
-            select(TestMatrix).where(TestMatrix.name == name)
-        ).scalar_one_or_none()
-        if existing:
+        config = _build_matrix_config_from_form(
+            project=project, kinds=kinds, modes=modes, versions=versions,
+            omnetpp_versions=omnetpp_versions, refs=refs, os=os,
+            os_version=os_version, distro=distro, distro_version=distro_version,
+            flavor=flavor, flavor_version=flavor_version, arch=arch,
+            compiler=compiler, compiler_version=compiler_version,
+            isolation=isolation, toolchain=toolchain,
+            ref_range_base=ref_range_base, ref_range_head=ref_range_head,
+        )
+        try:
+            matrix = create_matrix_from_axes(
+                session, project=project, config=config, name=name,
+            )
+        except ValueError:
             return RedirectResponse(
                 url="/matrices/new?error=Matrix+already+exists",
                 status_code=303,
             )
-
-        config = {}
-        axes = {
-            "kinds": _split_csv(kinds),
-            "modes": _split_csv(modes),
-            "versions": _split_csv(versions),
-            "refs": _split_csv(refs),
-            "os": _split_csv(os),
-            "os_version": _split_csv(os_version),
-            "distro": _split_csv(distro),
-            "distro_version": _split_csv(distro_version),
-            "flavor": _split_csv(flavor),
-            "flavor_version": _split_csv(flavor_version),
-            "arch": _split_csv(arch),
-            "compiler": _split_csv(compiler),
-            "compiler_version": _split_csv(compiler_version),
-            "isolation": _split_csv(isolation),
-            "toolchain": _split_csv(toolchain),
-        }
-        for key, values in axes.items():
-            if values:
-                config[key] = values
-
-        omnetpp_values = _split_csv(omnetpp_versions)
-        if omnetpp_values and project != "omnetpp":
-            config["deps"] = {"omnetpp": omnetpp_values}
-
-        if ref_range_base.strip() and ref_range_head.strip():
-            config["ref_range"] = {"base": ref_range_base.strip(), "head": ref_range_head.strip()}
-            config.pop("refs", None)
-
-        matrix = TestMatrix(name=name, project=project, config=config)
-        session.add(matrix)
         session.commit()
         return RedirectResponse(url=f"/matrices/{matrix.id}", status_code=303)
     finally:
@@ -1068,6 +1110,29 @@ def matrix_delete(matrix_id: int, current_user: User = Depends(require_user("sub
             session.delete(matrix)
             session.commit()
         return RedirectResponse(url="/matrices", status_code=303)
+    finally:
+        session.close()
+
+
+@web_router.post("/matrices/{matrix_id}/rename", dependencies=[Depends(require_csrf)])
+def matrix_rename(matrix_id: int,
+                  current_user: User = Depends(require_user("submitter")),
+                  name: str = Form(default="")):
+    """Set or clear a matrix's name. Blank clears it (anonymous)."""
+    session = SessionLocal()
+    try:
+        matrix = session.get(TestMatrix, matrix_id)
+        if matrix is None:
+            return RedirectResponse(url="/matrices", status_code=303)
+        try:
+            set_matrix_name(session, matrix, name)
+            session.commit()
+        except ValueError as e:
+            session.rollback()
+            return RedirectResponse(
+                url=f"/matrices/{matrix_id}?error={e}", status_code=303,
+            )
+        return RedirectResponse(url=f"/matrices/{matrix_id}", status_code=303)
     finally:
         session.close()
 
@@ -1112,6 +1177,188 @@ def matrix_runs_list(
             "filter_since": since or "",
             **_template_globals(request, current_user),
         })
+    finally:
+        session.close()
+
+
+def _queue_matrix_run(session, matrix, *, trigger):
+    """Create a TestMatrixRun for `matrix`, expand it, and enqueue every
+    cell. Returns the TestMatrixRun. Caller commits. Shared by the named
+    run, anonymous run, and rerun handlers."""
+    from opp_ci.scheduler import expand_matrix
+    from opp_ci.fingerprint import compute_cache_fingerprint
+
+    proj = session.execute(
+        select(Project).where(Project.name == matrix.project)
+    ).scalar_one_or_none()
+    matrix_run = create_matrix_run(
+        session,
+        matrix_id=matrix.id,
+        trigger=trigger,
+        github_owner=proj.github_owner if proj else None,
+        github_repo=proj.github_repo if proj else None,
+    )
+    for job in expand_matrix(matrix.project, matrix.config):
+        fp = compute_cache_fingerprint(
+            job, project=matrix.project, opp_file=matrix.opp_file,
+        )
+        enqueue_job(
+            session, job,
+            project=matrix.project,
+            opp_file=matrix.opp_file,
+            matrix_run_id=matrix_run.id,
+            use_cache=True,
+            cache_fingerprint=fp,
+        )
+    return matrix_run
+
+
+# NOTE: the literal `/matrix-runs/new` routes MUST be declared before the
+# parameterised `/matrix-runs/{matrix_run_id}` route below, or FastAPI
+# captures "new" as a matrix_run_id and 404s.
+@web_router.get("/matrix-runs/new", response_class=HTMLResponse)
+def matrix_run_new_form(request: Request,
+                        current_user: User = Depends(require_user("submitter")),
+                        message: str = Query(default=None), message_type: str = Query(default=None),
+                        name: str = Query(default=None), project: str = Query(default=None)):
+    session = SessionLocal()
+    try:
+        named_q = select(TestMatrix).where(TestMatrix.name.isnot(None)).order_by(TestMatrix.name)
+        if name:
+            named_q = named_q.where(TestMatrix.name.ilike(f"%{name}%"))
+        if project:
+            named_q = named_q.where(TestMatrix.project.ilike(f"%{project}%"))
+        named_matrices = session.execute(named_q).scalars().all()
+        return templates.TemplateResponse(request, "matrix_run_new.html", {
+            **_matrix_form_context(session),
+            "named_matrices": named_matrices,
+            "filter_name": name or "",
+            "filter_project": project or "",
+            "message": message,
+            "message_type": message_type,
+            **_template_globals(request, current_user),
+        })
+    finally:
+        session.close()
+
+
+@web_router.post("/matrix-runs/new/named", dependencies=[Depends(require_csrf)])
+def matrix_run_new_named(request: Request,
+                         current_user: User = Depends(require_user("submitter")),
+                         matrix_id: int = Form(...)):
+    """Run a saved (named) matrix picked from the by-name table."""
+    session = SessionLocal()
+    try:
+        matrix = session.get(TestMatrix, matrix_id)
+        if matrix is None:
+            return RedirectResponse(
+                url="/matrix-runs/new?message=Matrix+not+found&message_type=error",
+                status_code=303,
+            )
+        matrix_run = _queue_matrix_run(session, matrix, trigger="web")
+        session.commit()
+        return RedirectResponse(url=f"/matrix-runs/{matrix_run.id}", status_code=303)
+    finally:
+        session.close()
+
+
+@web_router.post("/matrix-runs/new/anonymous", dependencies=[Depends(require_csrf)])
+def matrix_run_new_anonymous(
+    current_user: User = Depends(require_user("submitter")),
+    name: str = Form(default=""),
+    project: str = Form(...),
+    kinds: str = Form(default=""),
+    modes: str = Form(default=""),
+    versions: str = Form(default=""),
+    omnetpp_versions: str = Form(default=""),
+    refs: str = Form(default=""),
+    os: str = Form(default=""),
+    os_version: str = Form(default=""),
+    distro: str = Form(default=""),
+    distro_version: str = Form(default=""),
+    flavor: str = Form(default=""),
+    flavor_version: str = Form(default=""),
+    arch: str = Form(default=""),
+    compiler: str = Form(default=""),
+    compiler_version: str = Form(default=""),
+    isolation: str = Form(default=""),
+    toolchain: str = Form(default=""),
+    ref_range_base: str = Form(default=""),
+    ref_range_head: str = Form(default=""),
+):
+    """Run an ad-hoc matrix from inline axes. Names it if a Name is given
+    (making it reusable), otherwise leaves it anonymous (name = NULL)."""
+    session = SessionLocal()
+    try:
+        config = _build_matrix_config_from_form(
+            project=project, kinds=kinds, modes=modes, versions=versions,
+            omnetpp_versions=omnetpp_versions, refs=refs, os=os,
+            os_version=os_version, distro=distro, distro_version=distro_version,
+            flavor=flavor, flavor_version=flavor_version, arch=arch,
+            compiler=compiler, compiler_version=compiler_version,
+            isolation=isolation, toolchain=toolchain,
+            ref_range_base=ref_range_base, ref_range_head=ref_range_head,
+        )
+        try:
+            matrix = create_matrix_from_axes(
+                session, project=project, config=config, name=name or None,
+            )
+        except ValueError as e:
+            return RedirectResponse(
+                url=f"/matrix-runs/new?message={e}&message_type=error",
+                status_code=303,
+            )
+        matrix_run = _queue_matrix_run(session, matrix, trigger="web")
+        session.commit()
+        return RedirectResponse(url=f"/matrix-runs/{matrix_run.id}", status_code=303)
+    finally:
+        session.close()
+
+
+@web_router.post("/matrix-runs/{matrix_run_id}/rerun", dependencies=[Depends(require_csrf)])
+def matrix_run_rerun(matrix_run_id: int,
+                     current_user: User = Depends(require_user("submitter"))):
+    """Re-run the same matrix as a fresh TestMatrixRun."""
+    session = SessionLocal()
+    try:
+        mr = session.get(TestMatrixRun, matrix_run_id)
+        if mr is None:
+            return RedirectResponse(url="/matrix-runs", status_code=303)
+        matrix = session.get(TestMatrix, mr.matrix_id)
+        if matrix is None:
+            return RedirectResponse(url="/matrix-runs", status_code=303)
+        new_run = _queue_matrix_run(session, matrix, trigger="rerun")
+        session.commit()
+        return RedirectResponse(url=f"/matrix-runs/{new_run.id}", status_code=303)
+    finally:
+        session.close()
+
+
+@web_router.post("/matrix-runs/{matrix_run_id}/cancel", dependencies=[Depends(require_csrf)])
+def matrix_run_cancel(matrix_run_id: int,
+                      current_user: User = Depends(require_user("submitter"))):
+    """Cancel every still-queued child run of a matrix run; running
+    children are left to finish (same rule as run_cancel). Refreshes the
+    rollup so the counters reflect the cancellations."""
+    from opp_ci.persistence import recompute_matrix_run_rollup
+    session = SessionLocal()
+    try:
+        mr = session.get(TestMatrixRun, matrix_run_id)
+        if mr is not None:
+            queued = session.execute(
+                select(TestRun).where(
+                    TestRun.matrix_run_id == matrix_run_id,
+                    TestRun.lifecycle == TestRunLifecycle.queued,
+                )
+            ).scalars().all()
+            now = datetime.datetime.utcnow()
+            for run in queued:
+                run.lifecycle = TestRunLifecycle.cancelled
+                run.finished_at = now
+            session.flush()
+            recompute_matrix_run_rollup(session, matrix_run_id)
+            session.commit()
+        return RedirectResponse(url=f"/matrix-runs/{matrix_run_id}", status_code=303)
     finally:
         session.close()
 

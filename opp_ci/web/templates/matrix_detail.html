@@ -1,12 +1,34 @@
 {% extends "base.html" %}
-{% block title %}opp_ci — Matrix: {{ matrix.name }}{% endblock %}
+{% block title %}opp_ci — Matrix: {{ matrix.display_name }}{% endblock %}
 {% block content %}
-<h2 style="margin-bottom: 1rem;">Matrix: {{ matrix.name }}</h2>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+    <h2 style="margin:0;">Matrix: {{ matrix.display_name }}</h2>
+    {% if current_user and current_user.role in ("submitter", "admin") %}
+    <form method="post" action="/matrix-runs/new/named" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="matrix_id" value="{{ matrix.id }}">
+        <button type="submit" class="btn btn-success btn-sm">Run this matrix</button>
+    </form>
+    {% endif %}
+</div>
+
+{% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+
+{% if current_user and current_user.role in ("submitter", "admin") %}
+<div class="card">
+    <h2>Name</h2>
+    <form method="post" action="/matrices/{{ matrix.id }}/rename" class="filters">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="text" name="name" value="{{ matrix.name or '' }}" placeholder="(anonymous — set a name to run it by name)">
+        <button type="submit" class="btn btn-primary btn-sm">Save name</button>
+    </form>
+</div>
+{% endif %}
 
 <div class="card">
     <h2>Configuration</h2>
     <table>
-        <tr><th style="width:150px;">Name</th><td>{{ matrix.name }}</td></tr>
+        <tr><th style="width:150px;">Name</th><td>{{ matrix.display_name }}</td></tr>
         <tr><th>Project</th><td><a href="/projects/{{ matrix.project }}">{{ matrix.project }}</a></td></tr>
         <tr><th>opp file</th><td>{{ matrix.opp_file or "-" }}</td></tr>
         <tr><th>Kinds</th><td>{{ matrix.config.get("kinds", [])|join(", ") }}</td></tr>
