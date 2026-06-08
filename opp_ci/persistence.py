@@ -396,6 +396,24 @@ def finalize_verdict_for_run(session, run_id):
     if run.lifecycle != TestRunLifecycle.finished or run.result_code is None:
         return
 
+    # Every finished run carries its own verdict. Matrix runs already have
+    # their cell(s) (created in enqueue_job); a standalone run has none, so
+    # give it a bare cell (matrix_run_id=NULL) that the loop below promotes.
+    has_verdict = session.execute(
+        select(TestVerdict.id).where(TestVerdict.test_run_id == run_id).limit(1)
+    ).scalar_one_or_none()
+    if has_verdict is None:
+        create_test_verdict(
+            session,
+            matrix_run_id=None,
+            test_id=run.test_id,
+            test_run_id=run_id,
+            expectation=None,
+            verdict=None,
+            recorded_at=None,
+            cache_hit=False,
+        )
+
     pending = session.execute(
         select(TestVerdict).where(
             TestVerdict.test_run_id == run_id,

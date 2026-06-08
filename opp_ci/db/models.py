@@ -360,19 +360,24 @@ class ExpectedTestResult(Base):
 
 
 class TestVerdict(Base):
-    """One row per cell of a TestMatrixRun.
+    """One recorded verdict of a TestRun, optionally within a TestMatrixRun.
 
-    A cell pins a Test to a specific TestRun (cache hits reuse a prior
-    row; cache misses point at a freshly-queued row) plus the
-    `ExpectedTestResult` row in force at recording time. The cell has at
-    most one promotion event (verdict written) and is then frozen. The
-    cell's lifecycle is derived from the underlying TestRun.lifecycle —
-    not stored — to avoid two sources of truth.
+    Pins a Test to a specific TestRun (cache hits reuse a prior row;
+    cache misses point at a freshly-queued row) plus the
+    `ExpectedTestResult` row in force at recording time. Has at most one
+    promotion event (verdict written) and is then frozen. Its lifecycle
+    is derived from the underlying TestRun.lifecycle — not stored — to
+    avoid two sources of truth.
+
+    `matrix_run_id` is set when the row is a cell of a TestMatrixRun;
+    NULL when it is a standalone run's own verdict (created in
+    `finalize_verdict_for_run`). Standalone rows are skipped by the
+    matrix rollup, which keys on a non-NULL `matrix_run_id`.
     """
     __tablename__ = "test_verdicts"
 
     id = Column(Integer, primary_key=True)
-    matrix_run_id = Column(Integer, ForeignKey("test_matrix_runs.id"), nullable=False, index=True)
+    matrix_run_id = Column(Integer, ForeignKey("test_matrix_runs.id"), nullable=True, index=True)
     test_id = Column(Integer, ForeignKey("tests.id"), nullable=False, index=True)
     test_run_id = Column(Integer, ForeignKey("test_runs.id"), nullable=False, index=True)
     expectation_id = Column(Integer, ForeignKey("expected_test_results.id"), nullable=True)
@@ -565,12 +570,14 @@ class TestRun(Base):
 
     @property
     def recorded_verdict(self):
-        """Verdict recorded for this run by the most recent matrix cell.
+        """Verdict recorded for this run by its most recent `TestVerdict`.
 
-        A cached run can be reused across several `TestVerdict` cells; we
-        return the verdict of the latest one (by `recorded_at`, falling
-        back to `created_at`). Returns "EXPECTED"/"UNEXPECTED"/"UNKNOWN",
-        or None if the run was never promoted in a matrix.
+        Every finished run has at least its own standalone verdict
+        (matrix_run_id NULL); a run reused across matrix cells may have
+        several. We return the latest promoted one (by `recorded_at`,
+        falling back to `created_at`). Returns
+        "EXPECTED"/"UNEXPECTED"/"UNKNOWN", or None if no verdict has been
+        recorded yet (e.g. the run never finished with a result).
         """
         promoted = [v for v in self.verdicts if v.verdict is not None]
         if not promoted:
