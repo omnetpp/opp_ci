@@ -156,6 +156,7 @@ cleanly. Behaviour preserved, logic de-duplicated.
 
 - Reuse `WORKER_HEARTBEAT_TIMEOUT` (120s default) as the staleness bound.
 - Add `OPP_CI_WORKER_REAP_INTERVAL` (default `max(15, TIMEOUT // 2)`).
+- Add `OPP_CI_MAX_RECLAIMS` (default `2`) — see "Poison-pill handling".
 
 ## Edge cases / decisions
 
@@ -176,28 +177,119 @@ cleanly. Behaviour preserved, logic de-duplicated.
   `completed_at`/verdict normally. Confirm the rollup is invoked after
   the re-run finishes (it is, via `finalize_verdict_for_run`).
 
+## Poison-pill handling
+
+A run whose own behaviour kills its worker (OOM, kernel panic, host
+reboot) would otherwise be reclaimed → re-queued → kill the next worker
+→ reclaimed → forever, and worse, take down healthy workers one by one
+while never letting its matrix run complete. We bound the blast radius
+with a per-run attempt counter that retires the run after N reclaims.
+
+### Schema — `db/models.py` (+ migration)
+
+Add to `TestRun`:
+
+```python
+reclaim_count = Column(Integer, nullable=False, default=0, server_default="0")
+```
+
+Alembic migration in `opp_ci/db/migrations/` adds the column with
+`server_default="0"` so legacy `running` rows backfill to 0. Code treats
+`None` as 0 defensively (`run.reclaim_count or 0`) for any row that
+predates the default.
+
+### Retire primitive — `persistence.py`
+
+```python
+def retire_poison_run(session, run, now):
+    """Terminally fail a run that has exhausted its reclaim budget. Marks
+    it timed_out with a synthetic ERROR outcome and resolves its matrix
+    cell so the parent TestMatrixRun can complete. Caller commits."""
+    run.lifecycle = TestRunLifecycle.timed_out
+    run.worker_id = None
+    run.finished_at = now          # started_at left as-is for forensics
+    run.result_code = TestResultCode.ERROR
+    run.stderr = (run.stderr or "") + (
+        f"\n[opp_ci] retired after {run.reclaim_count} reclaim(s): the "
+        f"run repeatedly outlived its worker (suspected crash/OOM loop)."
+    )
+    run.details = {**(run.details or {}),
+                   "reclaim_exhausted": True,
+                   "reclaim_count": run.reclaim_count}
+    finalize_verdict_for_run(session, run.id)
+```
+
+Why `timed_out` + `result_code=ERROR` (not plain `finished`): this is
+exactly the state the `timed_out` enum value was reserved for and never
+used. It keeps an honest, queryable signal ("this didn't fail on its
+merits, it never produced a verdict of its own") distinct from a genuine
+test ERROR, while `result_code=ERROR` still feeds the rollup's
+`error_count` / `actual_summary` and drives the cell verdict red.
+
+### One required `finalize_verdict_for_run` change
+
+[finalize_verdict_for_run](../../opp_ci/persistence.py#L385) currently
+early-returns unless `lifecycle == finished`
+([persistence.py:396](../../opp_ci/persistence.py#L396)). Relax the
+guard to:
+
+```python
+if run.lifecycle not in (TestRunLifecycle.finished,
+                         TestRunLifecycle.timed_out) or run.result_code is None:
+    return
+```
+
+With that, a retired run promotes its pending `TestVerdict` cell via the
+existing `compute_verdict_kind(ERROR, expectation)` path, and
+`recompute_matrix_run_rollup` — which already counts `timed_out` toward
+`all_finished`
+([persistence.py:355-357](../../opp_ci/persistence.py#L355-L357)) and
+`ERROR` toward `error_count` — sets `completed_at` and a real verdict.
+**Net effect: a poison-pill run resolves its matrix run red instead of
+wedging it open forever.** No other rollup change is needed.
+
+### Tuning
+
+- `OPP_CI_MAX_RECLAIMS` (default `2`): a run gets up to 2 free re-queues
+  to absorb genuinely-unlucky worker crashes (deploy, spot-instance
+  reclaim) before being treated as poison on the 3rd reclaim.
+- A transient infra blip thus self-heals; a real poison pill is
+  contained to at most `MAX_RECLAIMS + 1` worker casualties.
+- The reaper `log()`s retirements distinctly from re-queues so operators
+  see poison pills surfacing rather than silent infinite churn.
+
 ## Testing
 
 - Unit: `mark_stale_workers_offline` flips only online/busy + stale,
   reclaims their runs, leaves fresh and offline-registered workers
-  alone; `reclaim_orphaned_runs` clears worker_id/started_at and returns
-  count.
+  alone; `reclaim_orphaned_runs` clears worker_id/started_at, increments
+  `reclaim_count`, and returns `(requeued, retired)`.
 - Integration: register worker → poll job (run `running`) → simulate
   staleness (backdate `last_heartbeat`) → run reaper → assert run
-  `queued`, worker `offline`, `current_job_count==0` → another worker
-  polls and gets it.
+  `queued`, `reclaim_count==1`, worker `offline`, `current_job_count==0`
+  → another worker polls and gets it.
 - Integration: result POST for an already-reclaimed run is ignored
   cleanly (no crash, no double-finalize).
 - Startup: seed a `running` run on a stale worker, boot app, assert it's
   reclaimed.
+- Poison-pill: a run reclaimed `MAX_RECLAIMS + 1` times is retired —
+  assert `lifecycle==timed_out`, `result_code==ERROR`,
+  `details.reclaim_exhausted`, and that its parent `TestMatrixRun` gets
+  `completed_at` set with a red verdict (not left open).
+- `finalize_verdict_for_run` promotes a `timed_out` run's verdict cell
+  (regression guard for the relaxed lifecycle check).
 
 ## Files touched
 
+- `opp_ci/db/models.py` — `TestRun.reclaim_count` column.
+- `opp_ci/db/migrations/` — Alembic migration adding `reclaim_count`
+  with `server_default="0"`.
 - `opp_ci/persistence.py` — new `reclaim_orphaned_runs`,
-  `mark_stale_workers_offline`.
+  `mark_stale_workers_offline`, `retire_poison_run`; relax the
+  `finalize_verdict_for_run` lifecycle guard to accept `timed_out`.
 - `opp_ci/web/app.py` — `lifespan` startup reconcile + reaper task.
 - `opp_ci/auth.py` — route re-queue through shared primitive.
 - `opp_ci/web/api.py` — harden `worker_report_result` against
   reclaimed/foreign runs.
-- `opp_ci/config.py` — `OPP_CI_WORKER_REAP_INTERVAL`.
+- `opp_ci/config.py` — `OPP_CI_WORKER_REAP_INTERVAL`, `OPP_CI_MAX_RECLAIMS`.
 - tests — as above.
