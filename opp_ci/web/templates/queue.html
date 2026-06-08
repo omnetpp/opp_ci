@@ -24,7 +24,7 @@
         <tbody>
             {% for run in running %}
             <tr>
-                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.project }}</td>
                 <td>{{ run.kind }}</td>
                 <td>{{ run.git_ref or "-" }}</td>
@@ -59,7 +59,7 @@
         <tbody>
             {% for run in queued %}
             <tr>
-                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.project }}</td>
                 <td>{{ run.kind }}</td>
                 <td>{{ run.git_ref or "-" }}</td>

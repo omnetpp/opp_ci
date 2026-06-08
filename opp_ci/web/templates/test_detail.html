@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Test #{{ test.id }}{% endblock %}
+{% block content %}
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+    <h2 style="margin:0;">Test #{{ test.id }}{% if test.name %} — {{ test.name }}{% else %} <span style="color:var(--muted); font-weight:400;">(anonymous)</span>{% endif %}</h2>
+    {% if current_user and current_user.role in ("submitter", "admin") %}
+    <form method="post" action="/tests/{{ test.id }}/run" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-success btn-sm">Run this test</button>
+    </form>
+    {% endif %}
+</div>
+
+{% if message %}
+<div class="flash flash-{{ message_type or 'success' }}">{{ message }}</div>
+{% endif %}
+
+{% if current_user and current_user.role in ("submitter", "admin") %}
+<div class="card">
+    <h2>Name</h2>
+    <form method="post" action="/tests/{{ test.id }}/rename" class="filters">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="return_to" value="/tests/{{ test.id }}">
+        <input type="text" name="name" value="{{ test.name or '' }}" placeholder="(anonymous — set a name to find &amp; re-run it)">
+        <button type="submit" class="btn btn-primary btn-sm">Save name</button>
+    </form>
+    <p style="font-size:0.85rem; color:var(--muted); margin-top:0.25rem;">
+        Naming this test lets you run it by name later. The name is a label on the
+        test's coordinates; leaving it blank keeps the test anonymous.
+    </p>
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Coordinate</h2>
+    <table>
+        <tr><th style="width:170px;">Project</th><td><a href="/projects/{{ test.project }}">{{ test.project }}</a></td></tr>
+        <tr><th>Kind</th><td>{{ test.kind }}</td></tr>
+        <tr><th>Mode</th><td>{{ test.mode or "-" }}</td></tr>
+        <tr><th>OS</th><td>{% if test.os %}{{ test.os }}{% if test.os_version %} {{ test.os_version }}{% endif %}{% else %}-{% endif %}</td></tr>
+        <tr><th>Distro</th><td>{% if test.distro %}{{ test.distro|title }}{% if test.distro_version %} {{ test.distro_version }}{% endif %}{% else %}-{% endif %}</td></tr>
+        <tr><th>Flavor</th><td>{% if test.flavor %}{{ test.flavor|title }}{% if test.flavor_version %} {{ test.flavor_version }}{% endif %}{% else %}-{% endif %}</td></tr>
+        <tr><th>Arch</th><td>{{ test.arch or "-" }}</td></tr>
+        <tr><th>Compiler</th><td>{{ test.compiler or "-" }}{% if test.compiler_version %}-{{ test.compiler_version }}{% endif %}</td></tr>
+        <tr><th>Isolation / Toolchain</th><td>{{ (test.isolation or "none") }} / {{ (test.toolchain or "none") }}</td></tr>
+    </table>
+</div>
+
+<div class="card">
+    <h2>Run history ({{ runs|length }})</h2>
+    {% if runs %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Mode</th>
+                <th>Ref / Commit</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Trigger</th>
+                <th>Started</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in runs %}
+            <tr>
+                <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td>{{ run.mode or "-" }}</td>
+                {% set sha = run.commit_sha or run.github_commit_sha %}
+                <td>{% if sha %}<code title="{{ sha }}">{{ sha[:8] }}</code>{% elif run.git_ref %}{{ run.git_ref }}{% else %}-{% endif %}</td>
+                <td><span class="badge badge-{{ run.effective_status }}">{{ run.effective_status }}</span></td>
+                <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
+                <td>{{ run.trigger or "-" }}</td>
+                <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty">This test has never been run.</p>
+    {% endif %}
+</div>
+
+{% if current_user.role in ("submitter", "admin") %}
+<div class="card">
+    <h2>Set expectation</h2>
+    <form method="post" action="/tests/{{ test.id }}/expectations">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="return_to" value="/tests/{{ test.id }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Expected result</label>
+                <select name="expected_result_code">
+                    <option value="">(retract — explicit "no expectation")</option>
+                    <option value="PASS">PASS</option>
+                    <option value="FAIL">FAIL</option>
+                    <option value="ERROR">ERROR</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Reason (issue link, justification)</label>
+                <input type="text" name="reason" placeholder="e.g. tracked in #432">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Description (optional)</label>
+            <textarea name="expected_result_description" rows="2"></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Save expectation</button>
+        <span style="color:var(--muted); font-size:0.8rem;">
+            Forward-only: future matrix runs pick up this expectation.
+            Historical TestVerdict rows pin whichever expectation was in
+            force at recording time.
+        </span>
+    </form>
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Expectation history ({{ expectations|length }})</h2>
+    {% if expectations %}
+    <table>
+        <thead>
+            <tr>
+                <th>When</th>
+                <th>Code</th>
+                <th>By</th>
+                <th>Reason</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in expectations %}
+            <tr>
+                <td>{{ r.set_at.strftime("%Y-%m-%d %H:%M:%S") if r.set_at else "-" }}</td>
+                <td>
+                    {% if r.expected_result_code %}
+                        {% set c = r.expected_result_code.value %}
+                        <span class="badge badge-{{ 'passed' if c=='PASS' else ('failed' if c=='FAIL' else 'error') }}">{{ c }}</span>
+                    {% else %}
+                        <span class="badge badge-queued">retract</span>
+                    {% endif %}
+                </td>
+                <td>{{ r.set_by or "-" }}</td>
+                <td>{{ r.reason or "-" }}</td>
+                <td>{{ r.expected_result_description or "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No expectation has ever been declared for this Test.</p>
+    {% endif %}
+</div>
+
+<div class="actions">
+    <a href="/tests" class="btn btn-secondary btn-sm">&larr; Back to tests</a>
+</div>
+{% endblock %}

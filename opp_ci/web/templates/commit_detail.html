@@ -31,7 +31,7 @@
         <tbody>
             {% for run in runs %}
             <tr>
-                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.kind }}</td>
                 <td>{{ run.mode or "-" }}</td>
                 <td><span class="badge badge-{{ run.effective_status }}">{{ run.effective_status }}</span></td>
@@ -46,6 +46,6 @@
 </div>
 
 <div class="actions">
-    <a href="/runs" class="btn btn-secondary btn-sm">&larr; Back to runs</a>
+    <a href="/test-runs" class="btn btn-secondary btn-sm">&larr; Back to runs</a>
 </div>
 {% endblock %}

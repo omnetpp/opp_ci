@@ -4,9 +4,8 @@
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
     <h2 style="margin:0;">Matrix: {{ matrix.display_name }}</h2>
     {% if current_user and current_user.role in ("submitter", "admin") %}
-    <form method="post" action="/matrix-runs/new/named" class="inline-form">
+    <form method="post" action="/test-matrices/{{ matrix.id }}/run" class="inline-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="matrix_id" value="{{ matrix.id }}">
         <button type="submit" class="btn btn-success btn-sm">Run this matrix</button>
     </form>
     {% endif %}
@@ -17,7 +16,7 @@
 {% if current_user and current_user.role in ("submitter", "admin") %}
 <div class="card">
     <h2>Name</h2>
-    <form method="post" action="/matrices/{{ matrix.id }}/rename" class="filters">
+    <form method="post" action="/test-matrices/{{ matrix.id }}/rename" class="filters">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="text" name="name" value="{{ matrix.name or '' }}" placeholder="(anonymous — set a name to run it by name)">
         <button type="submit" class="btn btn-primary btn-sm">Save name</button>
@@ -124,7 +123,7 @@
         <tbody>
             {% for run in recent_runs %}
             <tr>
-                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.project }}</td>
                 <td>{{ run.kind }}</td>
                 <td>{{ run.mode or "-" }}</td>
@@ -144,17 +143,15 @@
 {% endif %}
 
 <div class="actions">
-    <form method="post" action="/runs/new/matrix" class="inline-form">
-
+    <form method="post" action="/test-matrices/{{ matrix.id }}/run" class="inline-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="matrix_name" value="{{ matrix.name }}">
-        <button type="submit" class="btn btn-success btn-sm">Run this Matrix</button>
+        <button type="submit" class="btn btn-success btn-sm">Run this matrix</button>
     </form>
-    <form method="post" action="/matrices/{{ matrix.id }}/delete" class="inline-form">
+    <form method="post" action="/test-matrices/{{ matrix.id }}/delete" class="inline-form">
 
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete matrix {{ matrix.name }}?')">Delete</button>
     </form>
-    <a href="/matrices" class="btn btn-secondary btn-sm">&larr; Back to matrices</a>
+    <a href="/test-matrices" class="btn btn-secondary btn-sm">&larr; Back to matrices</a>
 </div>
 {% endblock %}

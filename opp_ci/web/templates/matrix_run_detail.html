@@ -3,16 +3,16 @@
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
     <h2 style="margin:0;">Matrix run #{{ mr.id }}
-        {% if matrix %}— <a href="/matrices/{{ matrix.id }}">{{ matrix.display_name }}</a>{% endif %}
+        {% if matrix %}— <a href="/test-matrices/{{ matrix.id }}">{{ matrix.display_name }}</a>{% endif %}
     </h2>
     {% if current_user and current_user.role in ("submitter", "admin") %}
     <div style="display:flex; gap:0.5rem;">
-        <form method="post" action="/matrix-runs/{{ mr.id }}/rerun" class="inline-form">
+        <form method="post" action="/test-matrix-runs/{{ mr.id }}/rerun" class="inline-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit" class="btn btn-primary btn-sm">Re-run</button>
         </form>
         {% if not mr.completed_at %}
-        <form method="post" action="/matrix-runs/{{ mr.id }}/cancel" class="inline-form">
+        <form method="post" action="/test-matrix-runs/{{ mr.id }}/cancel" class="inline-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit" class="btn btn-danger btn-sm">Cancel</button>
         </form>
@@ -64,11 +64,11 @@
 
 <div class="actions">
     {% if unexpected_only %}
-        <a href="/matrix-runs/{{ mr.id }}" class="btn btn-secondary btn-sm">Show all cells</a>
+        <a href="/test-matrix-runs/{{ mr.id }}" class="btn btn-secondary btn-sm">Show all cells</a>
     {% else %}
-        <a href="/matrix-runs/{{ mr.id }}?unexpected_only=1" class="btn btn-secondary btn-sm">Show diverged + unknown only</a>
+        <a href="/test-matrix-runs/{{ mr.id }}?unexpected_only=1" class="btn btn-secondary btn-sm">Show diverged + unknown only</a>
     {% endif %}
-    <a href="/matrix-runs" class="btn btn-secondary btn-sm">&larr; Back to matrix runs</a>
+    <a href="/test-matrix-runs" class="btn btn-secondary btn-sm">&larr; Back to matrix runs</a>
 </div>
 
 <div class="card">
@@ -99,7 +99,7 @@
             {% set v = c.verdict.verdict.value if c.verdict.verdict else None %}
             <tr {% if v == 'UNEXPECTED' %}style="background:#fff5f5;"{% elif v == 'UNKNOWN' %}style="background:#fff8e6;"{% endif %}>
                 <td>#{{ c.verdict.id }}</td>
-                <td><a href="/runs/{{ c.run.id }}">#{{ c.run.id }}</a></td>
+                <td><a href="/test-runs/{{ c.run.id }}">#{{ c.run.id }}</a></td>
                 <td>{{ c.test.kind }}</td>
                 <td>{{ c.test.mode or "-" }}</td>
                 <td>
@@ -143,7 +143,7 @@
                 <td colspan="11" style="padding:0.3rem 0.8rem;">
                     <form method="post" action="/tests/{{ c.test.id }}/expectations" class="inline-form" style="display:flex; gap:0.5rem; align-items:center;">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <input type="hidden" name="return_to" value="/matrix-runs/{{ mr.id }}">
+                        <input type="hidden" name="return_to" value="/test-matrix-runs/{{ mr.id }}">
                         <label style="font-size:0.8rem; color:var(--muted);">Set expectation for this Test:</label>
                         <select name="expected_result_code" style="font-size:0.8rem;">
                             <option value="">(retract)</option>

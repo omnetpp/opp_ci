@@ -1,62 +1,14 @@
 {% extends "base.html" %}
-{% block title %}opp_ci — Start New Run{% endblock %}
+{% block title %}opp_ci — New Test{% endblock %}
 {% block content %}
-<h2 style="margin-bottom: 1rem;">Start New Test Run</h2>
+<h2 style="margin-bottom: 1rem;">New Test</h2>
 
 {% if message %}
 <div class="flash flash-{{ message_type or 'success' }}">{{ message }}</div>
 {% endif %}
 
 <div class="card">
-    <h2>Run a named test</h2>
-    <form method="get" action="/runs/new" class="filters">
-        <input type="text" name="name" value="{{ filter_name }}" placeholder="Name contains…">
-        <input type="text" name="project" value="{{ filter_project }}" placeholder="Project contains…">
-        <button type="submit">Filter</button>
-        {% if filter_name or filter_project %}<a href="/runs/new" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
-    </form>
-    {% if named_tests %}
-    <table>
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Project</th>
-                <th>Kind</th>
-                <th>Mode</th>
-                <th>OS / Distro</th>
-                <th>Compiler</th>
-                <th></th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for t in named_tests %}
-            <tr>
-                <td>{{ t.name }}</td>
-                <td>{{ t.project }}</td>
-                <td>{{ t.kind }}</td>
-                <td>{{ t.mode or "-" }}</td>
-                <td>{{ t.distro or t.os or "-" }}{% if t.distro_version %} {{ t.distro_version }}{% endif %}</td>
-                <td>{{ t.compiler or "-" }}{% if t.compiler_version %} {{ t.compiler_version }}{% endif %}</td>
-                <td>
-                    <form method="post" action="/runs/new/named" class="inline-form">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <input type="hidden" name="test_id" value="{{ t.id }}">
-                        <button type="submit" class="btn btn-success btn-sm">Run</button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <p class="empty">No named tests{% if filter_name or filter_project %} match the filter{% endif %}. Name a test below to make it reusable.</p>
-    {% endif %}
-</div>
-
-<div class="card">
-    <h2>Run an anonymous test</h2>
-    <form method="post" action="/runs/new">
-
+    <form method="post" action="/tests/new">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
             <div class="form-group">
@@ -206,7 +158,16 @@
                 </select>
             </div>
         </div>
-        <button type="submit" class="btn btn-success">Queue Run</button>
+        <div class="actions">
+            <button type="submit" name="action" value="save" class="btn btn-primary">Save</button>
+            <button type="submit" name="action" value="run" class="btn btn-success">Save &amp; run</button>
+            <a href="/tests" class="btn btn-secondary">Cancel</a>
+        </div>
+        <p style="font-size:0.85rem; color:var(--muted); margin-top:0.5rem;">
+            <strong>Save</strong> stores the test definition (named or anonymous) and lands on its detail page.
+            <strong>Save &amp; run</strong> also queues a run immediately. The Git ref / version / OMNeT++ version
+            apply to the run, not the test coordinate.
+        </p>
     </form>
 </div>
 

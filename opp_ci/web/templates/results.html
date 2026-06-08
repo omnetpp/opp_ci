@@ -127,7 +127,7 @@
     <tbody>
         {% for run in runs %}
         <tr>
-            <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+            <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
             <td>{{ run.project }}</td>
             <td>{{ run.kind }}</td>
             <td>{{ run.mode or "-" }}</td>

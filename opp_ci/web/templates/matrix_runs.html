@@ -2,9 +2,9 @@
 {% block title %}opp_ci — Matrix runs{% endblock %}
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
-    <h2>Matrix runs</h2>
+    <h2>Test Matrix Runs</h2>
     {% if current_user and current_user.role in ("submitter", "admin") %}
-    <a href="/matrix-runs/new" class="btn btn-success">+ Run Matrix</a>
+    <a href="/test-matrices" class="btn btn-success">Run a matrix →</a>
     {% endif %}
 </div>
 
@@ -43,8 +43,8 @@
     <tbody>
         {% for mr, m in rows %}
         <tr>
-            <td><a href="/matrix-runs/{{ mr.id }}">#{{ mr.id }}</a></td>
-            <td><a href="/matrices/{{ m.id }}">{{ m.display_name }}</a></td>
+            <td><a href="/test-matrix-runs/{{ mr.id }}">#{{ mr.id }}</a></td>
+            <td><a href="/test-matrices/{{ m.id }}">{{ m.display_name }}</a></td>
             <td><a href="/projects/{{ m.project }}">{{ m.project }}</a></td>
             <td>{{ mr.trigger or "-" }}</td>
             <td>{{ mr.ref or "-" }}</td>
@@ -72,12 +72,12 @@
             <td>{{ mr.completed_at.strftime("%Y-%m-%d %H:%M") if mr.completed_at else "-" }}</td>
             {% if current_user and current_user.role in ("submitter", "admin") %}
             <td>
-                <form method="post" action="/matrix-runs/{{ mr.id }}/rerun" class="inline-form">
+                <form method="post" action="/test-matrix-runs/{{ mr.id }}/rerun" class="inline-form">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="btn btn-primary btn-sm">Re-run</button>
                 </form>
                 {% if not mr.completed_at %}
-                <form method="post" action="/matrix-runs/{{ mr.id }}/cancel" class="inline-form">
+                <form method="post" action="/test-matrix-runs/{{ mr.id }}/cancel" class="inline-form">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="btn btn-danger btn-sm">Cancel</button>
                 </form>

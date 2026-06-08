@@ -3,10 +3,10 @@
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
     <h2>Test Runs</h2>
-    <a href="/runs/new" class="btn btn-success">+ New Run</a>
+    <a href="/tests" class="btn btn-success">Run a test →</a>
 </div>
 
-<form class="filters" method="get" action="/runs">
+<form class="filters" method="get" action="/test-runs">
     <input type="text" name="project" placeholder="Project" value="{{ filter_project }}">
     <input type="text" name="kind" placeholder="Kind" value="{{ filter_kind }}">
     <input type="text" name="git_ref" placeholder="Git ref" value="{{ filter_git_ref }}">
@@ -39,7 +39,7 @@
     <tbody>
         {% for run in runs %}
         <tr>
-            <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+            <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
             <td>{{ run.project }}</td>
             <td>{{ run.kind }}</td>
             <td>{{ run.mode or "-" }}</td>
@@ -52,13 +52,13 @@
             <td>{{ run.trigger or "-" }}</td>
             <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
             <td>
-                <form method="post" action="/runs/{{ run.id }}/rerun" class="inline-form">
+                <form method="post" action="/test-runs/{{ run.id }}/rerun" class="inline-form">
 
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="btn btn-primary btn-sm">Re-run</button>
                 </form>
                 {% if run.lifecycle.value == "queued" %}
-                <form method="post" action="/runs/{{ run.id }}/cancel" class="inline-form">
+                <form method="post" action="/test-runs/{{ run.id }}/cancel" class="inline-form">
 
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="btn btn-danger btn-sm">Cancel</button>

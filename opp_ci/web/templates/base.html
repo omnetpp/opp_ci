@@ -104,19 +104,16 @@
             <h1>opp_ci</h1>
             <nav style="flex: 1;">
                 <a href="/">Dashboard</a> &nbsp;
-                {% if current_user and current_user.role in ("submitter", "admin") %}
-                <a href="/runs/new" style="color:var(--pass); font-weight:600;">+ New Run</a> &nbsp;
-                <a href="/matrix-runs/new" style="color:var(--pass); font-weight:600;">+ Run Matrix</a> &nbsp;
-                {% endif %}
-                <a href="/runs">Runs</a> &nbsp;
-                <a href="/queue">Queue</a> &nbsp;
                 <a href="/results">Results</a> &nbsp;
+                <a href="/queue">Queue</a> &nbsp;
+                <a href="/tests">Tests</a> &nbsp;
+                <a href="/test-runs">Test Runs</a> &nbsp;
+                <a href="/test-matrices">Test Matrices</a> &nbsp;
+                <a href="/test-matrix-runs">Test Matrix Runs</a> &nbsp;
                 <a href="/projects">Projects</a> &nbsp;
                 <a href="/compatibility">Compatibility</a> &nbsp;
-                <a href="/matrices">Matrices</a> &nbsp;
-                <a href="/matrix-runs">Matrix runs</a> &nbsp;
                 <a href="/rules">Rules</a> &nbsp;
-                <a href="/os">OS</a> &nbsp;
+                <a href="/os">OSes</a> &nbsp;
                 <a href="/compilers">Compilers</a> &nbsp;
                 <a href="/workers">Workers</a>
                 {% if current_user and current_user.role == "admin" %}

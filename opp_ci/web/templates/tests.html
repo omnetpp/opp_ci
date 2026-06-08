@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Tests{% endblock %}
+{% block content %}
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+    <h2>Tests</h2>
+    {% if current_user and current_user.role in ("submitter", "admin") %}
+    <a href="/tests/new" class="btn btn-success">+ New Test</a>
+    {% endif %}
+</div>
+
+{% if message %}
+<div class="flash flash-{{ message_type or 'success' }}">{{ message }}</div>
+{% endif %}
+
+<form class="filters" method="get" action="/tests">
+    <input type="text" name="name" placeholder="Name contains…" value="{{ filter_name }}">
+    <input type="text" name="project" placeholder="Project contains…" value="{{ filter_project }}">
+    <input type="text" name="kind" placeholder="Kind" value="{{ filter_kind }}">
+    <input type="text" name="os" placeholder="OS" value="{{ filter_os }}">
+    <input type="text" name="compiler" placeholder="Compiler" value="{{ filter_compiler }}">
+    <select name="status">
+        <option value="">Any last status</option>
+        <option value="PASS" {{ "selected" if filter_status == "PASS" }}>PASS</option>
+        <option value="FAIL" {{ "selected" if filter_status == "FAIL" }}>FAIL</option>
+        <option value="ERROR" {{ "selected" if filter_status == "ERROR" }}>ERROR</option>
+    </select>
+    <label style="font-size:0.85rem; color:var(--muted); display:flex; align-items:center; gap:0.25rem;">
+        <input type="checkbox" name="include_anonymous" value="true" {{ "checked" if include_anonymous }}>
+        include anonymous
+    </label>
+    <button type="submit">Filter</button>
+    {% if filter_name or filter_project or filter_kind or filter_os or filter_compiler or filter_status or include_anonymous %}
+    <a href="/tests" class="btn btn-secondary btn-sm">Clear</a>
+    {% endif %}
+</form>
+
+{% if tests %}
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Project</th>
+            <th>Kind</th>
+            <th>Mode</th>
+            <th>OS / Distro</th>
+            <th>Compiler</th>
+            <th>Last status</th>
+            <th>Runs</th>
+            {% if current_user and current_user.role in ("submitter", "admin") %}<th>Actions</th>{% endif %}
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in tests %}
+        <tr>
+            <td><a href="/tests/{{ t.id }}">#{{ t.id }}</a></td>
+            <td>{% if t.name %}<a href="/tests/{{ t.id }}">{{ t.name }}</a>{% else %}<span style="color:var(--muted);">(anonymous)</span>{% endif %}</td>
+            <td>{{ t.project }}</td>
+            <td>{{ t.kind }}</td>
+            <td>{{ t.mode or "-" }}</td>
+            <td>{{ t.distro or t.os or "-" }}{% if t.distro_version %} {{ t.distro_version }}{% elif t.os_version %} {{ t.os_version }}{% endif %}</td>
+            <td>{{ t.compiler or "-" }}{% if t.compiler_version %}-{{ t.compiler_version }}{% endif %}</td>
+            <td>
+                {% set s = last_status.get(t.id) %}
+                {% if s %}<span class="badge badge-{{ s }}">{{ s }}</span>{% else %}<span style="color:var(--muted);">never run</span>{% endif %}
+            </td>
+            <td>{{ run_counts.get(t.id, 0) }}</td>
+            {% if current_user and current_user.role in ("submitter", "admin") %}
+            <td>
+                <form method="post" action="/tests/{{ t.id }}/run" class="inline-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-success btn-sm">Run</button>
+                </form>
+            </td>
+            {% endif %}
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty">No tests match the current filters.{% if not include_anonymous %} Anonymous matrix-cell tests are hidden — tick <em>include anonymous</em> to show them.{% endif %}</p>
+{% endif %}
+{% endblock %}

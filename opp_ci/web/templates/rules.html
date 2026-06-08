@@ -72,7 +72,7 @@
             <td><code>{{ r.pattern }}</code></td>
             <td>
                 {% if r.matrix_id %}
-                <a href="/matrices/{{ r.matrix_id }}">{{ r.matrix_name or "Matrix #" ~ r.matrix_id }}</a>
+                <a href="/test-matrices/{{ r.matrix_id }}">{{ r.matrix_name or "Matrix #" ~ r.matrix_id }}</a>
                 {% else %}-{% endif %}
             </td>
             <td>{{ "Yes" if r.enabled else "No" }}</td>

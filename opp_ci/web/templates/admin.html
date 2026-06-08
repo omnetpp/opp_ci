@@ -142,7 +142,7 @@
         <tbody>
             {% for run in recent_errors %}
             <tr>
-                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.project }}</td>
                 <td>{{ run.kind }}</td>
                 <td>{{ run.git_ref or "-" }}</td>
@@ -158,10 +158,11 @@
     <h2>Quick Links</h2>
     <table>
         <tr><td><a href="/projects">Projects</a> ({{ stats.projects }})</td></tr>
-        <tr><td><a href="/matrices">Matrices</a> ({{ stats.matrices }})</td></tr>
+        <tr><td><a href="/tests">Tests</a> ({{ stats.tests }})</td></tr>
+        <tr><td><a href="/test-matrices">Test Matrices</a> ({{ stats.matrices }})</td></tr>
         <tr><td><a href="/rules">Auto-Test Rules</a></td></tr>
-        <tr><td><a href="/runs">All Runs</a> ({{ stats.runs_total }})</td></tr>
-        <tr><td><a href="/runs/new">Start New Run</a></td></tr>
+        <tr><td><a href="/test-runs">All Test Runs</a> ({{ stats.runs_total }})</td></tr>
+        <tr><td><a href="/tests/new">New Test</a></td></tr>
         <tr><td><a href="/results">Results Search</a></td></tr>
     </table>
 </div>

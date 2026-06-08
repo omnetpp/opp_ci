@@ -42,11 +42,11 @@
         </tr>
         <tr>
             <th>Matrix</th>
-            <td><a href="/matrices/{{ lr_matrix.id }}">{{ lr_matrix.name }}</a></td>
+            <td><a href="/test-matrices/{{ lr_matrix.id }}">{{ lr_matrix.name }}</a></td>
         </tr>
         <tr>
             <th>Run</th>
-            <td><a href="/matrix-runs/{{ lr_run.id }}">#{{ lr_run.id }}</a>
+            <td><a href="/test-matrix-runs/{{ lr_run.id }}">#{{ lr_run.id }}</a>
                 &middot; created {{ lr_run.created_at.strftime("%Y-%m-%d %H:%M") if lr_run.created_at else "-" }}
                 {% if lr_run.completed_at %} &middot; completed {{ lr_run.completed_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
             </td>
@@ -115,7 +115,7 @@
         <tbody>
             {% for run in recent_runs %}
             <tr>
-                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.kind }}</td>
                 <td>{{ run.mode or "-" }}</td>
                 {% set sha = run.commit_sha or run.github_commit_sha %}

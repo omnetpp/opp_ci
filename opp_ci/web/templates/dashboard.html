@@ -39,7 +39,7 @@
         <tbody>
             {% for run in recent_runs %}
             <tr>
-                <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+                <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.project }}</td>
                 <td>{{ run.kind }}</td>
                 <td><span class="badge badge-{{ run.effective_status }}">{{ run.effective_status }}</span></td>

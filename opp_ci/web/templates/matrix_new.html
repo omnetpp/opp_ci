@@ -6,7 +6,7 @@
 {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
 
 <div class="card">
-    <form method="post" action="/matrices/create">
+    <form method="post" action="/test-matrices/create">
 
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-group">
@@ -175,7 +175,7 @@
         </p>
         <div class="actions">
             <button type="submit" class="btn btn-success">Create</button>
-            <a href="/matrices" class="btn btn-secondary">Cancel</a>
+            <a href="/test-matrices" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
 </div>

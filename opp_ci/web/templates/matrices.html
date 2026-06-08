@@ -3,16 +3,18 @@
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
     <h2>Test Matrices</h2>
-    <a href="/matrices/new" class="btn btn-success btn-sm">+ New Matrix</a>
+    {% if current_user and current_user.role in ("submitter", "admin") %}
+    <a href="/test-matrices/new" class="btn btn-success btn-sm">+ New Matrix Test</a>
+    {% endif %}
 </div>
 
 {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
 
-<form method="get" action="/matrices" class="filters">
+<form method="get" action="/test-matrices" class="filters">
     <input type="text" name="name" value="{{ filter_name }}" placeholder="Name contains…">
     <input type="text" name="project" value="{{ filter_project }}" placeholder="Project contains…">
     <button type="submit">Filter</button>
-    {% if filter_name or filter_project %}<a href="/matrices" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+    {% if filter_name or filter_project %}<a href="/test-matrices" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
 </form>
 
 {% if matrices %}
@@ -31,7 +33,7 @@
     </thead>
     <tbody>
         {% for m in matrices %}
-        <tr data-href="/matrices/{{ m.id }}" style="cursor:pointer;">
+        <tr data-href="/test-matrices/{{ m.id }}" style="cursor:pointer;">
             <td>{{ m.id }}</td>
             <td>{{ m.display_name }}</td>
             <td>{{ m.project }}</td>
@@ -41,12 +43,17 @@
             {% set ref_range = m.config.get("ref_range") %}
             <td>{% if ref_range %}{{ ref_range.base[:8] }}..{{ ref_range.head[:8] }}{% elif refs|length > 5 %}{{ refs|length }} commits{% elif refs %}{{ refs|join(", ") }}{% else %}-{% endif %}</td>
             <td>{{ run_counts.get(m.id, 0) }}</td>
-            <td onclick="event.stopPropagation()">
-                <form method="post" action="/matrices/{{ m.id }}/delete" class="inline-form">
-
+            <td onclick="event.stopPropagation()" style="display:flex; gap:0.4rem;">
+                {% if current_user and current_user.role in ("submitter", "admin") %}
+                <form method="post" action="/test-matrices/{{ m.id }}/run" class="inline-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-success btn-sm">Run</button>
+                </form>
+                <form method="post" action="/test-matrices/{{ m.id }}/delete" class="inline-form">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete matrix {{ m.display_name }}?')">Delete</button>
                 </form>
+                {% endif %}
             </td>
         </tr>
         {% endfor %}
@@ -58,6 +65,6 @@ document.querySelectorAll("tr[data-href]").forEach(row => {
 });
 </script>
 {% else %}
-<p class="empty">No matrices match. <a href="/matrices/new">Create one</a> or use <code>opp_ci seed-matrices</code>.</p>
+<p class="empty">No matrices match. <a href="/test-matrices/new">Create one</a> or use <code>opp_ci seed-matrices</code>.</p>
 {% endif %}
 {% endblock %}

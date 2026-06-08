@@ -223,7 +223,7 @@ def queue_page(request: Request, current_user: User = Depends(require_user()),
         session.close()
 
 
-@web_router.get("/runs", response_class=HTMLResponse)
+@web_router.get("/test-runs", response_class=HTMLResponse)
 def runs_list(
     request: Request,
     current_user: User = Depends(require_user()),
@@ -377,77 +377,132 @@ def results_page(
         session.close()
 
 
-@web_router.get("/runs/new", response_class=HTMLResponse)
-def run_new_form(request: Request,
-                 current_user: User = Depends(require_user("submitter")),
-                 message: str = Query(default=None), message_type: str = Query(default=None),
-                 name: str = Query(default=None), project: str = Query(default=None)):
+def _test_form_context(session):
+    """Shared template context for the single-test coordinate form
+    (project list, datalist suggestions, per-project versions with the
+    omnetpp-compat hint). Used by `test_new_form`."""
     from opp_ci import platforms
+    projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
+    os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
+    compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
+
+    project_by_id = {p.id: p.name for p in projects}
+    versions_by_project = {p.name: [] for p in projects}
+    for v in session.execute(select(Version)).scalars().all():
+        pname = project_by_id.get(v.project_id)
+        if pname is None:
+            continue
+        deps = v.resolved_dependencies or {}
+        omnetpp_dep = deps.get("omnetpp") if isinstance(deps, dict) else None
+        if isinstance(omnetpp_dep, str):
+            omnetpp_compat = [omnetpp_dep]
+        elif isinstance(omnetpp_dep, list):
+            omnetpp_compat = list(omnetpp_dep)
+        else:
+            omnetpp_compat = []
+        versions_by_project[pname].append({
+            "opp_env_version": v.opp_env_version or "",
+            "git_ref": v.git_ref or "",
+            "label": v.label or v.opp_env_version or v.git_ref or "",
+            "omnetpp_compat": omnetpp_compat,
+        })
+    for pname in versions_by_project:
+        versions_by_project[pname].sort(key=lambda d: d["label"])
+
+    omnetpp_versions = sorted({
+        v["opp_env_version"] for v in versions_by_project.get("omnetpp", []) if v["opp_env_version"]
+    })
+
+    return {
+        "projects": projects,
+        "os_entries": os_entries,
+        "compilers": compilers,
+        "os_suggestions": list(platforms.OS_NAMES),
+        "os_version_suggestions": sorted({o.version for o in os_entries if o.version}),
+        "distro_suggestions": sorted({platforms.display_name(n) for n in platforms.DISTROS}),
+        "flavor_suggestions": sorted({platforms.display_name(n) for n in platforms.FLAVORS}),
+        "arch_suggestions": _arch_suggestions(os_entries),
+        "compiler_suggestions": sorted({c.name for c in compilers if c.name}),
+        "compiler_version_suggestions": sorted({c.version for c in compilers if c.version}),
+        "versions_by_project": versions_by_project,
+        "omnetpp_versions": omnetpp_versions,
+    }
+
+
+@web_router.get("/tests", response_class=HTMLResponse)
+def tests_list(
+    request: Request,
+    current_user: User = Depends(require_user()),
+    name: str = Query(default=None),
+    project: str = Query(default=None),
+    kind: str = Query(default=None),
+    os: str = Query(default=None, alias="os"),
+    compiler: str = Query(default=None),
+    status: str = Query(default=None),
+    include_anonymous: bool = Query(default=False),
+    limit: int = Query(default=200),
+):
+    """Catalog of Test definitions. Named tests only by default; the
+    anonymous matrix-cell tests are pulled in with ?include_anonymous=1."""
     session = SessionLocal()
     try:
-        projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
-        # Named tests for the "run by name" table (filterable by name/project).
-        named_q = select(Test).where(Test.name.isnot(None)).order_by(Test.name)
+        # Named first (name NULL sorts last), then by name / newest id.
+        query = select(Test).order_by(Test.name.is_(None), Test.name, Test.id.desc())
+        if not include_anonymous:
+            query = query.where(Test.name.isnot(None))
         if name:
-            named_q = named_q.where(Test.name.ilike(f"%{name}%"))
+            query = query.where(Test.name.ilike(f"%{name}%"))
         if project:
-            named_q = named_q.where(Test.project.ilike(f"%{project}%"))
-        named_tests = session.execute(named_q).scalars().all()
-        os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
-        compilers = session.execute(select(Compiler).order_by(Compiler.name, Compiler.version)).scalars().all()
+            query = query.where(Test.project.ilike(f"%{project}%"))
+        if kind:
+            query = query.where(Test.kind == kind)
+        if os:
+            query = query.where(Test.os == os)
+        if compiler:
+            query = query.where(Test.compiler == compiler)
+        tests = session.execute(query.limit(limit)).scalars().all()
 
-        os_suggestions = list(platforms.OS_NAMES)
-        os_version_suggestions = sorted({o.version for o in os_entries if o.version})
-        distro_suggestions = sorted({platforms.display_name(n) for n in platforms.DISTROS})
-        flavor_suggestions = sorted({platforms.display_name(n) for n in platforms.FLAVORS})
-        arch_suggestions = _arch_suggestions(os_entries)
-        compiler_suggestions = sorted({c.name for c in compilers if c.name})
-        compiler_version_suggestions = sorted({c.version for c in compilers if c.version})
+        # Last-run status per test (N+1, mirrors projects_list; the page is
+        # capped by `limit`). The status filter is applied on this value.
+        last_status = {}
+        run_counts = {}
+        for t in tests:
+            last_run = session.execute(
+                select(TestRun).where(TestRun.test_id == t.id)
+                .order_by(TestRun.id.desc()).limit(1)
+            ).scalar_one_or_none()
+            last_status[t.id] = last_run.effective_status if last_run else None
+            run_counts[t.id] = session.execute(
+                select(func.count(TestRun.id)).where(TestRun.test_id == t.id)
+            ).scalar()
+        if status:
+            tests = [t for t in tests if last_status.get(t.id) == status]
 
-        all_versions = session.execute(select(Version)).scalars().all()
-        project_by_id = {p.id: p.name for p in projects}
-        versions_by_project = {p.name: [] for p in projects}
-        for v in all_versions:
-            pname = project_by_id.get(v.project_id)
-            if pname is None:
-                continue
-            deps = v.resolved_dependencies or {}
-            omnetpp_dep = deps.get("omnetpp") if isinstance(deps, dict) else None
-            if isinstance(omnetpp_dep, str):
-                omnetpp_compat = [omnetpp_dep]
-            elif isinstance(omnetpp_dep, list):
-                omnetpp_compat = list(omnetpp_dep)
-            else:
-                omnetpp_compat = []
-            versions_by_project[pname].append({
-                "opp_env_version": v.opp_env_version or "",
-                "git_ref": v.git_ref or "",
-                "label": v.label or v.opp_env_version or v.git_ref or "",
-                "omnetpp_compat": omnetpp_compat,
-            })
-        for pname in versions_by_project:
-            versions_by_project[pname].sort(key=lambda d: d["label"])
-
-        omnetpp_versions = sorted({
-            v["opp_env_version"] for v in versions_by_project.get("omnetpp", []) if v["opp_env_version"]
-        })
-
-        return templates.TemplateResponse(request, "run_new.html", {
-            "projects": projects,
-            "named_tests": named_tests,
+        return templates.TemplateResponse(request, "tests.html", {
+            "tests": tests,
+            "last_status": last_status,
+            "run_counts": run_counts,
             "filter_name": name or "",
             "filter_project": project or "",
-            "os_entries": os_entries,
-            "compilers": compilers,
-            "os_suggestions": os_suggestions,
-            "os_version_suggestions": os_version_suggestions,
-            "distro_suggestions": distro_suggestions,
-            "flavor_suggestions": flavor_suggestions,
-            "arch_suggestions": arch_suggestions,
-            "compiler_suggestions": compiler_suggestions,
-            "compiler_version_suggestions": compiler_version_suggestions,
-            "versions_by_project": versions_by_project,
-            "omnetpp_versions": omnetpp_versions,
+            "filter_kind": kind or "",
+            "filter_os": os or "",
+            "filter_compiler": compiler or "",
+            "filter_status": status or "",
+            "include_anonymous": include_anonymous,
+            **_template_globals(request, current_user),
+        })
+    finally:
+        session.close()
+
+
+@web_router.get("/tests/new", response_class=HTMLResponse)
+def test_new_form(request: Request,
+                  current_user: User = Depends(require_user("submitter")),
+                  message: str = Query(default=None), message_type: str = Query(default=None)):
+    session = SessionLocal()
+    try:
+        return templates.TemplateResponse(request, "test_new.html", {
+            **_test_form_context(session),
             "message": message,
             "message_type": message_type,
             **_template_globals(request, current_user),
@@ -456,10 +511,11 @@ def run_new_form(request: Request,
         session.close()
 
 
-@web_router.post("/runs/new", dependencies=[Depends(require_csrf)])
-def run_new_submit(
+@web_router.post("/tests/new", dependencies=[Depends(require_csrf)])
+def test_new_submit(
     request: Request,
     current_user: User = Depends(require_user("submitter")),
+    action: str = Form(default="save"),
     project: str = Form(...),
     kind: str = Form(...),
     name: str = Form(default=""),
@@ -479,6 +535,9 @@ def run_new_submit(
     isolation: str = Form(default="none"),
     toolchain: str = Form(default="none"),
 ):
+    """Save a Test definition (get-or-create + optional name). With
+    action=run, also queue a TestRun and land on the run; otherwise land
+    on the Test detail page."""
     from opp_ci import platforms
 
     session = SessionLocal()
@@ -492,7 +551,7 @@ def run_new_submit(
             )
         except ValueError as e:
             return RedirectResponse(
-                url=f"/runs/new?message={e}&message_type=error",
+                url=f"/tests/new?message={e}&message_type=error",
                 status_code=303,
             )
         os_canon = platforms._os_canonical(r_os) if r_os else None
@@ -523,36 +582,69 @@ def run_new_submit(
             except ValueError as e:
                 session.rollback()
                 return RedirectResponse(
-                    url=f"/runs/new?message={e}&message_type=error",
+                    url=f"/tests/new?message={e}&message_type=error",
                     status_code=303,
                 )
-        run = create_test_run(
-            session,
-            test_id=test.id,
-            git_ref=git_ref or None,
-            version=version or None,
-            resolved_deps=resolved_deps,
-        )
+        if action == "run":
+            run = create_test_run(
+                session,
+                test_id=test.id,
+                git_ref=git_ref or None,
+                version=version or None,
+                resolved_deps=resolved_deps,
+            )
+            session.commit()
+            return RedirectResponse(url=f"/test-runs/{run.id}", status_code=303)
         session.commit()
-        return RedirectResponse(url=f"/runs/{run.id}", status_code=303)
+        return RedirectResponse(url=f"/tests/{test.id}", status_code=303)
     finally:
         session.close()
 
 
-@web_router.post("/runs/new/named", dependencies=[Depends(require_csrf)])
-def run_new_named(request: Request,
-                  current_user: User = Depends(require_user("submitter")),
-                  test_id: int = Form(...),
-                  git_ref: str = Form(default=""),
-                  version: str = Form(default="")):
-    """Queue a fresh TestRun for a previously-named Test (picked from the
-    by-name table on the run page)."""
+@web_router.get("/tests/{test_id}", response_class=HTMLResponse)
+def test_detail(request: Request, test_id: int,
+                current_user: User = Depends(require_user()),
+                message: str = Query(default=None), message_type: str = Query(default=None)):
+    """Test definition detail: coordinate, run history, expectation
+    history + editor, rename, and a Run button."""
+    session = SessionLocal()
+    try:
+        test = session.get(Test, test_id)
+        if test is None:
+            return HTMLResponse("<h1>Test not found</h1>", status_code=404)
+        runs = session.execute(
+            select(TestRun).where(TestRun.test_id == test_id)
+            .order_by(TestRun.id.desc()).limit(50)
+        ).scalars().all()
+        expectations = session.execute(
+            select(ExpectedTestResult).where(ExpectedTestResult.test_id == test_id)
+            .order_by(ExpectedTestResult.set_at.desc(), ExpectedTestResult.id.desc())
+        ).scalars().all()
+        return templates.TemplateResponse(request, "test_detail.html", {
+            "test": test,
+            "runs": runs,
+            "expectations": expectations,
+            "message": message,
+            "message_type": message_type,
+            **_template_globals(request, current_user),
+        })
+    finally:
+        session.close()
+
+
+@web_router.post("/tests/{test_id}/run", dependencies=[Depends(require_csrf)])
+def test_run(test_id: int,
+             current_user: User = Depends(require_user("submitter")),
+             git_ref: str = Form(default=""),
+             version: str = Form(default="")):
+    """Queue a fresh TestRun for an existing Test (from the Tests list or
+    the Test detail page)."""
     session = SessionLocal()
     try:
         test = session.get(Test, test_id)
         if test is None:
             return RedirectResponse(
-                url="/runs/new?message=Test+not+found&message_type=error",
+                url="/tests?message=Test+not+found&message_type=error",
                 status_code=303,
             )
         run = create_test_run(
@@ -562,12 +654,12 @@ def run_new_named(request: Request,
             version=version or None,
         )
         session.commit()
-        return RedirectResponse(url=f"/runs/{run.id}", status_code=303)
+        return RedirectResponse(url=f"/test-runs/{run.id}", status_code=303)
     finally:
         session.close()
 
 
-@web_router.post("/runs/{run_id}/rerun", dependencies=[Depends(require_csrf)])
+@web_router.post("/test-runs/{run_id}/rerun", dependencies=[Depends(require_csrf)])
 def run_rerun(run_id: int, current_user: User = Depends(require_user("submitter"))):
     session = SessionLocal()
     try:
@@ -575,7 +667,7 @@ def run_rerun(run_id: int, current_user: User = Depends(require_user("submitter"
             select(TestRun).where(TestRun.id == run_id)
         ).scalar_one_or_none()
         if original is None:
-            return RedirectResponse(url="/runs", status_code=303)
+            return RedirectResponse(url="/test-runs", status_code=303)
 
         # Same Test (coord), fresh TestRun row. matrix_run_id stays NULL —
         # an ad-hoc rerun is not part of any matrix run.
@@ -587,12 +679,12 @@ def run_rerun(run_id: int, current_user: User = Depends(require_user("submitter"
             resolved_deps=original.resolved_deps,
         )
         session.commit()
-        return RedirectResponse(url=f"/runs/{new_run.id}", status_code=303)
+        return RedirectResponse(url=f"/test-runs/{new_run.id}", status_code=303)
     finally:
         session.close()
 
 
-@web_router.post("/runs/{run_id}/cancel", dependencies=[Depends(require_csrf)])
+@web_router.post("/test-runs/{run_id}/cancel", dependencies=[Depends(require_csrf)])
 def run_cancel(run_id: int, current_user: User = Depends(require_user("submitter"))):
     """Cancel a queued run. Running runs are left to finish — see the
     locked decision in plan/pending/test-data-model-redesign.md."""
@@ -606,12 +698,12 @@ def run_cancel(run_id: int, current_user: User = Depends(require_user("submitter
             run.lifecycle = TestRunLifecycle.cancelled
             run.finished_at = datetime.datetime.utcnow()
             session.commit()
-        return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
+        return RedirectResponse(url=f"/test-runs/{run_id}", status_code=303)
     finally:
         session.close()
 
 
-@web_router.get("/runs/{run_id}", response_class=HTMLResponse)
+@web_router.get("/test-runs/{run_id}", response_class=HTMLResponse)
 def run_detail(request: Request, run_id: int, current_user: User = Depends(require_user()),
                message: str = Query(default=None), message_type: str = Query(default=None)):
     session = SessionLocal()
@@ -636,7 +728,7 @@ def run_detail(request: Request, run_id: int, current_user: User = Depends(requi
 def test_rename(test_id: int,
                 current_user: User = Depends(require_user("submitter")),
                 name: str = Form(default=""),
-                return_to: str = Form(default="/runs")):
+                return_to: str = Form(default="/test-runs")):
     """Set or clear a Test's name. Blank clears it (back to anonymous)."""
     session = SessionLocal()
     try:
@@ -879,7 +971,7 @@ def compatibility_page(request: Request, project_name: str,
         session.close()
 
 
-@web_router.get("/matrices", response_class=HTMLResponse)
+@web_router.get("/test-matrices", response_class=HTMLResponse)
 def matrices_list(
     request: Request,
     current_user: User = Depends(require_user()),
@@ -919,8 +1011,7 @@ def matrices_list(
 
 def _matrix_form_context(session):
     """Shared template context for the matrix axis form (suggestions +
-    per-project versions). Used by both `matrix_new_form` (save a matrix)
-    and `matrix_run_new_form` (run a matrix)."""
+    per-project versions). Used by `matrix_new_form`."""
     from opp_ci import platforms
     projects = session.execute(select(Project).order_by(Project.name)).scalars().all()
     os_entries = session.execute(select(OS).order_by(OS.name, OS.version)).scalars().all()
@@ -958,7 +1049,7 @@ def _matrix_form_context(session):
     }
 
 
-@web_router.get("/matrices/new", response_class=HTMLResponse)
+@web_router.get("/test-matrices/new", response_class=HTMLResponse)
 def matrix_new_form(request: Request,
                     current_user: User = Depends(require_user("submitter")),
                     error: str = Query(default=None)):
@@ -973,7 +1064,7 @@ def matrix_new_form(request: Request,
         session.close()
 
 
-@web_router.get("/matrices/{matrix_id}", response_class=HTMLResponse)
+@web_router.get("/test-matrices/{matrix_id}", response_class=HTMLResponse)
 def matrix_detail(request: Request, matrix_id: int,
                   current_user: User = Depends(require_user()),
                   error: str = Query(default=None)):
@@ -1021,9 +1112,8 @@ def _build_matrix_config_from_form(*, project, kinds, modes, versions,
                                    toolchain, ref_range_base, ref_range_head):
     """Assemble a matrix `config` dict from the axis form fields.
 
-    Shared by `matrix_create` (save) and `matrix_run_new_anonymous` (run)
-    so both interpret the CSV axes, omnetpp deps, and ref-range the same
-    way."""
+    Used by `matrix_create` for both Save and Save & run so the CSV axes,
+    omnetpp deps, and ref-range are interpreted the same way."""
     config = {}
     axes = {
         "kinds": _split_csv(kinds),
@@ -1057,10 +1147,11 @@ def _build_matrix_config_from_form(*, project, kinds, modes, versions,
     return config
 
 
-@web_router.post("/matrices/create", dependencies=[Depends(require_csrf)])
+@web_router.post("/test-matrices/create", dependencies=[Depends(require_csrf)])
 def matrix_create(
     current_user: User = Depends(require_user("submitter")),
-    name: str = Form(...),
+    action: str = Form(default="save"),
+    name: str = Form(default=""),
     project: str = Form(...),
     kinds: str = Form(default=""),
     modes: str = Form(default=""),
@@ -1094,20 +1185,24 @@ def matrix_create(
         )
         try:
             matrix = create_matrix_from_axes(
-                session, project=project, config=config, name=name,
+                session, project=project, config=config, name=name or None,
             )
         except ValueError:
             return RedirectResponse(
-                url="/matrices/new?error=Matrix+already+exists",
+                url="/test-matrices/new?error=Matrix+already+exists",
                 status_code=303,
             )
+        if action == "run":
+            matrix_run = _queue_matrix_run(session, matrix, trigger="web")
+            session.commit()
+            return RedirectResponse(url=f"/test-matrix-runs/{matrix_run.id}", status_code=303)
         session.commit()
-        return RedirectResponse(url=f"/matrices/{matrix.id}", status_code=303)
+        return RedirectResponse(url=f"/test-matrices/{matrix.id}", status_code=303)
     finally:
         session.close()
 
 
-@web_router.post("/matrices/{matrix_id}/delete", dependencies=[Depends(require_csrf)])
+@web_router.post("/test-matrices/{matrix_id}/delete", dependencies=[Depends(require_csrf)])
 def matrix_delete(matrix_id: int, current_user: User = Depends(require_user("submitter"))):
     session = SessionLocal()
     try:
@@ -1117,12 +1212,12 @@ def matrix_delete(matrix_id: int, current_user: User = Depends(require_user("sub
         if matrix:
             session.delete(matrix)
             session.commit()
-        return RedirectResponse(url="/matrices", status_code=303)
+        return RedirectResponse(url="/test-matrices", status_code=303)
     finally:
         session.close()
 
 
-@web_router.post("/matrices/{matrix_id}/rename", dependencies=[Depends(require_csrf)])
+@web_router.post("/test-matrices/{matrix_id}/rename", dependencies=[Depends(require_csrf)])
 def matrix_rename(matrix_id: int,
                   current_user: User = Depends(require_user("submitter")),
                   name: str = Form(default="")):
@@ -1131,21 +1226,38 @@ def matrix_rename(matrix_id: int,
     try:
         matrix = session.get(TestMatrix, matrix_id)
         if matrix is None:
-            return RedirectResponse(url="/matrices", status_code=303)
+            return RedirectResponse(url="/test-matrices", status_code=303)
         try:
             set_matrix_name(session, matrix, name)
             session.commit()
         except ValueError as e:
             session.rollback()
             return RedirectResponse(
-                url=f"/matrices/{matrix_id}?error={e}", status_code=303,
+                url=f"/test-matrices/{matrix_id}?error={e}", status_code=303,
             )
-        return RedirectResponse(url=f"/matrices/{matrix_id}", status_code=303)
+        return RedirectResponse(url=f"/test-matrices/{matrix_id}", status_code=303)
     finally:
         session.close()
 
 
-@web_router.get("/matrix-runs", response_class=HTMLResponse)
+@web_router.post("/test-matrices/{matrix_id}/run", dependencies=[Depends(require_csrf)])
+def matrix_run(matrix_id: int,
+               current_user: User = Depends(require_user("submitter"))):
+    """Queue a TestMatrixRun for a saved matrix (from the Test Matrices
+    list or the matrix detail page)."""
+    session = SessionLocal()
+    try:
+        matrix = session.get(TestMatrix, matrix_id)
+        if matrix is None:
+            return RedirectResponse(url="/test-matrices", status_code=303)
+        matrix_run = _queue_matrix_run(session, matrix, trigger="web")
+        session.commit()
+        return RedirectResponse(url=f"/test-matrix-runs/{matrix_run.id}", status_code=303)
+    finally:
+        session.close()
+
+
+@web_router.get("/test-matrix-runs", response_class=HTMLResponse)
 def matrix_runs_list(
     request: Request,
     current_user: User = Depends(require_user()),
@@ -1191,8 +1303,8 @@ def matrix_runs_list(
 
 def _queue_matrix_run(session, matrix, *, trigger):
     """Create a TestMatrixRun for `matrix`, expand it, and enqueue every
-    cell. Returns the TestMatrixRun. Caller commits. Shared by the named
-    run, anonymous run, and rerun handlers."""
+    cell. Returns the TestMatrixRun. Caller commits. Shared by the
+    save-and-run, run-saved-matrix, and rerun handlers."""
     from opp_ci.scheduler import expand_matrix
     from opp_ci.fingerprint import compute_cache_fingerprint
 
@@ -1221,109 +1333,7 @@ def _queue_matrix_run(session, matrix, *, trigger):
     return matrix_run
 
 
-# NOTE: the literal `/matrix-runs/new` routes MUST be declared before the
-# parameterised `/matrix-runs/{matrix_run_id}` route below, or FastAPI
-# captures "new" as a matrix_run_id and 404s.
-@web_router.get("/matrix-runs/new", response_class=HTMLResponse)
-def matrix_run_new_form(request: Request,
-                        current_user: User = Depends(require_user("submitter")),
-                        message: str = Query(default=None), message_type: str = Query(default=None),
-                        name: str = Query(default=None), project: str = Query(default=None)):
-    session = SessionLocal()
-    try:
-        named_q = select(TestMatrix).where(TestMatrix.name.isnot(None)).order_by(TestMatrix.name)
-        if name:
-            named_q = named_q.where(TestMatrix.name.ilike(f"%{name}%"))
-        if project:
-            named_q = named_q.where(TestMatrix.project.ilike(f"%{project}%"))
-        named_matrices = session.execute(named_q).scalars().all()
-        return templates.TemplateResponse(request, "matrix_run_new.html", {
-            **_matrix_form_context(session),
-            "named_matrices": named_matrices,
-            "filter_name": name or "",
-            "filter_project": project or "",
-            "message": message,
-            "message_type": message_type,
-            **_template_globals(request, current_user),
-        })
-    finally:
-        session.close()
-
-
-@web_router.post("/matrix-runs/new/named", dependencies=[Depends(require_csrf)])
-def matrix_run_new_named(request: Request,
-                         current_user: User = Depends(require_user("submitter")),
-                         matrix_id: int = Form(...)):
-    """Run a saved (named) matrix picked from the by-name table."""
-    session = SessionLocal()
-    try:
-        matrix = session.get(TestMatrix, matrix_id)
-        if matrix is None:
-            return RedirectResponse(
-                url="/matrix-runs/new?message=Matrix+not+found&message_type=error",
-                status_code=303,
-            )
-        matrix_run = _queue_matrix_run(session, matrix, trigger="web")
-        session.commit()
-        return RedirectResponse(url=f"/matrix-runs/{matrix_run.id}", status_code=303)
-    finally:
-        session.close()
-
-
-@web_router.post("/matrix-runs/new/anonymous", dependencies=[Depends(require_csrf)])
-def matrix_run_new_anonymous(
-    current_user: User = Depends(require_user("submitter")),
-    name: str = Form(default=""),
-    project: str = Form(...),
-    kinds: str = Form(default=""),
-    modes: str = Form(default=""),
-    versions: str = Form(default=""),
-    omnetpp_versions: str = Form(default=""),
-    refs: str = Form(default=""),
-    os: str = Form(default=""),
-    os_version: str = Form(default=""),
-    distro: str = Form(default=""),
-    distro_version: str = Form(default=""),
-    flavor: str = Form(default=""),
-    flavor_version: str = Form(default=""),
-    arch: str = Form(default=""),
-    compiler: str = Form(default=""),
-    compiler_version: str = Form(default=""),
-    isolation: str = Form(default=""),
-    toolchain: str = Form(default=""),
-    ref_range_base: str = Form(default=""),
-    ref_range_head: str = Form(default=""),
-):
-    """Run an ad-hoc matrix from inline axes. Names it if a Name is given
-    (making it reusable), otherwise leaves it anonymous (name = NULL)."""
-    session = SessionLocal()
-    try:
-        config = _build_matrix_config_from_form(
-            project=project, kinds=kinds, modes=modes, versions=versions,
-            omnetpp_versions=omnetpp_versions, refs=refs, os=os,
-            os_version=os_version, distro=distro, distro_version=distro_version,
-            flavor=flavor, flavor_version=flavor_version, arch=arch,
-            compiler=compiler, compiler_version=compiler_version,
-            isolation=isolation, toolchain=toolchain,
-            ref_range_base=ref_range_base, ref_range_head=ref_range_head,
-        )
-        try:
-            matrix = create_matrix_from_axes(
-                session, project=project, config=config, name=name or None,
-            )
-        except ValueError as e:
-            return RedirectResponse(
-                url=f"/matrix-runs/new?message={e}&message_type=error",
-                status_code=303,
-            )
-        matrix_run = _queue_matrix_run(session, matrix, trigger="web")
-        session.commit()
-        return RedirectResponse(url=f"/matrix-runs/{matrix_run.id}", status_code=303)
-    finally:
-        session.close()
-
-
-@web_router.post("/matrix-runs/{matrix_run_id}/rerun", dependencies=[Depends(require_csrf)])
+@web_router.post("/test-matrix-runs/{matrix_run_id}/rerun", dependencies=[Depends(require_csrf)])
 def matrix_run_rerun(matrix_run_id: int,
                      current_user: User = Depends(require_user("submitter"))):
     """Re-run the same matrix as a fresh TestMatrixRun."""
@@ -1331,18 +1341,18 @@ def matrix_run_rerun(matrix_run_id: int,
     try:
         mr = session.get(TestMatrixRun, matrix_run_id)
         if mr is None:
-            return RedirectResponse(url="/matrix-runs", status_code=303)
+            return RedirectResponse(url="/test-matrix-runs", status_code=303)
         matrix = session.get(TestMatrix, mr.matrix_id)
         if matrix is None:
-            return RedirectResponse(url="/matrix-runs", status_code=303)
+            return RedirectResponse(url="/test-matrix-runs", status_code=303)
         new_run = _queue_matrix_run(session, matrix, trigger="rerun")
         session.commit()
-        return RedirectResponse(url=f"/matrix-runs/{new_run.id}", status_code=303)
+        return RedirectResponse(url=f"/test-matrix-runs/{new_run.id}", status_code=303)
     finally:
         session.close()
 
 
-@web_router.post("/matrix-runs/{matrix_run_id}/cancel", dependencies=[Depends(require_csrf)])
+@web_router.post("/test-matrix-runs/{matrix_run_id}/cancel", dependencies=[Depends(require_csrf)])
 def matrix_run_cancel(matrix_run_id: int,
                       current_user: User = Depends(require_user("submitter"))):
     """Cancel every still-queued child run of a matrix run; running
@@ -1366,12 +1376,12 @@ def matrix_run_cancel(matrix_run_id: int,
             session.flush()
             recompute_matrix_run_rollup(session, matrix_run_id)
             session.commit()
-        return RedirectResponse(url=f"/matrix-runs/{matrix_run_id}", status_code=303)
+        return RedirectResponse(url=f"/test-matrix-runs/{matrix_run_id}", status_code=303)
     finally:
         session.close()
 
 
-@web_router.get("/matrix-runs/{matrix_run_id}", response_class=HTMLResponse)
+@web_router.get("/test-matrix-runs/{matrix_run_id}", response_class=HTMLResponse)
 def matrix_run_detail(
     request: Request, matrix_run_id: int,
     current_user: User = Depends(require_user()),
@@ -1449,7 +1459,7 @@ def web_post_expectation(
         try:
             code = TestResultCode(expected_result_code)
         except ValueError:
-            target = return_to or "/matrix-runs"
+            target = return_to or f"/tests/{test_id}"
             sep = "&" if "?" in target else "?"
             return RedirectResponse(
                 url=f"{target}{sep}message=Invalid+result+code&message_type=error",
@@ -1460,7 +1470,7 @@ def web_post_expectation(
     try:
         test = session.get(Test, test_id)
         if test is None:
-            return RedirectResponse(url=return_to or "/matrix-runs", status_code=303)
+            return RedirectResponse(url=return_to or f"/tests/{test_id}", status_code=303)
         insert_expectation(
             session, test_id=test_id,
             expected_result_code=code,
@@ -1470,36 +1480,9 @@ def web_post_expectation(
         )
         session.commit()
         return RedirectResponse(
-            url=return_to or f"/tests/{test_id}/expectations",
+            url=return_to or f"/tests/{test_id}",
             status_code=303,
         )
-    finally:
-        session.close()
-
-
-@web_router.get("/tests/{test_id}/expectations", response_class=HTMLResponse)
-def web_show_expectations(
-    request: Request, test_id: int,
-    current_user: User = Depends(require_user()),
-):
-    """Per-Test expectation history, rendered straight from
-    `expected_test_results`."""
-    session = SessionLocal()
-    try:
-        test = session.get(Test, test_id)
-        if test is None:
-            return HTMLResponse("<h1>Test not found</h1>", status_code=404)
-        rows = session.execute(
-            select(ExpectedTestResult)
-            .where(ExpectedTestResult.test_id == test_id)
-            .order_by(ExpectedTestResult.set_at.desc(),
-                      ExpectedTestResult.id.desc())
-        ).scalars().all()
-        return templates.TemplateResponse(request, "expectations.html", {
-            "test": test,
-            "rows": rows,
-            **_template_globals(request, current_user),
-        })
     finally:
         session.close()
 
