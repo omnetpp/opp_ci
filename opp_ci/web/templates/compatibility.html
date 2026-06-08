@@ -23,9 +23,16 @@
             ~ (" (" ~ r.mode ~ ")" if r.mode else "")) -%}
     {%- endfor -%}
     {%- set title = parts|join("; ") if parts else cell.status -%}
+    {%- set disc -%}
     <span class="cm2 {{ status_class.get(cell.status, 'cm2-none') }}" title="{{ title }}">
         {%- if cell.verdict %}<span class="cm2-sym">{{ verdict_sym.get(cell.verdict, "") }}</span>{% endif -%}
     </span>
+    {%- endset -%}
+    {%- if cell.runs -%}
+    <a class="cm2-link" href="/results?run_ids={{ cell.runs | map(attribute='run_id') | join(',') }}&amp;view=detailed&amp;show_obsolete=1">{{ disc }}</a>
+    {%- else -%}
+    {{ disc }}
+    {%- endif -%}
 {%- endif -%}
 {%- endmacro %}
 
