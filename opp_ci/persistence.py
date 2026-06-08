@@ -103,6 +103,74 @@ def create_test_run(session, *, test_id, matrix_run_id=None,
     return run
 
 
+# ── Naming: look up / set names for Tests and TestMatrices ────────────
+
+
+def get_test_by_name(session, name):
+    """Return the Test with this exact `name`, or None. Blank → None."""
+    if not name or not name.strip():
+        return None
+    return session.execute(
+        select(Test).where(Test.name == name.strip())
+    ).scalar_one_or_none()
+
+
+def get_matrix_by_name(session, name):
+    """Return the TestMatrix with this exact `name`, or None. Blank → None."""
+    if not name or not name.strip():
+        return None
+    return session.execute(
+        select(TestMatrix).where(TestMatrix.name == name.strip())
+    ).scalar_one_or_none()
+
+
+def set_test_name(session, test, name):
+    """Set or clear `test.name`. Blank → NULL (anonymous).
+
+    Raises ValueError if a *different* Test already holds the name, so
+    every caller (web, CLI, REST) reports the same collision error.
+    """
+    cleaned = name.strip() if name else None
+    if cleaned:
+        existing = get_test_by_name(session, cleaned)
+        if existing is not None and existing.id != test.id:
+            raise ValueError(f"A test named {cleaned!r} already exists.")
+    test.name = cleaned
+    session.flush()
+    return test
+
+
+def set_matrix_name(session, matrix, name):
+    """Set or clear `matrix.name`. Blank → NULL (anonymous).
+
+    Raises ValueError on collision with a different TestMatrix.
+    """
+    cleaned = name.strip() if name else None
+    if cleaned:
+        existing = get_matrix_by_name(session, cleaned)
+        if existing is not None and existing.id != matrix.id:
+            raise ValueError(f"A matrix named {cleaned!r} already exists.")
+    matrix.name = cleaned
+    session.flush()
+    return matrix
+
+
+def create_matrix_from_axes(session, *, project, config, name=None, opp_file=None):
+    """Create a TestMatrix row from a config dict.
+
+    `name` may be None (anonymous). Shared by `matrix_create`, the web
+    anonymous-run handler, and the CLI so the row is built one way.
+    Raises ValueError if a named matrix collides.
+    """
+    cleaned = name.strip() if name else None
+    if cleaned and get_matrix_by_name(session, cleaned) is not None:
+        raise ValueError(f"A matrix named {cleaned!r} already exists.")
+    matrix = TestMatrix(name=cleaned, project=project, opp_file=opp_file, config=config)
+    session.add(matrix)
+    session.flush()
+    return matrix
+
+
 # ── Expectations ──────────────────────────────────────────────────────
 
 

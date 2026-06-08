@@ -4,7 +4,7 @@ import hashlib
 import json
 import secrets
 
-from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Text, Enum, JSON, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Text, Enum, JSON, Boolean, Index, text
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
@@ -79,11 +79,19 @@ class TestMatrix(Base):
     __tablename__ = "test_matrices"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True, nullable=False)
+    # Optional, editable label. NULL = an anonymous matrix (run once,
+    # never named). A UNIQUE constraint keeps named matrices distinct;
+    # NULLs are distinct under SQL UNIQUE, so any number may be anonymous.
+    name = Column(String, unique=True, nullable=True)
     project = Column(String, nullable=False)
     opp_file = Column(String, nullable=True)
     config = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    @property
+    def display_name(self):
+        """Human label that never renders blank for anonymous matrices."""
+        return self.name or f"(anonymous #{self.id})"
 
 
 class Worker(Base):
@@ -234,6 +242,16 @@ class TestVerdictKind(enum.Enum):
 
 class Test(Base):
     __tablename__ = "tests"
+
+    # Named tests must be unique so "run by name" is unambiguous; unnamed
+    # (NULL) tests are unconstrained. Partial index — NULLs excluded.
+    __table_args__ = (
+        Index(
+            "uq_tests_name", "name", unique=True,
+            sqlite_where=text("name IS NOT NULL"),
+            postgresql_where=text("name IS NOT NULL"),
+        ),
+    )
 
     id = Column(Integer, primary_key=True)
 
