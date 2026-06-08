@@ -13,7 +13,8 @@ from opp_ci.db.models import (
 )
 from opp_ci.executor import install_project, run_test
 from opp_ci.persistence import (
-    capture_system_snapshot, create_matrix_run, create_test_run, enqueue_job,
+    CannotDeleteRunningRun, capture_system_snapshot, create_matrix_run,
+    create_test_run, delete_matrix_run, delete_test_run, enqueue_job,
     finalize_verdict_for_run, get_or_create_test, insert_expectation,
     status_filter,
 )
@@ -331,6 +332,16 @@ def _delete_runs_remote(project, git_ref, kind, status, before_date, yes):
         result = c.delete_runs(project=project, kind=kind, status=status,
                                before=before_date, confirm=True)
         click.echo(f"Deleted {result.get('deleted', 0)} run(s).")
+    _remote(op)
+
+
+def _delete_matrix_run_remote(matrix_run_id, yes):
+    def op(c):
+        if not yes:
+            click.confirm(f"Delete matrix run #{matrix_run_id} and its child runs?",
+                          abort=True)
+        c.delete_matrix_run(matrix_run_id)
+        click.echo(f"Matrix run #{matrix_run_id} deleted.")
     _remote(op)
 
 
@@ -1269,7 +1280,10 @@ def delete_run(run_id, yes):
             return
         if not yes:
             click.confirm(f"Delete run #{run.id} ({run.project} / {run.kind} / {run.effective_status})?", abort=True)
-        session.delete(run)
+        try:
+            delete_test_run(session, run_id)
+        except CannotDeleteRunningRun as e:
+            raise click.ClickException(str(e))
         session.commit()
         click.echo(f"Run #{run_id} deleted.")
     finally:
@@ -1323,10 +1337,53 @@ def delete_runs(project, git_ref, kind, status, before_date, yes):
         if not yes:
             click.confirm(f"Delete {len(runs)} run(s)?", abort=True)
 
+        deleted = skipped = 0
         for run in runs:
-            session.delete(run)
+            try:
+                delete_test_run(session, run.id)
+                deleted += 1
+            except CannotDeleteRunningRun:
+                skipped += 1  # never delete a run that's still executing
         session.commit()
-        click.echo(f"Deleted {len(runs)} run(s).")
+        msg = f"Deleted {deleted} run(s)."
+        if skipped:
+            msg += f" Skipped {skipped} still-running run(s)."
+        click.echo(msg)
+    finally:
+        session.close()
+
+
+@main.command("delete-matrix-run")
+@click.argument("matrix_run_id", type=int)
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+@remoteable(_delete_matrix_run_remote)
+def delete_matrix_run_cmd(matrix_run_id, yes):
+    """Delete a matrix run and cascade to its child runs.
+
+    Child runs shared with another matrix run via a cache-hit cell are
+    detached rather than deleted. Refused if any child run is still running.
+    """
+    session = SessionLocal()
+    try:
+        mr = session.get(TestMatrixRun, matrix_run_id)
+        if mr is None:
+            click.echo(f"Matrix run #{matrix_run_id} not found.")
+            return
+        if not yes:
+            click.confirm(
+                f"Delete matrix run #{matrix_run_id} and its child runs?",
+                abort=True,
+            )
+        try:
+            result = delete_matrix_run(session, matrix_run_id)
+        except CannotDeleteRunningRun as e:
+            raise click.ClickException(str(e))
+        session.commit()
+        click.echo(
+            f"Matrix run #{matrix_run_id} deleted "
+            f"({result['deleted_runs']} run(s) deleted, "
+            f"{result['detached_runs']} detached)."
+        )
     finally:
         session.close()
 

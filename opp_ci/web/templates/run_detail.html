@@ -120,6 +120,12 @@
         <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Cancel this run?')">Cancel</button>
     </form>
     {% endif %}
+    {% if current_user and current_user.role in ("submitter", "admin") and run.lifecycle.value != "running" %}
+    <form method="post" action="/test-runs/{{ run.id }}/delete" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this run? This cannot be undone.')">Delete</button>
+    </form>
+    {% endif %}
     <a href="/test-runs" class="btn btn-secondary btn-sm">&larr; Back to runs</a>
 </div>
 {% endblock %}

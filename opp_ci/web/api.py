@@ -40,7 +40,8 @@ from opp_ci.db.models import (
     TestVerdictKind, User, Version, Worker,
 )
 from opp_ci.persistence import (
-    create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
+    CannotDeleteRunningRun, create_matrix_from_axes, create_matrix_run,
+    create_test_run, delete_matrix_run, delete_test_run, enqueue_job,
     finalize_verdict_for_run, get_current_expectation, get_matrix_by_name,
     get_or_create_test, get_test_by_name, insert_expectation, job_to_coord,
     set_test_name, status_filter,
@@ -1352,18 +1353,51 @@ async def ack_notes(
 @router.delete("/runs/{run_id}", status_code=204)
 async def delete_run(
     run_id: int,
-    _identity: dict = Depends(require_role("admin")),
+    _identity: dict = Depends(require_role("submitter")),
 ):
-    """Delete a single test run by id (admin). 204 on success, 404 if missing."""
+    """Delete a single test run by id (submitter). 204 on success, 404 if
+    missing, 409 if the run is still running."""
     session = SessionLocal()
     try:
-        run = session.execute(
-            select(TestRun).where(TestRun.id == run_id)
-        ).scalar_one_or_none()
-        if run is None:
+        try:
+            deleted = delete_test_run(session, run_id)
+        except CannotDeleteRunningRun as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        if deleted is None:
             raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
-        session.delete(run)
         session.commit()
+        return None
+    finally:
+        session.close()
+
+
+@router.delete("/matrix-runs/{matrix_run_id}", status_code=204)
+async def delete_matrix_run_endpoint(
+    matrix_run_id: int,
+    _identity: dict = Depends(require_role("submitter")),
+):
+    """Delete a matrix run and cascade to its child runs (submitter).
+
+    204 on success, 404 if missing, 409 if any child run is still running.
+    Child runs shared with another matrix run via a cache-hit cell are
+    detached rather than deleted.
+    """
+    session = SessionLocal()
+    try:
+        try:
+            result = delete_matrix_run(session, matrix_run_id)
+        except CannotDeleteRunningRun as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        if result is None:
+            raise HTTPException(
+                status_code=404, detail=f"Matrix run #{matrix_run_id} not found"
+            )
+        session.commit()
+        _logger.info(
+            "Deleted matrix run #%d (%d run(s) deleted, %d detached) by %s",
+            matrix_run_id, result["deleted_runs"], result["detached_runs"],
+            _identity.get("name"),
+        )
         return None
     finally:
         session.close()
@@ -1377,9 +1411,9 @@ async def delete_runs(
     before: str | None = None,
     all: bool = False,
     confirm: bool = False,
-    _identity: dict = Depends(require_role("admin")),
+    _identity: dict = Depends(require_role("submitter")),
 ):
-    """Bulk-delete runs matching the given filters (admin).
+    """Bulk-delete runs matching the given filters (submitter).
 
     At least one filter (project/kind/status/before) is required unless
     `all=true` is passed — the unfiltered form must be deliberate so a
@@ -1425,11 +1459,17 @@ async def delete_runs(
             query = query.where(TestRun.started_at < cutoff)
 
         runs = session.execute(query).scalars().all()
+        deleted = skipped = 0
         for run in runs:
-            session.delete(run)
+            try:
+                delete_test_run(session, run.id)
+                deleted += 1
+            except CannotDeleteRunningRun:
+                skipped += 1  # never delete a run that's still executing
         session.commit()
-        _logger.info("Bulk-deleted %d run(s) by %s", len(runs), _identity.get("name"))
-        return {"deleted": len(runs)}
+        _logger.info("Bulk-deleted %d run(s) (%d running skipped) by %s",
+                     deleted, skipped, _identity.get("name"))
+        return {"deleted": deleted, "skipped_running": skipped}
     finally:
         session.close()
 

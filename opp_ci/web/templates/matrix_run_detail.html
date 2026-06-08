@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block title %}opp_ci — Matrix run #{{ mr.id }}{% endblock %}
 {% block content %}
+{% if message %}
+<div class="flash flash-{{ message_type or 'success' }}">{{ message }}</div>
+{% endif %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
     <h2 style="margin:0;">Matrix run #{{ mr.id }}
         {% if matrix %}— <a href="/test-matrices/{{ matrix.id }}">{{ matrix.display_name }}</a>{% endif %}
@@ -17,6 +20,10 @@
             <button type="submit" class="btn btn-danger btn-sm">Cancel</button>
         </form>
         {% endif %}
+        <form method="post" action="/test-matrix-runs/{{ mr.id }}/delete" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this matrix run and its child runs? This cannot be undone.')">Delete</button>
+        </form>
     </div>
     {% endif %}
 </div>
