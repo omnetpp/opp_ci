@@ -40,8 +40,10 @@ from opp_ci.db.models import (
     TestVerdictKind, User, Version, Worker,
 )
 from opp_ci.persistence import (
-    create_matrix_run, create_test_run, enqueue_job, finalize_verdict_for_run,
-    get_current_expectation, get_or_create_test, insert_expectation, job_to_coord,
+    create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
+    finalize_verdict_for_run, get_current_expectation, get_matrix_by_name,
+    get_or_create_test, get_test_by_name, insert_expectation, job_to_coord,
+    set_test_name,
 )
 
 _logger = logging.getLogger(__name__)
@@ -52,8 +54,10 @@ router = APIRouter(prefix="/api")
 # ── Pydantic request/response schemas ──────────────────────────────────
 
 class SubmitRunRequest(BaseModel):
-    project: str
-    kind: str                       # smoke, fingerprint, statistical, build, …
+    project: str | None = None      # required unless test_name is given
+    kind: str | None = None         # smoke, fingerprint, statistical, build, …
+    name: str | None = None         # optional label for the Test (set on first run)
+    test_name: str | None = None    # run an existing named Test by name
     mode: str | None = None
     git_ref: str | None = None
     version: str | None = None
@@ -109,36 +113,54 @@ async def submit_run(
     """
     session = SessionLocal()
     try:
-        from opp_ci import platforms
-        try:
-            resolved_os, resolved_distro, resolved_flavor = platforms.resolve_platform(
-                os=req.os, distro=req.distro, flavor=req.flavor,
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        os_canon = platforms._os_canonical(resolved_os) if resolved_os else None
-        os_ver = req.os_version if os_canon and os_canon != "Linux" else None
-        distro_ver = req.distro_version if resolved_distro else None
-        flavor_ver = req.flavor_version if resolved_flavor else None
+        if req.test_name:
+            # Run an existing named test by name.
+            test = get_test_by_name(session, req.test_name)
+            if test is None:
+                raise HTTPException(
+                    status_code=404, detail=f"Test '{req.test_name}' not found",
+                )
+        else:
+            if not req.project or not req.kind:
+                raise HTTPException(
+                    status_code=400,
+                    detail="project and kind are required (or pass test_name).",
+                )
+            from opp_ci import platforms
+            try:
+                resolved_os, resolved_distro, resolved_flavor = platforms.resolve_platform(
+                    os=req.os, distro=req.distro, flavor=req.flavor,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            os_canon = platforms._os_canonical(resolved_os) if resolved_os else None
+            os_ver = req.os_version if os_canon and os_canon != "Linux" else None
+            distro_ver = req.distro_version if resolved_distro else None
+            flavor_ver = req.flavor_version if resolved_flavor else None
 
-        coord = {
-            "project": req.project,
-            "kind": req.kind,
-            "mode": req.mode,
-            "os": os_canon,
-            "os_version": os_ver,
-            "distro": resolved_distro,
-            "distro_version": distro_ver,
-            "flavor": resolved_flavor,
-            "flavor_version": flavor_ver,
-            "arch": req.arch,
-            "compiler": req.compiler,
-            "compiler_version": req.compiler_version,
-            "isolation": req.isolation,
-            "toolchain": req.toolchain,
-            "opp_file": None,
-        }
-        test = get_or_create_test(session, coord)
+            coord = {
+                "project": req.project,
+                "kind": req.kind,
+                "mode": req.mode,
+                "os": os_canon,
+                "os_version": os_ver,
+                "distro": resolved_distro,
+                "distro_version": distro_ver,
+                "flavor": resolved_flavor,
+                "flavor_version": flavor_ver,
+                "arch": req.arch,
+                "compiler": req.compiler,
+                "compiler_version": req.compiler_version,
+                "isolation": req.isolation,
+                "toolchain": req.toolchain,
+                "opp_file": None,
+            }
+            test = get_or_create_test(session, coord)
+            if req.name:
+                try:
+                    set_test_name(session, test, req.name)
+                except ValueError as e:
+                    raise HTTPException(status_code=409, detail=str(e))
         run = create_test_run(
             session,
             test_id=test.id,
@@ -969,18 +991,15 @@ async def submit_matrix_run(
                     detail="Inline spec must include either 'matrix_name' "
                            "or 'project' plus axis fields.",
                 )
-            name = req.name or (
-                f"adhoc:{req.project}:"
-                f"{datetime.datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}"
-            )
-            matrix = TestMatrix(
-                name=name,
-                project=req.project,
-                opp_file=req.opp_file,
-                config=_spec_to_config(req),
-            )
-            session.add(matrix)
-            session.flush()
+            # An inline spec with no name stays anonymous (name = NULL);
+            # pass `name` to make it reusable.
+            try:
+                matrix = create_matrix_from_axes(
+                    session, project=req.project, config=_spec_to_config(req),
+                    name=req.name, opp_file=req.opp_file,
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=409, detail=str(e))
 
         proj = session.execute(
             select(Project).where(Project.name == matrix.project)
