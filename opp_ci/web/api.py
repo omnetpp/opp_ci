@@ -37,7 +37,7 @@ from opp_ci.db.connection import SessionLocal
 from opp_ci.db.models import (
     ApiToken, AutoTestRule, ExpectedTestResult, Project, Test, TestMatrix,
     TestMatrixRun, TestResultCode, TestRun, TestRunLifecycle, TestVerdict,
-    TestVerdictKind, Worker,
+    TestVerdictKind, User, Version, Worker,
 )
 from opp_ci.persistence import (
     create_matrix_run, create_test_run, enqueue_job, finalize_verdict_for_run,
@@ -1285,6 +1285,562 @@ async def ack_notes(
     """
     _logger.info("Notes ack from %s/%s: %d sha(s)", owner, repo, len(req.shas))
     return None
+
+
+# ── Run deletion ───────────────────────────────────────────────────────
+
+
+def _status_filter(query, status):
+    """Apply a status filter that matches lifecycle *or* result_code.
+
+    Mirrors `cli.py:_status_where` so the REST bulk-delete accepts the
+    same PASS/FAIL/ERROR/queued/running/cancelled vocabulary the CLI
+    does.
+    """
+    try:
+        return query.where(TestRun.lifecycle == TestRunLifecycle(status))
+    except ValueError:
+        pass
+    try:
+        return query.where(TestRun.result_code == TestResultCode(status))
+    except ValueError:
+        pass
+    return query
+
+
+@router.delete("/runs/{run_id}", status_code=204)
+async def delete_run(
+    run_id: int,
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Delete a single test run by id (admin). 204 on success, 404 if missing."""
+    session = SessionLocal()
+    try:
+        run = session.execute(
+            select(TestRun).where(TestRun.id == run_id)
+        ).scalar_one_or_none()
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
+        session.delete(run)
+        session.commit()
+        return None
+    finally:
+        session.close()
+
+
+@router.delete("/runs")
+async def delete_runs(
+    project: str | None = None,
+    kind: str | None = None,
+    status: str | None = None,
+    before: str | None = None,
+    all: bool = False,
+    confirm: bool = False,
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Bulk-delete runs matching the given filters (admin).
+
+    At least one filter (project/kind/status/before) is required unless
+    `all=true` is passed — the unfiltered form must be deliberate so a
+    typo can't wipe the whole table. `confirm=true` is also required (the
+    CLI prompts the operator, then sends it) so a script that forgets to
+    confirm 400s rather than silently nuking data. Returns
+    `{"deleted": <n>}`.
+    """
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Bulk delete requires confirm=true.",
+        )
+    has_filter = any([project, kind, status, before])
+    if not has_filter and not all:
+        raise HTTPException(
+            status_code=400,
+            detail="Refusing to delete all runs without a filter; "
+                   "pass at least one of project/kind/status/before, "
+                   "or all=true to delete everything.",
+        )
+
+    session = SessionLocal()
+    try:
+        query = select(TestRun).join(Test, TestRun.test_id == Test.id)
+        if project:
+            query = query.where(Test.project == project)
+        if kind:
+            query = query.where(Test.kind == kind)
+        if status:
+            query = _status_filter(query, status)
+        if before:
+            try:
+                cutoff = datetime.datetime.strptime(before, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid before date (want YYYY-MM-DD): {before!r}",
+                )
+            query = query.where(TestRun.started_at < cutoff)
+
+        runs = session.execute(query).scalars().all()
+        for run in runs:
+            session.delete(run)
+        session.commit()
+        _logger.info("Bulk-deleted %d run(s) by %s", len(runs), _identity.get("name"))
+        return {"deleted": len(runs)}
+    finally:
+        session.close()
+
+
+# ── Projects ───────────────────────────────────────────────────────────
+
+
+class CreateProjectRequest(BaseModel):
+    name: str
+    github: str | None = None        # "owner/repo"
+    git_url: str | None = None
+    opp_env_name: str | None = None
+    deps: list[str] = Field(default_factory=list)
+
+
+def _project_to_dict(p):
+    return {
+        "id": p.id,
+        "name": p.name,
+        "opp_env_name": p.opp_env_name,
+        "github": f"{p.github_owner}/{p.github_repo}" if p.github_owner else None,
+        "github_owner": p.github_owner,
+        "github_repo": p.github_repo,
+        "git_url": p.git_url,
+        "deps": p.dependency_names or [],
+    }
+
+
+@router.get("/projects")
+async def list_projects(
+    _identity: dict = Depends(require_role("readonly")),
+):
+    """List known projects (readonly)."""
+    session = SessionLocal()
+    try:
+        projects = session.execute(
+            select(Project).order_by(Project.name)
+        ).scalars().all()
+        return [_project_to_dict(p) for p in projects]
+    finally:
+        session.close()
+
+
+@router.post("/projects")
+async def add_project(
+    req: CreateProjectRequest,
+    identity: dict = Depends(require_role("submitter")),
+):
+    """Register a new project (submitter)."""
+    session = SessionLocal()
+    try:
+        existing = session.execute(
+            select(Project).where(Project.name == req.name)
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise HTTPException(status_code=409,
+                                detail=f"Project '{req.name}' already exists")
+
+        github_owner = github_repo = None
+        if req.github:
+            parts = req.github.split("/", 1)
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                raise HTTPException(status_code=400,
+                                    detail="github must be 'owner/repo'")
+            github_owner, github_repo = parts
+
+        project = Project(
+            name=req.name,
+            opp_env_name=req.opp_env_name or req.name,
+            github_owner=github_owner,
+            github_repo=github_repo,
+            git_url=req.git_url,
+            dependency_names=req.deps or [],
+        )
+        session.add(project)
+        session.commit()
+        _logger.info("Project '%s' added by %s", project.name, identity.get("name"))
+        return _project_to_dict(project)
+    finally:
+        session.close()
+
+
+@router.post("/projects/sync-catalog")
+async def sync_catalog_endpoint(
+    identity: dict = Depends(require_role("admin")),
+):
+    """Refresh the project catalog from opp_env, server-side (admin).
+
+    Synchronous; can take 30+ seconds while opp_env is queried. Returns
+    the count of newly-added projects and versions.
+    """
+    from opp_ci.opp_env_adapter import sync_catalog
+    session = SessionLocal()
+    try:
+        new_projects, new_versions = sync_catalog(session)
+        _logger.info("Catalog sync by %s: %d new projects, %d new versions",
+                     identity.get("name"), new_projects, new_versions)
+        return {"new_projects": new_projects, "new_versions": new_versions}
+    finally:
+        session.close()
+
+
+# ── Versions ───────────────────────────────────────────────────────────
+
+
+class AddVersionRequest(BaseModel):
+    label: str
+    git_ref: str | None = None
+    opp_env_version: str | None = None
+    deps: dict | None = None
+
+
+def _version_to_dict(v, project_name):
+    return {
+        "id": v.id,
+        "project": project_name,
+        "label": v.label,
+        "git_ref": v.git_ref,
+        "opp_env_version": v.opp_env_version,
+        "deps": v.resolved_dependencies,
+    }
+
+
+@router.get("/versions")
+async def list_all_versions(
+    _identity: dict = Depends(require_role("readonly")),
+):
+    """List every registered version across all projects (readonly)."""
+    session = SessionLocal()
+    try:
+        names = dict(session.execute(select(Project.id, Project.name)).all())
+        versions = session.execute(select(Version)).scalars().all()
+        return [_version_to_dict(v, names.get(v.project_id, "?")) for v in versions]
+    finally:
+        session.close()
+
+
+@router.get("/projects/{name}/versions")
+async def list_project_versions(
+    name: str,
+    _identity: dict = Depends(require_role("readonly")),
+):
+    """List registered versions for one project (readonly)."""
+    session = SessionLocal()
+    try:
+        proj = session.execute(
+            select(Project).where(Project.name == name)
+        ).scalar_one_or_none()
+        if proj is None:
+            raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
+        versions = session.execute(
+            select(Version).where(Version.project_id == proj.id)
+        ).scalars().all()
+        return [_version_to_dict(v, proj.name) for v in versions]
+    finally:
+        session.close()
+
+
+@router.post("/projects/{name}/versions")
+async def add_version(
+    name: str,
+    req: AddVersionRequest,
+    identity: dict = Depends(require_role("submitter")),
+):
+    """Register a version for a project (submitter)."""
+    session = SessionLocal()
+    try:
+        proj = session.execute(
+            select(Project).where(Project.name == name)
+        ).scalar_one_or_none()
+        if proj is None:
+            raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
+        version = Version(
+            project_id=proj.id,
+            label=req.label,
+            git_ref=req.git_ref or req.label,
+            opp_env_version=req.opp_env_version,
+            resolved_dependencies=req.deps,
+        )
+        session.add(version)
+        session.commit()
+        _logger.info("Version '%s' added to '%s' by %s",
+                     req.label, name, identity.get("name"))
+        return _version_to_dict(version, proj.name)
+    finally:
+        session.close()
+
+
+# ── Admin seed ─────────────────────────────────────────────────────────
+
+
+@router.post("/admin/seed/projects")
+async def seed_projects_endpoint(
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Seed the core projects from the catalog (admin)."""
+    from opp_ci.catalog import seed_projects
+    session = SessionLocal()
+    try:
+        before = session.execute(select(func.count(Project.id))).scalar() or 0
+        seed_projects(session)
+        after = session.execute(select(func.count(Project.id))).scalar() or 0
+        return {"inserted": after - before, "total": after}
+    finally:
+        session.close()
+
+
+@router.post("/admin/seed/platforms")
+async def seed_platforms_endpoint(
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Seed OS and Compiler rows from platforms.yml (admin)."""
+    from opp_ci.catalog import seed_platforms
+    session = SessionLocal()
+    try:
+        os_n, comp_n = seed_platforms(session)
+        return {"os_inserted": os_n, "compilers_inserted": comp_n}
+    finally:
+        session.close()
+
+
+@router.post("/admin/seed/matrices")
+async def seed_matrices_endpoint(
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Seed the default matrix definitions (admin)."""
+    from opp_ci.scheduler import DEFAULT_MATRICES
+    session = SessionLocal()
+    try:
+        inserted = 0
+        for name, mdef in DEFAULT_MATRICES.items():
+            existing = session.execute(
+                select(TestMatrix).where(TestMatrix.name == name)
+            ).scalar_one_or_none()
+            if existing is None:
+                session.add(TestMatrix(name=name, project=mdef["project"],
+                                       config=mdef["config"]))
+                inserted += 1
+        session.commit()
+        return {"inserted": inserted, "total": len(DEFAULT_MATRICES)}
+    finally:
+        session.close()
+
+
+# ── Token revocation ───────────────────────────────────────────────────
+
+
+@router.delete("/tokens/{token_id}", status_code=204)
+async def revoke_token(
+    token_id: int,
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Disable an API token by id (admin). Does not hard-delete the row."""
+    session = SessionLocal()
+    try:
+        token = session.execute(
+            select(ApiToken).where(ApiToken.id == token_id)
+        ).scalar_one_or_none()
+        if token is None:
+            raise HTTPException(status_code=404, detail=f"Token #{token_id} not found")
+        token.enabled = False
+        session.commit()
+        _logger.info("API token #%d (%s) revoked", token.id, token.name)
+        return None
+    finally:
+        session.close()
+
+
+# ── Users ──────────────────────────────────────────────────────────────
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "admin"
+    update_password: bool = False
+
+
+class UpdateUserRequest(BaseModel):
+    enabled: bool | None = None
+    role: str | None = None
+    password: str | None = None
+
+
+_USER_ROLES = ("readonly", "submitter", "admin")
+
+
+def _user_to_dict(u):
+    return {
+        "id": u.id,
+        "username": u.username,
+        "github_username": u.github_username,
+        "role": u.role,
+        "role_locked": bool(u.role_locked),
+        "enabled": bool(u.enabled),
+        "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
+    }
+
+
+@router.post("/users")
+async def create_user(
+    req: CreateUserRequest,
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Create (or update) a local-login user (admin).
+
+    Plaintext password arrives over TLS and is hashed before storage.
+    """
+    from opp_ci.passwords import hash_password
+
+    if req.role not in _USER_ROLES:
+        raise HTTPException(status_code=400, detail=f"Invalid role: {req.role!r}")
+
+    session = SessionLocal()
+    try:
+        existing = session.execute(
+            select(User).where(User.username == req.username)
+        ).scalar_one_or_none()
+        if existing is not None:
+            if not req.update_password:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"User '{req.username}' already exists "
+                           "(pass update_password=true to reset)",
+                )
+            existing.password_hash = hash_password(req.password)
+            existing.role = req.role
+            existing.role_locked = True
+            existing.enabled = True
+            session.commit()
+            return _user_to_dict(existing)
+
+        user = User(
+            username=req.username,
+            password_hash=hash_password(req.password),
+            role=req.role,
+            role_locked=True,
+            enabled=True,
+        )
+        session.add(user)
+        session.commit()
+        _logger.info("User '%s' created (role=%s)", user.username, user.role)
+        return _user_to_dict(user)
+    finally:
+        session.close()
+
+
+@router.get("/users")
+async def list_users(
+    _identity: dict = Depends(require_role("admin")),
+):
+    """List web UI users (admin)."""
+    session = SessionLocal()
+    try:
+        users = session.execute(select(User).order_by(User.id)).scalars().all()
+        return [_user_to_dict(u) for u in users]
+    finally:
+        session.close()
+
+
+@router.patch("/users/{username}")
+async def update_user(
+    username: str,
+    req: UpdateUserRequest,
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Patch a user's enabled flag, role, and/or password (admin)."""
+    from opp_ci.passwords import hash_password
+
+    if req.role is not None and req.role not in _USER_ROLES:
+        raise HTTPException(status_code=400, detail=f"Invalid role: {req.role!r}")
+
+    session = SessionLocal()
+    try:
+        user = session.execute(
+            select(User).where(User.username == username)
+        ).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=404, detail=f"User '{username}' not found")
+        if req.enabled is not None:
+            user.enabled = req.enabled
+        if req.role is not None:
+            user.role = req.role
+            user.role_locked = True
+        if req.password is not None:
+            user.password_hash = hash_password(req.password)
+        session.commit()
+        _logger.info("User '%s' updated", username)
+        return _user_to_dict(user)
+    finally:
+        session.close()
+
+
+# ── Webhook simulation ─────────────────────────────────────────────────
+
+
+class TestWebhookRequest(BaseModel):
+    project: str
+    ref: str
+    event_type: str = "push"  # "push" | "pr"
+    sha: str | None = None
+    pr_number: int | None = None
+
+
+@router.post("/github/rules/test-webhook")
+async def test_webhook(
+    req: TestWebhookRequest,
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Drive the webhook handler with a synthesized payload (admin).
+
+    Same code path as `opp_ci rule test-webhook`. Returns the handler's
+    result dict so the operator sees which rules matched.
+    """
+    from opp_ci.github.webhook import handle_webhook_event
+
+    session = SessionLocal()
+    try:
+        proj = session.execute(
+            select(Project).where(Project.name == req.project)
+        ).scalar_one_or_none()
+        if proj is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Project '{req.project}' not found")
+        if not proj.github_owner or not proj.github_repo:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Project '{req.project}' has no GitHub owner/repo configured",
+            )
+        owner, repo = proj.github_owner, proj.github_repo
+    finally:
+        session.close()
+
+    sha = req.sha or "0" * 40
+    if req.event_type == "push":
+        payload = {
+            "ref": f"refs/heads/{req.ref}",
+            "after": sha,
+            "repository": {"name": repo, "owner": {"login": owner}},
+        }
+        result = handle_webhook_event("push", payload)
+    elif req.event_type == "pr":
+        payload = {
+            "action": "synchronize",
+            "pull_request": {
+                "number": req.pr_number or 1,
+                "head": {"sha": sha, "ref": req.ref},
+            },
+            "repository": {"name": repo, "owner": {"login": owner}},
+        }
+        result = handle_webhook_event("pull_request", payload)
+    else:
+        raise HTTPException(status_code=400,
+                            detail=f"Invalid event_type: {req.event_type!r}")
+    return result
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
