@@ -132,7 +132,7 @@ See [git_notes.md](git_notes.md) for the notes-delivery flow.
    opp_ci rule create --project inet --type branch --pattern master --matrix inet-full
    ```
 
-5. Push a commit → check `/runs` for the queued job.
+5. Push a commit → check `/test-runs` for the queued job.
 
 For local-only setup without a public coordinator, see
 [deployment.md](deployment.md#local-github-integration).
