@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, FastAPI, Form, Request, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
-from sqlalchemy import select, func
+from sqlalchemy import false, func, select
 from starlette.middleware.sessions import SessionMiddleware
 
 from opp_ci import config as cfg
@@ -23,6 +23,7 @@ from opp_ci.persistence import (
     create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
     get_current_expectation, get_matrix_by_name, get_or_create_test,
     get_test_by_name, insert_expectation, set_matrix_name, set_test_name,
+    status_filter,
 )
 
 _ANSI_RE = re.compile(r'\x1b\[([0-9;]*)m')
@@ -248,7 +249,12 @@ def runs_list(
                 (TestRun.git_ref == git_ref) | (TestRun.commit_sha.startswith(git_ref))
             )
         if status:
-            query = query.where(_status_filter(status))
+            try:
+                query = status_filter(query, status)
+            except ValueError:
+                # Forgiving on URL params: a bad ?status= just shows no rows
+                # and the user corrects the filter.
+                query = query.where(false())
 
         runs = session.execute(query).scalars().all()
         return templates.TemplateResponse(request, "runs.html", {
@@ -261,24 +267,6 @@ def runs_list(
         })
     finally:
         session.close()
-
-
-def _status_filter(status):
-    """Translate a status filter string into a WHERE-clause expression.
-
-    A status string is either a lifecycle value (queued/running/cancelled/
-    timed_out) — match TestRun.lifecycle — or an outcome value
-    (PASS/FAIL/ERROR/SKIPPED) — match TestRun.result_code on finished rows.
-    """
-    try:
-        return TestRun.lifecycle == TestRunLifecycle(status)
-    except ValueError:
-        pass
-    try:
-        return TestRun.result_code == TestResultCode(status)
-    except ValueError:
-        pass
-    return TestRun.lifecycle == TestRunLifecycle.queued  # no-op fallback that returns no rows
 
 
 @web_router.get("/results", response_class=HTMLResponse)
@@ -338,7 +326,12 @@ def results_page(
         if compiler_version:
             query = query.where(Test.compiler_version == compiler_version)
         if status:
-            query = query.where(_status_filter(status))
+            try:
+                query = status_filter(query, status)
+            except ValueError:
+                # Forgiving on URL params: a bad ?status= just shows no rows
+                # and the user corrects the filter.
+                query = query.where(false())
 
         runs = session.execute(query).scalars().all()
 

@@ -15,6 +15,7 @@ from opp_ci.executor import install_project, run_test
 from opp_ci.persistence import (
     capture_system_snapshot, create_matrix_run, create_test_run, enqueue_job,
     finalize_verdict_for_run, get_or_create_test, insert_expectation,
+    status_filter,
 )
 from opp_ci.notes import update_ci_note
 
@@ -428,7 +429,7 @@ def _run_matrix_remote(matrix_name, **kwargs):
 
     def op(c):
         result = c.run_matrix(matrix_name)
-        click.echo(f"Matrix '{result['matrix']}' queued "
+        click.echo(f"Matrix '{result['matrix_name']}' queued "
                    f"{result['jobs_queued']} job(s): {result['run_ids']}")
     _remote(op)
 
@@ -950,7 +951,7 @@ def _run_remote(project, kinds, git_ref, *, mode=None,
                 arch=arch,
                 compiler=compiler, compiler_version=compiler_version,
             )
-            click.echo(f"Submitted run #{result['id']}: {project} / {kind} → {result['status']}")
+            click.echo(f"Submitted run #{result['id']}: {project} / {kind} → {result['lifecycle']}")
         except Exception as e:
             click.echo(f"ERROR submitting {project}/{kind}: {e}")
 
@@ -1168,19 +1169,6 @@ def _write_secure(path, data, *, mode):
         raise
 
 
-def _status_where(query, status):
-    """Match status string against lifecycle or result_code."""
-    try:
-        return query.where(TestRun.lifecycle == TestRunLifecycle(status))
-    except ValueError:
-        pass
-    try:
-        return query.where(TestRun.result_code == TestResultCode(status))
-    except ValueError:
-        pass
-    return query
-
-
 @main.command("list-runs")
 @click.option("--project", default=None, help="Filter by project")
 @click.option("--ref", "git_ref", default=None, help="Filter by git ref")
@@ -1205,7 +1193,10 @@ def list_runs(project, git_ref, kind, status, limit):
         if kind:
             query = query.where(Test.kind == kind)
         if status:
-            query = _status_where(query, status)
+            try:
+                query = status_filter(query, status)
+            except ValueError as e:
+                raise click.ClickException(str(e))
 
         runs = session.execute(query).scalars().all()
         if not runs:
@@ -1311,7 +1302,10 @@ def delete_runs(project, git_ref, kind, status, before_date, yes):
         if kind:
             query = query.where(Test.kind == kind)
         if status:
-            query = _status_where(query, status)
+            try:
+                query = status_filter(query, status)
+            except ValueError as e:
+                raise click.ClickException(str(e))
         if before_date:
             cutoff = datetime.datetime.strptime(before_date, "%Y-%m-%d")
             query = query.where(TestRun.started_at < cutoff)
@@ -1363,7 +1357,10 @@ def show_results(project, git_ref, kind, status, limit):
         if kind:
             query = query.where(Test.kind == kind)
         if status:
-            query = _status_where(query, status)
+            try:
+                query = status_filter(query, status)
+            except ValueError as e:
+                raise click.ClickException(str(e))
 
         runs = session.execute(query).scalars().all()
         if not runs:

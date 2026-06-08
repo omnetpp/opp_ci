@@ -43,7 +43,7 @@ from opp_ci.persistence import (
     create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
     finalize_verdict_for_run, get_current_expectation, get_matrix_by_name,
     get_or_create_test, get_test_by_name, insert_expectation, job_to_coord,
-    set_test_name,
+    set_test_name, status_filter,
 )
 
 _logger = logging.getLogger(__name__)
@@ -169,7 +169,7 @@ async def submit_run(
         )
         session.commit()
         _logger.info("Run #%d submitted by %s", run.id, identity.get("name"))
-        return {"id": run.id, "status": run.lifecycle.value}
+        return {"id": run.id, "lifecycle": run.lifecycle.value}
     finally:
         session.close()
 
@@ -223,7 +223,7 @@ async def submit_matrix_run(
         _logger.info("Matrix '%s' queued %d jobs (matrix_run=%d) by %s",
                      req.matrix_name, len(run_ids), matrix_run.id, identity.get("name"))
         return {
-            "matrix": req.matrix_name,
+            "matrix_name": matrix.display_name,
             "matrix_run_id": matrix_run.id,
             "jobs_queued": len(run_ids),
             "run_ids": run_ids,
@@ -237,6 +237,8 @@ async def list_runs(
     project: str | None = None,
     kind: str | None = None,
     status: str | None = None,
+    lifecycle: str | None = None,
+    result_code: str | None = None,
     os: str | None = None,
     os_version: str | None = None,
     distro: str | None = None,
@@ -246,7 +248,13 @@ async def list_runs(
     limit: int = 50,
     _identity: dict = Depends(require_role("readonly")),
 ):
-    """List test runs."""
+    """List test runs.
+
+    ``status`` is the convenience union filter (accepts either a lifecycle
+    value like ``queued`` or an outcome value like ``PASS``). ``lifecycle``
+    and ``result_code`` are strict filters for callers that want to target
+    one column. A bad value on any of the three returns HTTP 400.
+    """
     session = SessionLocal()
     try:
         query = (
@@ -260,7 +268,22 @@ async def list_runs(
         if kind:
             query = query.where(Test.kind == kind)
         if status:
-            query = query.where(TestRun.lifecycle == TestRunLifecycle(status))
+            try:
+                query = status_filter(query, status)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+        if lifecycle:
+            try:
+                query = query.where(TestRun.lifecycle == TestRunLifecycle(lifecycle))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid lifecycle: {lifecycle!r}")
+        if result_code:
+            try:
+                query = query.where(TestRun.result_code == TestResultCode(result_code))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid result_code: {result_code!r}")
         if os:
             query = query.where(Test.os == os)
         if os_version:
@@ -1037,7 +1060,7 @@ async def submit_matrix_run(
             " (cache disabled)" if req.no_cache else "",
         )
         return {
-            "matrix": matrix.name,
+            "matrix_name": matrix.display_name,
             "matrix_run_id": matrix_run.id,
             "jobs_queued": len(run_ids),
             "run_ids": run_ids,
@@ -1309,24 +1332,6 @@ async def ack_notes(
 # ── Run deletion ───────────────────────────────────────────────────────
 
 
-def _status_filter(query, status):
-    """Apply a status filter that matches lifecycle *or* result_code.
-
-    Mirrors `cli.py:_status_where` so the REST bulk-delete accepts the
-    same PASS/FAIL/ERROR/queued/running/cancelled vocabulary the CLI
-    does.
-    """
-    try:
-        return query.where(TestRun.lifecycle == TestRunLifecycle(status))
-    except ValueError:
-        pass
-    try:
-        return query.where(TestRun.result_code == TestResultCode(status))
-    except ValueError:
-        pass
-    return query
-
-
 @router.delete("/runs/{run_id}", status_code=204)
 async def delete_run(
     run_id: int,
@@ -1388,7 +1393,10 @@ async def delete_runs(
         if kind:
             query = query.where(Test.kind == kind)
         if status:
-            query = _status_filter(query, status)
+            try:
+                query = status_filter(query, status)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
         if before:
             try:
                 cutoff = datetime.datetime.strptime(before, "%Y-%m-%d")

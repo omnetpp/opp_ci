@@ -154,6 +154,39 @@ class RestEndpointTests(unittest.TestCase):
         r = self.client.get(f"/api/runs/{run_id}", headers=self._h(self.readonly))
         self.assertEqual(r.status_code, 404)
 
+    def test_run_status_filters(self):
+        # POST /runs response now keys the lifecycle as "lifecycle", not "status".
+        r = self.client.post("/api/runs",
+                             json={"project": "mm1k", "kind": "smoke"},
+                             headers=self._h(self.submitter))
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["lifecycle"], "queued")
+        self.assertNotIn("status", body)
+
+        # ?status= union accepts a lifecycle value
+        r = self.client.get("/api/runs?status=queued&project=mm1k",
+                            headers=self._h(self.readonly))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(len(r.json()) >= 1)
+
+        # ?status= union accepts an outcome value (no finished runs → empty, not 500)
+        r = self.client.get("/api/runs?status=PASS&project=mm1k",
+                            headers=self._h(self.readonly))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json(), [])
+
+        # strict ?lifecycle= filter
+        r = self.client.get("/api/runs?lifecycle=queued&project=mm1k",
+                            headers=self._h(self.readonly))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertTrue(len(r.json()) >= 1)
+
+        # bad values on each of the three filters → 400, not 500
+        for qs in ("status=bogus", "lifecycle=bogus", "result_code=bogus"):
+            r = self.client.get(f"/api/runs?{qs}", headers=self._h(self.readonly))
+            self.assertEqual(r.status_code, 400, f"{qs}: {r.text}")
+
     def test_bulk_delete_guards(self):
         # seed two runs
         for _ in range(2):

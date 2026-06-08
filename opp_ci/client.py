@@ -89,7 +89,7 @@ class OppCiClient:
                    arch=None,
                    compiler=None, compiler_version=None,
                    isolation=None, toolchain=None):
-        """Submit a single test run. Returns {"id": ..., "status": "queued"}."""
+        """Submit a single test run. Returns {"id": ..., "lifecycle": "queued"}."""
         payload = {"project": project, "kind": kind}
         for key, value in (
             ("mode", mode), ("git_ref", git_ref),
@@ -105,23 +105,24 @@ class OppCiClient:
         return self._post("/runs", payload)
 
     def submit_matrix(self, matrix_name):
-        """Submit all jobs from a named matrix. Returns {"matrix": ..., "jobs_queued": ..., "run_ids": [...]}."""
+        """Submit all jobs from a named matrix. Returns {"matrix_name": ..., "jobs_queued": ..., "run_ids": [...]}."""
         return self._post("/runs/matrix", {"matrix_name": matrix_name})
 
     def get_run(self, run_id):
         """Get full details of a run including results."""
         return self._get(f"/runs/{run_id}")
 
-    def list_runs(self, project=None, kind=None, status=None,
-                  os=None, distro=None, flavor=None, limit=50):
-        """List test runs with optional filters."""
+    def list_runs(self, *, limit=50, **filters):
+        """List test runs with optional filters.
+
+        Accepts any GET /runs query param as a keyword: ``project``, ``kind``,
+        ``status`` (the lifecycle ∪ outcome union — e.g. ``"FAIL"`` or
+        ``"queued"``), ``lifecycle`` and ``result_code`` (strict
+        single-column filters), ``os``, ``distro``, ``flavor``. Falsy values
+        are dropped; forwarded as query params as-is.
+        """
         params = {"limit": limit}
-        for key, value in (
-            ("project", project), ("kind", kind), ("status", status),
-            ("os", os), ("distro", distro), ("flavor", flavor),
-        ):
-            if value:
-                params[key] = value
+        params.update({key: value for key, value in filters.items() if value})
         return self._get("/runs", params=params)
 
     def delete_run(self, run_id):
