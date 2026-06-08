@@ -57,14 +57,16 @@ RUN dnf -y install \
 RUN false
 {%- endif %}
 
-# Only opp_env is baked in. opp_ci and opp_repl are cloned at container start
-# by the entrypoint — see below. opp_env's SHA is resolved at image-build
-# time so a push *to opp_env* invalidates this layer; pushes to opp_ci/opp_repl
-# do not.
+# opp_env and opp_repl's third-party deps ([all] extras: matplotlib, numpy,
+# scipy, …) are baked in. opp_ci and opp_repl *code* is still cloned at
+# container start by the entrypoint and editable-installed over the baked deps,
+# so a push to opp_ci/opp_repl is picked up without rebuilding this image; a
+# push that changes opp_env's SHA or adds a new opp_repl dependency needs a rebuild.
 RUN python3 -m venv /opt/opp_ci_venv \
  && /opt/opp_ci_venv/bin/pip install --upgrade pip \
  && /opt/opp_ci_venv/bin/pip install \
-        git+https://github.com/omnetpp/opp_env.git@{{ opp_env_ref }}
+        git+https://github.com/omnetpp/opp_env.git@{{ opp_env_ref }} \
+        "opp_repl[all] @ git+https://github.com/omnetpp/opp_repl.git"
 ENV PATH=/opt/opp_ci_venv/bin:$PATH
 
 # Install OMNeT++ {{ omnetpp_version }} into a nixless opp_env workspace.
