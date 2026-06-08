@@ -1,0 +1,30 @@
+#!/bin/bash
+#
+# Submit mm1k's build -> smoke -> opp pipeline to the opp_ci coordinator.
+#
+# Fixed config: omnetpp 6.1.0/6.2.0/6.3.0/6.4.0, podman isolation
+# (Ubuntu 24.04 / gcc-13), remote submission. This mirrors the validated
+# coordinator pipeline.
+#
+# Submission is async: prints `Submitted run #N` per kind; read results with
+#   GET $OPP_CI_COORDINATOR_URL/api/runs/<id>
+#
+# Requires OPP_CI_COORDINATOR_URL and OPP_CI_API_TOKEN in the environment
+# (and OPP_CI_TLS_INSECURE=1 for the self-signed local coordinator).
+#
+# Usage: bin/test-mm1k
+#
+
+set -e
+
+: "${OPP_CI_COORDINATOR_URL:?set OPP_CI_COORDINATOR_URL}"
+: "${OPP_CI_API_TOKEN:?set OPP_CI_API_TOKEN}"
+
+for version in 6.1.0 6.2.0 6.3.0 6.4.0; do
+    opp_ci --remote run \
+        --project mm1k \
+        --kind build,smoke,opp \
+        --pin omnetpp="$version" \
+        --isolation podman --toolchain none \
+        --distro "Ubuntu 24.04" --compiler gcc --compiler-version 13
+done
