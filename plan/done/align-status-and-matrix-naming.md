@@ -36,20 +36,20 @@ Around that two-column model, three downstream surfaces have grown
 
 | Surface | What "status" means | Behaviour | File:line |
 |---|---|---|---|
-| CLI `list-runs --status` / `delete-runs --status` / `show-results --status` | Union of lifecycle ∪ result\_code | Helper [`_status_where`](../../opp_ci/cli.py#L501-L511) tries `TestRunLifecycle(status)` then `TestResultCode(status)`; accepts `"queued"`, `"PASS"`, etc. | [cli.py:501](../../opp_ci/cli.py#L501) |
-| Web UI `/runs?status=` / `/results?status=` | Same union | Helper [`_status_filter`](../../opp_ci/web/app.py#L265-L280) does the same trick. | [web/app.py:265](../../opp_ci/web/app.py#L265) |
-| REST `GET /runs?status=` | Lifecycle only | Calls `TestRunLifecycle(status)` directly; `?status=PASS` silently returns nothing because `"PASS"` is not a lifecycle value. | [web/api.py:233-234](../../opp_ci/web/api.py#L233) |
-| REST `POST /runs` response | Lifecycle only | Returns `{"id": ..., "status": run.lifecycle.value}` — the response key is `status` but the value space is just `queued`. | [web/api.py:150](../../opp_ci/web/api.py#L150) |
-| REST `GET /runs` row | Both, separate | `_run_to_dict` returns `"lifecycle"` *and* `"result_code"` as distinct keys. | [web/api.py:1088-1089](../../opp_ci/web/api.py#L1088) |
-| Python client | "FAIL" in docstring example | `OppCiClient.list_runs(..., status="FAIL")` is shown as the canonical example — but against the current REST API, that filter is silently ignored. | [client.py:12](../../opp_ci/client.py#L12), [client.py:74-84](../../opp_ci/client.py#L74) |
+| CLI `list-runs --status` / `delete-runs --status` / `show-results --status` | Union of lifecycle ∪ result\_code | Helper [`_status_where`](../../opp_ci/cli.py#L1171-L1181) tries `TestRunLifecycle(status)` then `TestResultCode(status)`; accepts `"queued"`, `"PASS"`, etc. | [cli.py:1171](../../opp_ci/cli.py#L1171) |
+| Web UI `/runs?status=` / `/results?status=` | Same union | Helper [`_status_filter`](../../opp_ci/web/app.py#L266-L281) does the same trick (no-op fallback returns no rows). | [web/app.py:266](../../opp_ci/web/app.py#L266) |
+| REST `DELETE /runs` (bulk) `?status=` | Same union | **Third copy** of the helper, also named `_status_filter`, drives the REST bulk-delete. | [web/api.py:1312](../../opp_ci/web/api.py#L1312) |
+| REST `GET /runs?status=` | Lifecycle only | Calls `TestRunLifecycle(status)` directly; `?status=PASS` silently returns nothing because `"PASS"` is not a lifecycle value. | [web/api.py:263](../../opp_ci/web/api.py#L263) |
+| REST `POST /runs` response | Lifecycle only | Returns `{"id": ..., "status": run.lifecycle.value}` — the response key is `status` but the value space is just `queued`. | [web/api.py:172](../../opp_ci/web/api.py#L172) |
+| REST `GET /runs` row | Both, separate | `_run_to_dict` returns `"lifecycle"` *and* `"result_code"` as distinct keys. | [web/api.py:1892-1893](../../opp_ci/web/api.py#L1892) |
+| Python client | "FAIL" in docstring example | `OppCiClient.list_runs(..., status="FAIL")` — but against the current REST API, that filter is silently ignored. | [client.py:115](../../opp_ci/client.py#L115) |
 
 So:
 - A REST client that sends `?status=FAIL` gets *no* error and *no*
   matches — the value isn't a lifecycle, so the `TestRunLifecycle(...)`
-  constructor raises `ValueError`, the `HTTPException` handler at
-  [api.py:118](../../opp_ci/web/api.py#L118) does **not** catch it
-  here (this is inside `list_runs`, not `submit_run`), and the request
-  500s. Either way it does not do what the client expects.
+  constructor raises `ValueError` inside `list_runs`
+  ([api.py:263](../../opp_ci/web/api.py#L263)) — not caught here — and
+  the request 500s. Either way it does not do what the client expects.
 - The CLI says one thing, the REST API says another, the docstring on
   the Python client says a third — all using the bare word "status".
 
@@ -61,33 +61,39 @@ just churn the wire format. The plan leaves those untouched.
 
 ### Sub-fix 2: `matrix_name` vs. `matrix` in matrix responses
 
-`POST /runs/matrix` accepts a `SubmitMatrixRequest` whose only field is
-`matrix_name` ([api.py:73](../../opp_ci/web/api.py#L73)), but the
-response returns it back under the shortened key `"matrix"`
-([api.py:197](../../opp_ci/web/api.py#L197)):
+There are **two** matrix-submit endpoints and **both** return the
+shortened outlier key `"matrix"`:
 
-```python
-return {
-    "matrix": req.matrix_name,
-    "matrix_run_id": matrix_run.id,
-    "jobs_queued": len(run_ids),
-}
-```
+- `POST /runs/matrix` (named-matrix variant, `SubmitMatrixRequest`)
+  returns `{"matrix": req.matrix_name, ...}`
+  ([api.py:226](../../opp_ci/web/api.py#L226)).
+- `POST /runs/matrix` (inline-spec variant, `InlineMatrixRunRequest`,
+  added in the recent remote-control work) returns
+  `{"matrix": matrix.name, ..., "status": "queued"}`
+  ([api.py:1040](../../opp_ci/web/api.py#L1040)). Note it *also* carries
+  a redundant generic `"status": "queued"` envelope field.
 
 Meanwhile the AutoTestRule endpoints — both request and response —
-consistently use `matrix_name`
-([api.py:683](../../opp_ci/web/api.py#L683),
-[api.py:730](../../opp_ci/web/api.py#L730),
-[api.py:781](../../opp_ci/web/api.py#L781),
-[api.py:893](../../opp_ci/web/api.py#L893)). The `submit_matrix_run`
-response is the lone outlier.
+consistently use `matrix_name`. The two `submit_matrix_run` responses
+are the lone outliers, and the rename must hit **both** of them.
+
+> **Overlap with in-flight work.** The uncommitted
+> "run-by-name-or-anonymous" feature (working-tree changes to
+> `db/models.py` + `persistence.py`, plus the new migration
+> `nullable_matrix_name_unique_test_name`) makes `TestMatrix.name`
+> **nullable** and adds a `TestMatrix.display_name` property. Once a
+> matrix can be anonymous, the renamed `"matrix_name"` response value
+> can be `None`. Sequence this sub-fix **after** that feature lands (or
+> coordinate the two), and emit `matrix.display_name` rather than a raw
+> nullable `name` in the responses. See
+> [run-by-name-or-anonymous-web-ui.md](./run-by-name-or-anonymous-web-ui.md).
 
 ## Design decisions
 
 | Question | Decision |
 |---|---|
 | Should REST `?status=` accept both lifecycle and result codes (like CLI/UI), or stay lifecycle-only? | **Accept both.** Match what CLI and web UI already do; reuse a shared helper so the three filters can never drift again. |
-| Where does the shared helper live? | New `opp_ci/persistence.py::status_filter(query, status_str)` (or a small module-level function in `db/models.py`). `cli.py`, `web/app.py`, `web/api.py` all import it. The existing two private copies (`_status_where`, `_status_filter`) collapse into one call site each. |
+| Where does the shared helper live? | New `opp_ci/persistence.py::status_filter(query, status_str)` (or a small module-level function in `db/models.py`). `cli.py`, `web/app.py`, `web/api.py` all import it. The existing **three** private copies (`cli.py::_status_where`, `web/app.py::_status_filter`, `web/api.py::_status_filter`) collapse into one call site each. |
 | Should we add explicit `?lifecycle=` and `?result_code=` as separate REST params? | **Yes.** Keep `?status=` as the convenience union; add `?lifecycle=…` (validates as `TestRunLifecycle`) and `?result_code=…` (validates as `TestResultCode`) for callers that want strict filtering. Mirrors how the response already separates the two. |
 | Should `POST /runs` response stay `{"status": "queued"}` or move to `{"lifecycle": "queued"}`? | **Move to `{"lifecycle": "queued"}`.** The value is a lifecycle value; the response should say so. Matches the row shape returned by `GET /runs`. Breaks one wire-format consumer (see Risks). |
 | `POST /runs/matrix` response field `"matrix"` — rename to `"matrix_name"`? | **Yes.** Matches the request field and matches AutoTestRule responses. |
@@ -102,8 +108,8 @@ response is the lone outlier.
 | `GET /runs?status=` semantics | Lifecycle only; bad value → 500 | Union (lifecycle ∪ result\_code); bad value → 400 |
 | `GET /runs?lifecycle=` | did not exist | new strict-lifecycle filter |
 | `GET /runs?result_code=` | did not exist | new strict-result filter |
-| `POST /runs/matrix` response key | `"matrix"` | `"matrix_name"` |
-| Shared status helper | private `_status_where` in cli.py, private `_status_filter` in web/app.py | one public `status_filter(query, status_str)` (raises `ValueError` on bad input) — re-imported by cli.py, web/app.py, web/api.py |
+| `POST /runs/matrix` response key (both endpoints) | `"matrix"` | `"matrix_name"` (value = `matrix.display_name`, may be `None` for anonymous matrices) |
+| Shared status helper | three private copies: `_status_where` (cli.py), `_status_filter` (web/app.py), `_status_filter` (web/api.py bulk-delete) | one public `status_filter(query, status_str)` (raises `ValueError` on bad input) — re-imported by cli.py, web/app.py, web/api.py |
 | `OppCiClient.list_runs(status=…)` docstring example | `status="FAIL"` works against `/runs?status=` | unchanged — works after the union is implemented |
 | `OppCiClient.submit_run` docstring | `"status": "queued"` | `"lifecycle": "queued"` |
 
@@ -126,48 +132,58 @@ needed.
 ### REST API
 
 - [opp_ci/web/api.py](../../opp_ci/web/api.py)
-  - Line 150 (`submit_run` response): `"status": run.lifecycle.value`
+  - Line 172 (`submit_run` response): `"status": run.lifecycle.value`
     → `"lifecycle": run.lifecycle.value`.
-  - Lines 207–234 (`list_runs`): add `lifecycle: str | None = None`,
-    `result_code: str | None = None` parameters. Replace the
-    `status` block with: if `status` is set, call `status_filter`;
-    if `lifecycle` is set, validate via `TestRunLifecycle(...)` and
-    filter `TestRun.lifecycle`; if `result_code` is set, validate
-    via `TestResultCode(...)` and filter `TestRun.result_code`.
-    Each branch catches `ValueError` and raises `HTTPException(400)`
-    with the offending value.
-  - Line 197 (`submit_matrix_run` response): `"matrix": req.matrix_name`
-    → `"matrix_name": req.matrix_name`.
+  - `list_runs` (def at line 236, status block at line 263): add
+    `lifecycle: str | None = None`, `result_code: str | None = None`
+    parameters. Replace the `status` block with: if `status` is set,
+    call `status_filter`; if `lifecycle` is set, validate via
+    `TestRunLifecycle(...)` and filter `TestRun.lifecycle`; if
+    `result_code` is set, validate via `TestResultCode(...)` and
+    filter `TestRun.result_code`. Each branch catches `ValueError`
+    and raises `HTTPException(400)` with the offending value.
+  - Line 226 (named `submit_matrix_run` response):
+    `"matrix": req.matrix_name` → `"matrix_name": ...`.
+  - Line 1040 (inline-spec `submit_matrix_run` response, def at line
+    966): `"matrix": matrix.name` → `"matrix_name": matrix.display_name`.
+    Both response values should use `matrix.display_name` once the
+    matrix-naming feature lands (see Sub-fix 2 overlap note).
+  - Lines 1312–1327 (`_status_filter`, the **third** private copy,
+    used by REST bulk-delete `delete_runs` at line 1391): delete it and
+    route line 1391 through the shared `status_filter` import. This copy
+    swallows bad input (`return query`) like the CLI's did — same fix.
 
 ### CLI
 
 - [opp_ci/cli.py](../../opp_ci/cli.py)
-  - Delete `_status_where` (lines 501–511), import `status_filter`
+  - Delete `_status_where` (lines 1171–1181), import `status_filter`
     from `opp_ci.persistence` instead.
-  - Three call sites that use it: `list_runs` (line 537),
-    `delete_runs` (line 640), `show_results` (line 691). Wrap each in
+  - Three call sites that use it: `list_runs` (line 1208),
+    `delete_runs` (line 1314), `show_results` (line 1366). Wrap each in
     a `try/except ValueError` that prints a clean `click.echo`
     error and exits — same behaviour the user already gets for any
-    other validation failure.
-  - The `--status` help strings (lines 518, 621, 672) already list
-    both lifecycle and result-code values; leave the wording alone.
+    other validation failure. (Note: `delete_run` at line 1271 takes a
+    single run id and does **not** use the helper — leave it.)
+  - The `--status` help strings already list both lifecycle and
+    result-code values; leave the wording alone.
 
 ### Web UI
 
 - [opp_ci/web/app.py](../../opp_ci/web/app.py)
-  - Delete `_status_filter` (lines 265–280), import `status_filter`
-    from `opp_ci.persistence`. Two call sites: lines 249–250 (`/runs`)
-    and 339–340 (`/results`). On `ValueError`, fall through to "no
-    rows" — that's the current silent-fallback behaviour and the web
-    UI doesn't need to surface validation errors; the user just sees
+  - Delete `_status_filter` (lines 266–281), import `status_filter`
+    from `opp_ci.persistence`. Two call sites: line 251 (`/runs`,
+    `runs_list`) and line 341 (`/results`, `results_page`). On
+    `ValueError`, fall through to "no rows" — that's the current
+    silent-fallback behaviour (`TestRunLifecycle.queued` no-op) and the
+    web UI doesn't need to surface validation errors; the user just sees
     an empty table and corrects the filter.
 
 ### Python client
 
 - [opp_ci/client.py](../../opp_ci/client.py)
-  - Line 51 docstring for `submit_run`: `{"id": ..., "status": "queued"}`
+  - `submit_run` docstring (line ~85): `{"id": ..., "status": "queued"}`
     → `{"id": ..., "lifecycle": "queued"}`.
-  - Line 74 signature: keep `status=` for backwards-compat with
+  - `list_runs` signature (line ~115): keep `status=` for backwards-compat with
     existing scripts, but add `lifecycle=` and `result_code=`
     kwargs that get forwarded as the corresponding query params.
     Follow the `**kwargs` pass-through convention — don't redeclare
@@ -217,17 +233,20 @@ before its callers can import it.
 1. **Add `status_filter` helper** to `opp_ci/persistence.py`. Pure
    addition, no callers yet. Includes a small unit test (one happy
    path each for lifecycle and result\_code, one `ValueError` path).
-2. **Wire `status_filter` into CLI and web UI.** Delete the two
-   private copies, route the three CLI call sites through the helper
-   with a `try/except`, route the two web-app call sites through it.
-   No behavioural change for the user — same filtering semantics,
-   same fallback on bad input on the web side, cleaner error on
-   the CLI side.
+2. **Wire `status_filter` into CLI and web UI.** Delete the **three**
+   private copies (cli.py `_status_where`, web/app.py `_status_filter`,
+   web/api.py `_status_filter`), route the three CLI call sites through
+   the helper with a `try/except`, route the two web-app call sites and
+   the REST bulk-delete call site through it. No behavioural change for
+   the user — same filtering semantics, same fallback on bad input on
+   the web side, cleaner error on the CLI side.
 3. **Extend the REST API.** Add `lifecycle` and `result_code` query
    params to `GET /runs`, change `?status=` to use the union helper,
-   rename the `POST /runs` response field, rename the
-   `POST /runs/matrix` response field. **This is the breaking step
-   for REST clients.**
+   rename the `POST /runs` response field, rename **both**
+   `POST /runs/matrix` response fields (named + inline-spec endpoints).
+   **This is the breaking step for REST clients.** Coordinate the
+   matrix-field rename with the run-by-name/anonymous-matrix feature so
+   the value emitted is `matrix.display_name` (nullable-safe).
 4. **Update `OppCiClient`.** Adjust the docstring example, add the
    two new kwargs (or switch to `**filters`). Existing
    `client.list_runs(status="FAIL")` calls now work end-to-end —
@@ -260,7 +279,10 @@ needs to coordinate around.
 - Manual web UI: `/runs?status=PASS`, `/results?status=FAIL` still
   filter as before.
 - `grep -rn '_status_where\|_status_filter' opp_ci/` returns zero
-  hits — both copies have been collapsed.
+  hits — **all three** copies (cli.py, web/app.py, web/api.py) have
+  been collapsed into the shared helper.
+- `grep -rn '"matrix":' opp_ci/web/api.py` returns zero hits — both
+  matrix-submit endpoints now emit `"matrix_name"`.
 
 ## Risks & notes
 
@@ -271,7 +293,15 @@ needs to coordinate around.
   `OppCiClient` are unaffected.
 - **REST clients break on `POST /runs/matrix` response.** Same shape
   fix, smaller blast radius (matrix submission is rarer than single-run
-  submission). Same release-note treatment.
+  submission). Now affects **both** matrix-submit endpoints (named +
+  inline-spec). Same release-note treatment. The inline-spec endpoint
+  also still carries a redundant generic `"status": "queued"` field —
+  leave it (it's the generic API-result envelope, out of scope) but
+  note it so the rename isn't mistaken for touching it.
+- **Anonymous matrices make `matrix_name` nullable.** After the
+  run-by-name feature lands, the renamed response value can be `None`.
+  Emit `matrix.display_name` and document that REST clients must handle
+  a null `matrix_name`.
 - **REST clients on `GET /runs?status=…` get *better* behaviour.**
   Anything sending `?status=PASS` was already broken (silent no-op /
   500); they now get correct results. No back-compat shim needed.

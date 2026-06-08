@@ -25,7 +25,7 @@ read-only scripts.
 ```python
 # Single run
 run = ci.submit_run(project="inet", kind="smoke", git_ref="topic/my-feature")
-print(run)  # {"id": 42, "status": "queued"}
+print(run)  # {"id": 42, "lifecycle": "queued"}
 
 # Fully-specified run on a podman/host-toolchain worker
 ci.submit_run(
@@ -56,10 +56,13 @@ ci.list_runs(project="inet", kind="fingerprint", status="FAIL")
 ci.list_workers()
 ```
 
-`list_runs(status=…)` accepts either a `TestRunLifecycle` value
-(`"queued"` / `"running"` / `"finished"` / `"cancelled"` /
-`"timed_out"`) or a `TestResultCode` (`"PASS"` / `"FAIL"` / `"ERROR"`
-/ `"SKIPPED"`).
+`list_runs(status=…)` is the convenience union filter: it accepts
+either a `TestRunLifecycle` value (`"queued"` / `"running"` /
+`"finished"` / `"cancelled"` / `"timed_out"`) or a `TestResultCode`
+(`"PASS"` / `"FAIL"` / `"ERROR"` / `"SKIPPED"`). For strict
+single-column filtering, pass `lifecycle=…` or `result_code=…`
+instead — these and any other `GET /runs` query param are forwarded
+as-is (the method takes `**filters`). A bad value returns HTTP 400.
 
 ## Admin operations (admin token required)
 
