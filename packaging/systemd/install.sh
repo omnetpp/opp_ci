@@ -148,14 +148,28 @@ fi
 # for `serve`), client (requests for --remote CLI), podman (yaml/jinja2 for
 # podman-isolation jobs). Postgres extra is added by default but is
 # innocuous (just psycopg2-binary) even if you point at SQLite or a remote DB.
+# This is the full set of opp_ci's optional-dependency groups.
 EXTRAS="web,client,podman,postgres"
 # Install opp_env and opp_repl editable from their checkouts *first*, so
 # that opp_ci's dependency on `opp_repl` resolves to the local sibling
 # rather than pulling a published version from PyPI. The opp_ci install
-# then layers on top.
+# then layers on top. Each sibling carries its own extras spec so the venv
+# gets every optional dependency the service may exercise at runtime:
+#   opp_env  — no optional groups defined
+#   opp_repl — [all] (mcp, cluster, data, chart, optimize, github, ide,
+#              diffcharts) so worker-driven REPL features all resolve.
+declare -A SIBLING_EXTRAS=(
+    [/opt/opp_env]=""
+    [/opt/opp_repl]="all"
+)
 for sib in /opt/opp_env /opt/opp_repl; do
     if [[ -f "$sib/pyproject.toml" ]]; then
-        "$INSTALL_DIR/.venv/bin/pip" install -e "$sib"
+        sib_extras="${SIBLING_EXTRAS[$sib]}"
+        if [[ -n "$sib_extras" ]]; then
+            "$INSTALL_DIR/.venv/bin/pip" install -e "$sib[$sib_extras]"
+        else
+            "$INSTALL_DIR/.venv/bin/pip" install -e "$sib"
+        fi
     fi
 done
 "$INSTALL_DIR/.venv/bin/pip" install -e "$INSTALL_DIR[$EXTRAS]"
