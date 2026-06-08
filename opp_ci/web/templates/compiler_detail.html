@@ -9,6 +9,7 @@
         <tr><th style="width:150px;">ID</th><td>{{ compiler.id }}</td></tr>
         <tr><th>Name</th><td>{{ compiler.name }}</td></tr>
         <tr><th>Version</th><td>{{ compiler.version or "-" }}</td></tr>
+        <tr><th>Label <span class="derived-tag" title="computed: name + '-' + version (falls back to name when version is unset)">derived</span></th><td>{{ compiler.label }}</td></tr>
     </table>
 </div>
 

@@ -10,7 +10,7 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
             <div class="form-group">
-                <label>Project</label>
+                <label>Project <span class="derived-tag" title="derived: name resolved from rule.project_id ({{ rule.project_id }})">from project_id</span></label>
                 <input type="text" value="{{ project_name }}" disabled>
             </div>
             <div class="form-group">

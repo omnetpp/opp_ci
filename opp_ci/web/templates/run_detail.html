@@ -4,6 +4,7 @@
 <h2 style="margin-bottom: 1rem;">
     Run #{{ run.id }}
     <span class="badge badge-{{ run.effective_status }}">{{ run.effective_status }}</span>
+    <span class="derived-tag" title="derived: result_code when finished, else the lifecycle state">status</span>
 </h2>
 
 {% if message %}
@@ -27,12 +28,12 @@
 {% endif %}
 
 <div class="card">
+    <h2>Coordinate <span class="derived-tag" title="derived: every row below is read from the linked Test (run.test.*) via TestRun properties — none is stored on the run itself.">from linked Test</span></h2>
     <table>
-        <tr><th style="width:150px;">Project</th><td>{{ run.project }}</td></tr>
+        <tr><th style="width:150px;">Test</th><td><a href="/tests/{{ run.test_id }}">#{{ run.test_id }}{% if run.test and run.test.name %} — {{ run.test.name }}{% endif %}</a></td></tr>
+        <tr><th>Project</th><td>{{ run.project }}</td></tr>
         <tr><th>Kind</th><td>{{ run.kind }}</td></tr>
         <tr><th>Mode</th><td>{{ run.mode or "-" }}</td></tr>
-        <tr><th>Version</th><td>{{ run.version or "-" }}</td></tr>
-        <tr><th>Resolved deps</th><td>{% if run.resolved_deps %}{% for k, v in run.resolved_deps.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}-{% endif %}</td></tr>
         <tr><th>OS</th><td>{% if run.os %}{{ run.os }}{% if run.os_version %} {{ run.os_version }}{% endif %}{% else %}-{% endif %}</td></tr>
         <tr><th>Distro</th><td>{% if run.distro %}{{ run.distro|title }}{% if run.distro_version %} {{ run.distro_version }}{% endif %}{% else %}-{% endif %}</td></tr>
         <tr><th>Flavor</th><td>{% if run.flavor %}{{ run.flavor|title }}{% if run.flavor_version or run.distro_version %} {{ run.flavor_version or run.distro_version }}{% endif %}{% else %}-{% endif %}</td></tr>
@@ -40,27 +41,39 @@
         <tr><th>Compiler</th><td>{{ (run.compiler ~ "-" ~ run.compiler_version) if run.compiler else "-" }}</td></tr>
         <tr><th>Isolation</th><td>{{ run.isolation or "none" }}</td></tr>
         <tr><th>Toolchain</th><td>{{ run.toolchain or "none" }}</td></tr>
+        <tr><th>opp file</th><td>{{ run.opp_file or "-" }}</td></tr>
+    </table>
+</div>
+
+<div class="card">
+    <h2>Run</h2>
+    <table>
+        <tr><th style="width:150px;">ID</th><td>{{ run.id }}</td></tr>
+        <tr><th>Version</th><td>{{ run.version or "-" }}</td></tr>
+        <tr><th>Resolved deps</th><td>{% if run.resolved_deps %}{% for k, v in run.resolved_deps.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}-{% endif %}</td></tr>
         <tr><th>Git ref</th><td>{{ run.git_ref or "-" }}</td></tr>
         <tr><th>Commit</th><td><code>{{ run.commit_sha or "-" }}</code></td></tr>
-        <tr><th>opp file</th><td>{{ run.opp_file or "-" }}</td></tr>
-        <tr><th>Matrix run</th><td>{% if run.matrix_run_id %}#{{ run.matrix_run_id }}{% if run.matrix_id %} (matrix <a href="/test-matrices/{{ run.matrix_id }}">#{{ run.matrix_id }}</a>){% endif %}{% else %}-{% endif %}</td></tr>
+        <tr><th>Matrix run</th><td>{% if run.matrix_run_id %}<a href="/test-matrix-runs/{{ run.matrix_run_id }}">#{{ run.matrix_run_id }}</a>{% if run.matrix_id %} <span class="derived-tag" title="derived: matrix link from matrix_run.matrix_id">matrix</span> <a href="/test-matrices/{{ run.matrix_id }}">#{{ run.matrix_id }}</a>{% endif %}{% else %}-{% endif %}</td></tr>
         <tr><th>Worker</th><td>{% if run.worker %}{{ run.worker.name }}{% elif run.worker_id %}#{{ run.worker_id }}{% else %}-{% endif %}</td></tr>
         <tr><th>Lifecycle</th><td>{{ run.lifecycle.value }}</td></tr>
         <tr><th>Result</th><td>{{ run.result_code.value if run.result_code else "-" }}</td></tr>
-        <tr><th>Verdict</th><td>{% if run.recorded_verdict %}<span class="badge badge-{{ run.recorded_verdict }}">{{ run.recorded_verdict }}</span>{% else %}-{% endif %}</td></tr>
+        <tr><th>Verdict <span class="derived-tag" title="derived: latest promoted TestVerdict for this run (by recorded_at, then created_at)">derived</span></th><td>{% if run.recorded_verdict %}<span class="badge badge-{{ run.recorded_verdict }}">{{ run.recorded_verdict }}</span>{% else %}-{% endif %}</td></tr>
         <tr><th>Duration</th><td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td></tr>
+        <tr><th>Created</th><td>{{ run.created_at.strftime("%Y-%m-%d %H:%M:%S") if run.created_at else "-" }}</td></tr>
         <tr><th>Started</th><td>{{ run.started_at.strftime("%Y-%m-%d %H:%M:%S") if run.started_at else "-" }}</td></tr>
         <tr><th>Finished</th><td>{{ run.finished_at.strftime("%Y-%m-%d %H:%M:%S") if run.finished_at else "-" }}</td></tr>
-        <tr><th>Trigger</th><td>{{ run.trigger or "-" }}</td></tr>
+        <tr><th>Trigger <span class="derived-tag" title="derived: from matrix_run.trigger">derived</span></th><td>{{ run.trigger or "-" }}</td></tr>
+        <tr><th>Cache fingerprint</th><td>{% if run.cache_fingerprint %}<code>{{ run.cache_fingerprint }}</code>{% else %}-{% endif %}</td></tr>
         {% if run.github_owner %}
-        <tr><th>GitHub</th><td><a href="https://github.com/{{ run.github_owner }}/{{ run.github_repo }}">{{ run.github_owner }}/{{ run.github_repo }}</a></td></tr>
+        <tr><th>GitHub <span class="derived-tag" title="derived: from the matrix_run (github_owner/repo/commit/pr)">derived</span></th><td><a href="https://github.com/{{ run.github_owner }}/{{ run.github_repo }}">{{ run.github_owner }}/{{ run.github_repo }}</a></td></tr>
         {% endif %}
         {% if run.github_commit_sha %}
-        <tr><th>GitHub commit</th><td><a href="https://github.com/{{ run.github_owner }}/{{ run.github_repo }}/commit/{{ run.github_commit_sha }}"><code>{{ run.github_commit_sha[:8] }}</code></a></td></tr>
+        <tr><th>GitHub commit <span class="derived-tag" title="derived: from matrix_run.github_commit_sha">derived</span></th><td><a href="https://github.com/{{ run.github_owner }}/{{ run.github_repo }}/commit/{{ run.github_commit_sha }}"><code>{{ run.github_commit_sha[:8] }}</code></a></td></tr>
         {% endif %}
         {% if run.github_pr_number %}
-        <tr><th>GitHub PR</th><td><a href="https://github.com/{{ run.github_owner }}/{{ run.github_repo }}/pull/{{ run.github_pr_number }}">#{{ run.github_pr_number }}</a></td></tr>
+        <tr><th>GitHub PR <span class="derived-tag" title="derived: from matrix_run.github_pr_number">derived</span></th><td><a href="https://github.com/{{ run.github_owner }}/{{ run.github_repo }}/pull/{{ run.github_pr_number }}">#{{ run.github_pr_number }}</a></td></tr>
         {% endif %}
+        <tr><th>System snapshot</th><td>{% if run.system_snapshot %}<details><summary style="cursor:pointer;">JSON</summary><pre>{{ run.system_snapshot|tojson(indent=2) }}</pre></details>{% else %}-{% endif %}</td></tr>
     </table>
 </div>
 

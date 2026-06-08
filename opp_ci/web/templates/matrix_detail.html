@@ -25,9 +25,10 @@
 {% endif %}
 
 <div class="card">
-    <h2>Configuration</h2>
+    <h2>Configuration <span class="derived-tag" title="The axis rows (Kinds, Modes, Versions, Refs, OSes … Toolchains, Deps) are the decomposed keys of the matrix.config JSON column.">config JSON</span></h2>
     <table>
-        <tr><th style="width:150px;">Name</th><td>{{ matrix.display_name }}</td></tr>
+        <tr><th style="width:150px;">ID</th><td>{{ matrix.id }}</td></tr>
+        <tr><th>Name <span class="derived-tag" title="derived: matrix.name, or '(anonymous #id)' when name is unset">display</span></th><td>{{ matrix.display_name }}{% if not matrix.name %} <span style="color:var(--muted);">(name column is NULL — anonymous)</span>{% endif %}</td></tr>
         <tr><th>Project</th><td><a href="/projects/{{ matrix.project }}">{{ matrix.project }}</a></td></tr>
         <tr><th>opp file</th><td>{{ matrix.opp_file or "-" }}</td></tr>
         <tr><th>Kinds</th><td>{{ matrix.config.get("kinds", [])|join(", ") }}</td></tr>
@@ -66,7 +67,8 @@
             {%- endfor %}
         </td></tr>
         {% endif %}
-        <tr><th>Expanded Jobs</th><td>{{ jobs|length }}</td></tr>
+        <tr><th>Expanded Jobs <span class="derived-tag" title="derived: count of jobs produced by expand_matrix(project, config) — not stored">derived</span></th><td>{{ jobs|length }}</td></tr>
+        <tr><th>Created at</th><td>{{ matrix.created_at.strftime("%Y-%m-%d %H:%M:%S") if matrix.created_at else "-" }}</td></tr>
     </table>
 </div>
 

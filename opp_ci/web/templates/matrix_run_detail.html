@@ -24,7 +24,9 @@
 <div class="card">
     <h2>Rollup</h2>
     <table>
-        <tr><th style="width:170px;">Verdict</th><td>
+        <tr><th style="width:170px;">ID</th><td>{{ mr.id }}</td></tr>
+        <tr><th>Matrix</th><td>{% if matrix %}<a href="/test-matrices/{{ mr.matrix_id }}">#{{ mr.matrix_id }} — {{ matrix.display_name }}</a>{% else %}#{{ mr.matrix_id }}{% endif %}</td></tr>
+        <tr><th>Verdict <span class="derived-tag" title="derived: recomputed in lockstep with the counters as each child TestVerdict finalizes (denormalized rollup)">rollup</span></th><td>
             {% if mr.verdict %}
                 {% set v = mr.verdict.value %}
                 <span class="badge badge-{{ 'passed' if v=='EXPECTED' else ('failed' if v=='UNEXPECTED' else 'queued') }}">{{ v }}</span>
@@ -39,7 +41,7 @@
                 <span class="badge badge-queued">pending</span>
             {% endif %}
         </td></tr>
-        <tr><th>Actual summary</th><td>
+        <tr><th>Actual summary <span class="derived-tag" title="derived: recomputed in lockstep with the counters (denormalized rollup)">rollup</span></th><td>
             {% if mr.actual_summary %}
                 {% set a = mr.actual_summary.value %}
                 <span class="badge badge-{{ 'passed' if a=='PASS' else ('failed' if a=='FAIL' else 'error') }}">{{ a }}</span>
@@ -47,18 +49,17 @@
         </td></tr>
         <tr><th>Trigger</th><td>{{ mr.trigger or "-" }}</td></tr>
         <tr><th>Ref</th><td>{{ mr.ref or "-" }}</td></tr>
-        <tr><th>Counters</th><td>
+        <tr><th>Counters <span class="derived-tag" title="derived: rollup counters updated atomically as each child TestVerdict finalizes">rollup</span></th><td>
             pass={{ mr.pass_count }} &middot; fail={{ mr.fail_count }} &middot; error={{ mr.error_count }} &middot; total={{ mr.total_count }}
         </td></tr>
-        <tr><th>Verdict counters</th><td>
+        <tr><th>Verdict counters <span class="derived-tag" title="derived: rollup counters updated atomically as each child TestVerdict finalizes">rollup</span></th><td>
             expected={{ mr.expected_count }} &middot; unexpected={{ mr.unexpected_count }} &middot; unknown={{ mr.unknown_count }}
         </td></tr>
-        <tr><th>Cache hits</th><td>{{ mr.cache_hit_count }}</td></tr>
+        <tr><th>Cache hits <span class="derived-tag" title="derived: rollup counter (cache_hit_count)">rollup</span></th><td>{{ mr.cache_hit_count }}</td></tr>
         <tr><th>Created at</th><td>{{ mr.created_at }}</td></tr>
         <tr><th>Completed at</th><td>{{ mr.completed_at or "(in progress)" }}</td></tr>
-        {% if mr.github_owner and mr.github_repo %}
-        <tr><th>GitHub</th><td>{{ mr.github_owner }}/{{ mr.github_repo }}{% if mr.github_pr_number %} &middot; PR #{{ mr.github_pr_number }}{% endif %}{% if mr.github_commit_sha %} &middot; <code>{{ mr.github_commit_sha[:8] }}</code>{% endif %}</td></tr>
-        {% endif %}
+        <tr><th>GitHub</th><td>{% if mr.github_owner and mr.github_repo %}{{ mr.github_owner }}/{{ mr.github_repo }}{% if mr.github_pr_number %} &middot; PR #{{ mr.github_pr_number }}{% endif %}{% if mr.github_commit_sha %} &middot; <code>{{ mr.github_commit_sha[:8] }}</code>{% endif %}{% else %}-{% endif %}</td></tr>
+        <tr><th>GitHub status URL</th><td>{% if mr.github_status_url %}<a href="{{ mr.github_status_url }}">{{ mr.github_status_url }}</a>{% else %}-{% endif %}</td></tr>
     </table>
 </div>
 

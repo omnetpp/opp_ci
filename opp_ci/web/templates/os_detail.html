@@ -10,6 +10,7 @@
         <tr><th>Name</th><td>{{ os.name }}</td></tr>
         <tr><th>Version</th><td>{{ os.version or "-" }}</td></tr>
         <tr><th>Architecture</th><td>{{ os.arch }}</td></tr>
+        <tr><th>Label <span class="derived-tag" title="computed: name + ' ' + version (name only when version is unset)">derived</span></th><td>{{ os.label }}</td></tr>
     </table>
 </div>
 

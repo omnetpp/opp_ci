@@ -9,7 +9,7 @@
     <table>
         <tr><th style="width:150px;">Project</th><td><a href="/projects/{{ project }}">{{ project }}</a></td></tr>
         <tr><th>Commit</th><td><code>{{ sha }}</code></td></tr>
-        <tr><th>Runs</th><td>{{ runs|length }}</td></tr>
+        <tr><th>Runs <span class="derived-tag" title="derived: count of TestRuns matching this project + commit SHA (this page has no entity of its own — it groups runs by commit)">derived</span></th><td>{{ runs|length }}</td></tr>
     </table>
 </div>
 
