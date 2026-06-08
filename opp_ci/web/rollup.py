@@ -39,8 +39,12 @@ def rollup_runs(runs, grouping="any"):
     Produce a rolled-up summary of test runs.
 
     Algorithm:
-    1. Group runs by status.
-    2. Within each status group, find maximal merge groups: runs that
+    1. Group runs by the (lifecycle, result_code, verdict) triplet — the
+       three orthogonal outcome facets. Lifecycle ("running"/"queued"/…)
+       is kept distinct from the result code ("PASS"/"FAIL"/…) so a row
+       never shows a lifecycle state where a result is expected; verdict
+       ("EXPECTED"/"UNEXPECTED"/…) splits same-result rows further.
+    2. Within each triplet group, find maximal merge groups: runs that
        share the same "signature" (the set of dimensions that are constant
        vs varying) AND can be merged into one row.
     3. For each merged row, classify dimensions and check Cartesian.
@@ -56,9 +60,9 @@ def rollup_runs(runs, grouping="any"):
             "total": int,
             "cartesian": bool,
             "repetitions": int,   # k when each cell has k runs (>=1)
-            "uniform": bool,
-            "uniform_status": str | None,
-            "breakdown": {"PASS": n, ...},
+            "lifecycle": str,           # "finished"/"running"/"queued"/…
+            "result_code": str | None,  # "PASS"/… or None when not finished
+            "verdict": str | None,      # "EXPECTED"/… or None when unrecorded
             "run_ids": [int, ...],
         }
 
@@ -70,20 +74,22 @@ def rollup_runs(runs, grouping="any"):
     if not runs:
         return []
 
-    # Group by status
-    by_status = defaultdict(list)
+    # Group by the (lifecycle, result_code, verdict) triplet. Each group is
+    # uniform on all three facets, so a summary row reports one of each.
+    by_triplet = defaultdict(list)
     for run in runs:
-        by_status[run.effective_status].append(run)
+        key = (run.lifecycle_status, run.result_status, run.recorded_verdict)
+        by_triplet[key].append(run)
 
     cartesian_only = (grouping == "cartesian")
 
     summaries = []
-    for status, status_runs in by_status.items():
+    for _key, group_runs in by_triplet.items():
         if grouping == "none":
-            for run in status_runs:
+            for run in group_runs:
                 summaries.append(_make_summary([run]))
         else:
-            merged = _merge_uniform_group(status_runs)
+            merged = _merge_uniform_group(group_runs)
             if cartesian_only:
                 for s in merged:
                     if s["cartesian"] or s["total"] == 1:
@@ -91,8 +97,8 @@ def rollup_runs(runs, grouping="any"):
                     else:
                         # Try to find Cartesian sub-groups by splitting on
                         # a varying dimension
-                        group_runs = [r for r in status_runs if r.id in s["run_ids"]]
-                        summaries.extend(_split_to_cartesian(group_runs))
+                        sub = [r for r in group_runs if r.id in s["run_ids"]]
+                        summaries.extend(_split_to_cartesian(sub))
             else:
                 summaries.extend(merged)
 
@@ -109,7 +115,8 @@ def rollup_runs(runs, grouping="any"):
                 dim_keys.append((0, val))
             else:
                 dim_keys.append((1, val[0] if val else ""))
-        return (*dim_keys, s["uniform_status"] or "", s["run_ids"][0])
+        triplet = (s["lifecycle"] or "", s["result_code"] or "", s["verdict"] or "")
+        return (*dim_keys, *triplet, s["run_ids"][0])
 
     summaries.sort(key=_sort_key)
     return summaries
@@ -325,24 +332,19 @@ def _make_summary(runs):
     repetitions = _cartesian_repetitions(runs, varying_dims)
     cartesian = repetitions > 0
 
-    breakdown = defaultdict(int)
-    run_ids = []
-    for r in runs:
-        breakdown[r.effective_status] += 1
-        run_ids.append(r.id)
+    run_ids = [r.id for r in runs]
 
-    total = len(runs)
-    statuses = list(breakdown.keys())
-    uniform = len(statuses) == 1
-    uniform_status = statuses[0] if uniform else None
+    # All runs in a group share the (lifecycle, result_code, verdict)
+    # triplet (rollup_runs partitions on it), so read it off any run.
+    r0 = runs[0]
 
     return {
         "columns": columns,
-        "total": total,
+        "total": len(runs),
         "cartesian": cartesian,
         "repetitions": repetitions,
-        "uniform": uniform,
-        "uniform_status": uniform_status,
-        "breakdown": dict(breakdown),
+        "lifecycle": r0.lifecycle_status,
+        "result_code": r0.result_status,
+        "verdict": r0.recorded_verdict,
         "run_ids": run_ids,
     }

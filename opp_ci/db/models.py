@@ -547,3 +547,33 @@ class TestRun(Base):
         if self.lifecycle == TestRunLifecycle.finished and self.result_code:
             return self.result_code.value
         return self.lifecycle.value if self.lifecycle else None
+
+    @property
+    def lifecycle_status(self):
+        """Lifecycle state as a string ("queued"/"running"/"finished"/…)."""
+        return self.lifecycle.value if self.lifecycle else None
+
+    @property
+    def result_status(self):
+        """Outcome code ("PASS"/"FAIL"/"ERROR"/"SKIPPED") once the run is
+        finished, else None. Unlike `effective_status`, this never carries
+        a lifecycle state — so a running run has no result, not "running".
+        """
+        if self.lifecycle == TestRunLifecycle.finished and self.result_code:
+            return self.result_code.value
+        return None
+
+    @property
+    def recorded_verdict(self):
+        """Verdict recorded for this run by the most recent matrix cell.
+
+        A cached run can be reused across several `TestVerdict` cells; we
+        return the verdict of the latest one (by `recorded_at`, falling
+        back to `created_at`). Returns "EXPECTED"/"UNEXPECTED"/"UNKNOWN",
+        or None if the run was never promoted in a matrix.
+        """
+        promoted = [v for v in self.verdicts if v.verdict is not None]
+        if not promoted:
+            return None
+        latest = max(promoted, key=lambda v: v.recorded_at or v.created_at)
+        return latest.verdict.value
