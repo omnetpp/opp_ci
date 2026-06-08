@@ -80,6 +80,26 @@ else
     fi
 fi
 
+echo "==> Provisioning rootless podman for '$OPP_CI_USER' (subuid/subgid + linger)"
+# isolation=podman jobs run rootless podman as the service user, which needs a
+# subordinate UID/GID range. System users (useradd --system) don't get one
+# automatically, so allocate a 65536-wide block past any existing allocation.
+# The awk picks max(end-of-existing-ranges, 100000) as the start, so the block
+# never overlaps another user's.
+if ! grep -q "^${OPP_CI_USER}:" /etc/subuid 2>/dev/null; then
+    sub_start="$(awk -F: 'BEGIN{m=100000} {e=$2+$3; if(e>m)m=e} END{print m}' /etc/subuid 2>/dev/null)"
+    usermod --add-subuids "${sub_start}-$((sub_start + 65535))" "$OPP_CI_USER"
+fi
+if ! grep -q "^${OPP_CI_USER}:" /etc/subgid 2>/dev/null; then
+    sub_start="$(awk -F: 'BEGIN{m=100000} {e=$2+$3; if(e>m)m=e} END{print m}' /etc/subgid 2>/dev/null)"
+    usermod --add-subgids "${sub_start}-$((sub_start + 65535))" "$OPP_CI_USER"
+fi
+# Persistent systemd user session so rootless podman has a stable cgroup and
+# runtime dir even when the service user is never interactively logged in.
+loginctl enable-linger "$OPP_CI_USER" 2>/dev/null || true
+# Reconcile any pre-existing rootless storage with the id mapping above.
+runuser -u "$OPP_CI_USER" -- podman system migrate 2>/dev/null || true
+
 echo "==> Creating directories"
 install -d -o root         -g root         -m 0755 "$INSTALL_DIR"
 install -d -o root         -g "$OPP_CI_GROUP" -m 0750 "$CONFIG_DIR"
