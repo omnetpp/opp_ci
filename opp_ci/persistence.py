@@ -425,6 +425,108 @@ def finalize_verdict_for_run(session, run_id):
             recompute_matrix_run_rollup(session, mid)
 
 
+# ── Deletion ──────────────────────────────────────────────────────────
+
+
+class CannotDeleteRunningRun(Exception):
+    """Raised when a delete would remove a TestRun that is still running.
+
+    Running runs are never deleted — a worker may still be writing to the
+    row. Callers surface this as a 409 (REST) / error flash (web) / message
+    (CLI) and the caller leaves the run alone.
+    """
+
+
+def delete_test_run(session, run_id):
+    """Delete a single TestRun, its TestVerdict cells, and refresh rollups.
+
+    A TestRun can be referenced by TestVerdict cells in more than one
+    TestMatrixRun (cache hits reuse a prior run), so every referencing cell
+    is removed and each affected matrix run's rollup is recomputed.
+
+    Returns the deleted `run_id`, or None if no such run exists. Raises
+    `CannotDeleteRunningRun` if the run is currently executing. Caller
+    commits.
+    """
+    run = session.get(TestRun, run_id)
+    if run is None:
+        return None
+    if run.lifecycle == TestRunLifecycle.running:
+        raise CannotDeleteRunningRun(
+            f"Run #{run_id} is still running; let it finish first."
+        )
+
+    verdicts = session.execute(
+        select(TestVerdict).where(TestVerdict.test_run_id == run_id)
+    ).scalars().all()
+    affected_matrix_runs = {v.matrix_run_id for v in verdicts}
+    for verdict in verdicts:
+        session.delete(verdict)
+    session.delete(run)
+    session.flush()
+
+    for mid in affected_matrix_runs:
+        if mid is not None:
+            recompute_matrix_run_rollup(session, mid)
+    return run_id
+
+
+def delete_matrix_run(session, matrix_run_id):
+    """Delete a TestMatrixRun and cascade to its own TestRuns and cells.
+
+    The matrix run's TestVerdict cells are removed, then each child TestRun
+    (``matrix_run_id == matrix_run_id``) is either deleted or — if it is
+    still referenced by another matrix run's cache-hit cell — detached
+    (``matrix_run_id`` set NULL) so that other run keeps its referent.
+
+    Returns ``{"deleted_runs": int, "detached_runs": int}``, or None if no
+    such matrix run exists. Raises `CannotDeleteRunningRun` if any child
+    run is currently executing (the whole delete is refused — a matrix run
+    with a running child cannot be partially removed). Caller commits.
+    """
+    matrix_run = session.get(TestMatrixRun, matrix_run_id)
+    if matrix_run is None:
+        return None
+
+    child_runs = session.execute(
+        select(TestRun).where(TestRun.matrix_run_id == matrix_run_id)
+    ).scalars().all()
+    running = sum(1 for r in child_runs if r.lifecycle == TestRunLifecycle.running)
+    if running:
+        raise CannotDeleteRunningRun(
+            f"Matrix run #{matrix_run_id} has {running} running child "
+            f"run(s); let them finish first."
+        )
+
+    # Drop this matrix run's own cells first, so a child run that is
+    # exclusive to this matrix run becomes unreferenced (and deletable);
+    # one still referenced afterwards is shared via another run's cache hit.
+    own_verdicts = session.execute(
+        select(TestVerdict).where(TestVerdict.matrix_run_id == matrix_run_id)
+    ).scalars().all()
+    for verdict in own_verdicts:
+        session.delete(verdict)
+    session.flush()
+
+    deleted = detached = 0
+    for run in child_runs:
+        still_referenced = session.execute(
+            select(TestVerdict.id)
+            .where(TestVerdict.test_run_id == run.id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if still_referenced is not None:
+            run.matrix_run_id = None
+            detached += 1
+        else:
+            session.delete(run)
+            deleted += 1
+
+    session.delete(matrix_run)
+    session.flush()
+    return {"deleted_runs": deleted, "detached_runs": detached}
+
+
 # ── Enqueue ───────────────────────────────────────────────────────────
 
 
