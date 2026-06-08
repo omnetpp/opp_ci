@@ -52,6 +52,12 @@ def _default_coordinator_url():
 COORDINATOR_URL = os.environ.get("OPP_CI_COORDINATOR_URL", _default_coordinator_url())
 API_TOKEN = os.environ.get("OPP_CI_API_TOKEN", "")
 
+# Default for the top-level `--remote` flag. Operators who only ever
+# drive a coordinator from their laptop can set OPP_CI_REMOTE=1 once and
+# drop `--remote` from every invocation. Host-local commands (serve,
+# init-db, worker start, …) ignore it.
+REMOTE = os.environ.get("OPP_CI_REMOTE", "0") == "1"
+
 REFERENCE_PLATFORM = os.environ.get("OPP_CI_REFERENCE_PLATFORM", "Ubuntu 24.04/gcc-13")
 
 SERVE_HOST = os.environ.get("OPP_CI_SERVE_HOST", "127.0.0.1")
