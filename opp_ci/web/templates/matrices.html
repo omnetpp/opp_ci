@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_filters.html" as f %}
 {% block title %}opp_ci — Matrices{% endblock %}
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
@@ -10,11 +11,17 @@
 
 {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
 
-<form method="get" action="/test-matrices" class="filters">
-    <input type="text" name="name" value="{{ filter_name }}" placeholder="Name contains…">
-    <input type="text" name="project" value="{{ filter_project }}" placeholder="Project contains…">
-    <button type="submit">Filter</button>
-    {% if filter_name or filter_project %}<a href="/test-matrices" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+<form method="get" action="/test-matrices" class="filters filters-stacked">
+    <div class="filter-grid">
+        {{ f.txt(filters, "name", "Name", "contains…") }}
+        {{ f.sel(filters, "project", "Project", options.project) }}
+        {{ f.sel(filters, "test", "Test", options.test) }}
+        {{ f.sel(filters, "mode", "Mode", options.mode) }}
+    </div>
+    <div class="filter-actions">
+        <button type="submit">Filter</button>
+        {% if filters.values()|select|list %}<a href="/test-matrices" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+    </div>
 </form>
 
 {% if matrices %}

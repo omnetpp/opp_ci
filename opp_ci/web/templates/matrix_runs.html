@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_filters.html" as f %}
 {% block title %}opp_ci — Matrix runs{% endblock %}
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
@@ -8,16 +9,19 @@
     {% endif %}
 </div>
 
-<form method="get" class="filters">
-    <input type="text" name="project" placeholder="project" value="{{ filter_project }}">
-    <select name="verdict">
-        <option value="">any verdict</option>
-        <option value="EXPECTED" {% if filter_verdict=="EXPECTED" %}selected{% endif %}>EXPECTED</option>
-        <option value="UNEXPECTED" {% if filter_verdict=="UNEXPECTED" %}selected{% endif %}>UNEXPECTED</option>
-        <option value="UNKNOWN" {% if filter_verdict=="UNKNOWN" %}selected{% endif %}>UNKNOWN</option>
-    </select>
-    <input type="text" name="since" placeholder="since YYYY-MM-DD" value="{{ filter_since }}">
-    <button type="submit">Filter</button>
+<form method="get" action="/test-matrix-runs" class="filters filters-stacked">
+    <div class="filter-grid">
+        {{ f.sel(filters, "project", "Project", options.project) }}
+        {{ f.sel(filters, "trigger", "Trigger", options.trigger) }}
+        {{ f.txt(filters, "ref", "Ref", "contains…") }}
+        {{ f.sel(filters, "verdict", "Verdict", options.verdict) }}
+        {{ f.sel(filters, "actual", "Actual", options.actual) }}
+        {{ f.date(filters, "since", "Since") }}
+    </div>
+    <div class="filter-actions">
+        <button type="submit">Filter</button>
+        {% if filters.values()|select|list %}<a href="/test-matrix-runs" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+    </div>
 </form>
 
 {% if rows %}

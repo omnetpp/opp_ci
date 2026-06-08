@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_filters.html" as f %}
 {% block title %}opp_ci — Runs{% endblock %}
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
@@ -6,18 +7,30 @@
     <a href="/tests" class="btn btn-success">Run a test →</a>
 </div>
 
-<form class="filters" method="get" action="/test-runs">
-    <input type="text" name="project" placeholder="Project" value="{{ filter_project }}">
-    <input type="text" name="kind" placeholder="Kind" value="{{ filter_kind }}">
-    <input type="text" name="git_ref" placeholder="Git ref" value="{{ filter_git_ref }}">
-    <select name="status">
-        <option value="">All statuses</option>
-        <option value="PASS" {{ "selected" if filter_status == "PASS" }}>PASS</option>
-        <option value="FAIL" {{ "selected" if filter_status == "FAIL" }}>FAIL</option>
-        <option value="ERROR" {{ "selected" if filter_status == "ERROR" }}>ERROR</option>
-        <option value="running" {{ "selected" if filter_status == "running" }}>Running</option>
-    </select>
-    <button type="submit">Filter</button>
+<form class="filters filters-stacked" method="get" action="/test-runs">
+    <div class="filter-grid">
+        {{ f.sel(filters, "project", "Project", options.project) }}
+        {{ f.sel(filters, "kind", "Kind", options.kind) }}
+        {{ f.sel(filters, "mode", "Mode", options.mode) }}
+        {{ f.sel(filters, "os", "OS", options.os) }}
+        {{ f.sel(filters, "distro", "Distro", options.distro) }}
+        {{ f.sel(filters, "compiler", "Compiler", options.compiler) }}
+        {{ f.txt(filters, "git_ref", "Git ref", "ref or commit") }}
+        {{ f.sel(filters, "version", "Version", options.version) }}
+        <label class="filter-field"><span>Worker</span>
+            <select name="worker">
+                <option value="">Any</option>
+                {% for w in workers %}<option value="{{ w.id }}" {{ "selected" if filters.worker == w.id|string }}>{{ w.name }}</option>{% endfor %}
+            </select>
+        </label>
+        {{ f.sel(filters, "status", "Status", options.status, any_label="All statuses") }}
+    </div>
+    <div class="filter-actions">
+        <button type="submit">Filter</button>
+        {% if filters.values()|select|list %}
+        <a href="/test-runs" class="btn btn-secondary btn-sm">Clear</a>
+        {% endif %}
+    </div>
 </form>
 
 {% if runs %}

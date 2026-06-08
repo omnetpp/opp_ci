@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_filters.html" as f %}
 {% block title %}opp_ci — Tests{% endblock %}
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
@@ -12,26 +13,35 @@
 <div class="flash flash-{{ message_type or 'success' }}">{{ message }}</div>
 {% endif %}
 
-<form class="filters" method="get" action="/tests">
-    <input type="text" name="name" placeholder="Name contains…" value="{{ filter_name }}">
-    <input type="text" name="project" placeholder="Project contains…" value="{{ filter_project }}">
-    <input type="text" name="kind" placeholder="Kind" value="{{ filter_kind }}">
-    <input type="text" name="os" placeholder="OS" value="{{ filter_os }}">
-    <input type="text" name="compiler" placeholder="Compiler" value="{{ filter_compiler }}">
-    <select name="status">
-        <option value="">Any last status</option>
-        <option value="PASS" {{ "selected" if filter_status == "PASS" }}>PASS</option>
-        <option value="FAIL" {{ "selected" if filter_status == "FAIL" }}>FAIL</option>
-        <option value="ERROR" {{ "selected" if filter_status == "ERROR" }}>ERROR</option>
-    </select>
-    <label style="font-size:0.85rem; color:var(--muted); display:flex; align-items:center; gap:0.25rem;">
-        <input type="checkbox" name="include_anonymous" value="true" {{ "checked" if include_anonymous }}>
-        include anonymous
-    </label>
-    <button type="submit">Filter</button>
-    {% if filter_name or filter_project or filter_kind or filter_os or filter_compiler or filter_status or include_anonymous %}
-    <a href="/tests" class="btn btn-secondary btn-sm">Clear</a>
-    {% endif %}
+<form class="filters filters-stacked" method="get" action="/tests">
+    <div class="filter-grid">
+        {{ f.txt(filters, "name", "Name", "contains…") }}
+        {{ f.sel(filters, "project", "Project", options.project) }}
+        {{ f.sel(filters, "kind", "Kind", options.kind) }}
+        {{ f.sel(filters, "mode", "Mode", options.mode) }}
+        {{ f.sel(filters, "os", "OS", options.os) }}
+        {{ f.sel(filters, "os_version", "OS version", options.os_version) }}
+        {{ f.sel(filters, "distro", "Distro", options.distro) }}
+        {{ f.sel(filters, "distro_version", "Distro version", options.distro_version) }}
+        {{ f.sel(filters, "flavor", "Flavor", options.flavor) }}
+        {{ f.sel(filters, "flavor_version", "Flavor version", options.flavor_version) }}
+        {{ f.sel(filters, "arch", "Arch", options.arch) }}
+        {{ f.sel(filters, "compiler", "Compiler", options.compiler) }}
+        {{ f.sel(filters, "compiler_version", "Compiler version", options.compiler_version) }}
+        {{ f.sel(filters, "isolation", "Isolation", options.isolation) }}
+        {{ f.sel(filters, "toolchain", "Toolchain", options.toolchain) }}
+        {{ f.sel(filters, "status", "Last status", options.status) }}
+        <label class="filter-field checkbox">
+            <input type="checkbox" name="include_anonymous" value="true" {{ "checked" if include_anonymous }}>
+            include anonymous
+        </label>
+    </div>
+    <div class="filter-actions">
+        <button type="submit">Filter</button>
+        {% if filters.values()|select|list or include_anonymous %}
+        <a href="/tests" class="btn btn-secondary btn-sm">Clear</a>
+        {% endif %}
+    </div>
 </form>
 
 {% if tests %}

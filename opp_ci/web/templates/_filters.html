@@ -1,0 +1,25 @@
+{# Reusable filter-control macros for the stacked filter layout.
+
+   Import with:  {% import "_filters.html" as f %}
+
+   `filters` is the dict of current filter values keyed by field name
+   (passed in the template context by the route handler). `options` is a
+   dict of dropdown choices keyed the same way. #}
+
+{% macro txt(filters, name, label, placeholder="") -%}
+<label class="filter-field"><span>{{ label }}</span>
+<input type="text" name="{{ name }}" value="{{ filters[name] }}" placeholder="{{ placeholder }}"></label>
+{%- endmacro %}
+
+{% macro date(filters, name, label) -%}
+<label class="filter-field"><span>{{ label }}</span>
+<input type="date" name="{{ name }}" value="{{ filters[name] }}"></label>
+{%- endmacro %}
+
+{% macro sel(filters, name, label, options, any_label="Any") -%}
+<label class="filter-field"><span>{{ label }}</span>
+<select name="{{ name }}">
+<option value="">{{ any_label }}</option>
+{% for opt in options %}<option value="{{ opt }}" {{ "selected" if filters[name] == opt|string }}>{{ opt }}</option>{% endfor %}
+</select></label>
+{%- endmacro %}

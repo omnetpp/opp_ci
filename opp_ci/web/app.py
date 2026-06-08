@@ -225,13 +225,40 @@ def queue_page(request: Request, current_user: User = Depends(require_user()),
         session.close()
 
 
+def _distinct_options(session, *columns):
+    """Sorted distinct non-empty values for each given model column, keyed by
+    the column's attribute name. Powers the filter dropdowns so every value
+    actually present in the data is offered as an explicit choice."""
+    opts = {}
+    for col in columns:
+        vals = session.execute(
+            select(col).distinct().where(col.isnot(None)).order_by(col)
+        ).scalars().all()
+        opts[col.key] = [v for v in vals if v not in (None, "")]
+    return opts
+
+
+# Status vocabulary shared by the run filters (lifecycle + outcome values,
+# matching opp_ci.persistence.status_filter).
+_RUN_STATUS_OPTIONS = [
+    "PASS", "FAIL", "ERROR", "SKIPPED",
+    "queued", "running", "finished", "cancelled", "timed_out",
+]
+
+
 @web_router.get("/test-runs", response_class=HTMLResponse)
 def runs_list(
     request: Request,
     current_user: User = Depends(require_user()),
     project: str = Query(default=None),
     kind: str = Query(default=None),
+    mode: str = Query(default=None),
+    os: str = Query(default=None, alias="os"),
+    distro: str = Query(default=None),
+    compiler: str = Query(default=None),
     git_ref: str = Query(default=None),
+    version: str = Query(default=None),
+    worker: str = Query(default=None),
     status: str = Query(default=None),
     limit: int = Query(default=50),
 ):
@@ -247,10 +274,22 @@ def runs_list(
             query = query.where(Test.project == project)
         if kind:
             query = query.where(Test.kind == kind)
+        if mode:
+            query = query.where(Test.mode == mode)
+        if os:
+            query = query.where(Test.os == os)
+        if distro:
+            query = query.where(Test.distro == distro)
+        if compiler:
+            query = query.where(Test.compiler == compiler)
         if git_ref:
             query = query.where(
                 (TestRun.git_ref == git_ref) | (TestRun.commit_sha.startswith(git_ref))
             )
+        if version:
+            query = query.where(TestRun.version == version)
+        if worker and worker.isdigit():
+            query = query.where(TestRun.worker_id == int(worker))
         if status:
             try:
                 query = status_filter(query, status)
@@ -260,12 +299,22 @@ def runs_list(
                 query = query.where(false())
 
         runs = session.execute(query).scalars().all()
+        options = _distinct_options(
+            session, Test.project, Test.kind, Test.mode, Test.os, Test.distro,
+            Test.compiler, TestRun.version,
+        )
+        options["status"] = _RUN_STATUS_OPTIONS
+        workers = session.execute(select(Worker).order_by(Worker.name)).scalars().all()
         return templates.TemplateResponse(request, "runs.html", {
             "runs": runs,
-            "filter_project": project or "",
-            "filter_kind": kind or "",
-            "filter_git_ref": git_ref or "",
-            "filter_status": status or "",
+            "options": options,
+            "workers": workers,
+            "filters": {
+                "project": project or "", "kind": kind or "", "mode": mode or "",
+                "os": os or "", "distro": distro or "", "compiler": compiler or "",
+                "git_ref": git_ref or "", "version": version or "",
+                "worker": worker or "", "status": status or "",
+            },
             **_template_globals(request, current_user),
         })
     finally:
@@ -438,8 +487,18 @@ def tests_list(
     name: str = Query(default=None),
     project: str = Query(default=None),
     kind: str = Query(default=None),
+    mode: str = Query(default=None),
     os: str = Query(default=None, alias="os"),
+    os_version: str = Query(default=None),
+    distro: str = Query(default=None),
+    distro_version: str = Query(default=None),
+    flavor: str = Query(default=None),
+    flavor_version: str = Query(default=None),
+    arch: str = Query(default=None),
     compiler: str = Query(default=None),
+    compiler_version: str = Query(default=None),
+    isolation: str = Query(default=None),
+    toolchain: str = Query(default=None),
     status: str = Query(default=None),
     include_anonymous: bool = Query(default=False),
     limit: int = Query(default=200),
@@ -455,13 +514,33 @@ def tests_list(
         if name:
             query = query.where(Test.name.ilike(f"%{name}%"))
         if project:
-            query = query.where(Test.project.ilike(f"%{project}%"))
+            query = query.where(Test.project == project)
         if kind:
             query = query.where(Test.kind == kind)
+        if mode:
+            query = query.where(Test.mode == mode)
         if os:
             query = query.where(Test.os == os)
+        if os_version:
+            query = query.where(Test.os_version == os_version)
+        if distro:
+            query = query.where(Test.distro == distro)
+        if distro_version:
+            query = query.where(Test.distro_version == distro_version)
+        if flavor:
+            query = query.where(Test.flavor == flavor)
+        if flavor_version:
+            query = query.where(Test.flavor_version == flavor_version)
+        if arch:
+            query = query.where(Test.arch == arch)
         if compiler:
             query = query.where(Test.compiler == compiler)
+        if compiler_version:
+            query = query.where(Test.compiler_version == compiler_version)
+        if isolation:
+            query = query.where(Test.isolation == isolation)
+        if toolchain:
+            query = query.where(Test.toolchain == toolchain)
         tests = session.execute(query.limit(limit)).scalars().all()
 
         # Last-run status per test (N+1, mirrors projects_list; the page is
@@ -480,16 +559,30 @@ def tests_list(
         if status:
             tests = [t for t in tests if last_status.get(t.id) == status]
 
+        options = _distinct_options(
+            session, Test.project, Test.kind, Test.mode, Test.os, Test.os_version,
+            Test.distro, Test.distro_version, Test.flavor, Test.flavor_version,
+            Test.arch, Test.compiler, Test.compiler_version, Test.isolation,
+            Test.toolchain,
+        )
+        options["status"] = [
+            "PASS", "FAIL", "ERROR", "SKIPPED",
+            "queued", "running", "cancelled", "timed_out",
+        ]
         return templates.TemplateResponse(request, "tests.html", {
             "tests": tests,
             "last_status": last_status,
             "run_counts": run_counts,
-            "filter_name": name or "",
-            "filter_project": project or "",
-            "filter_kind": kind or "",
-            "filter_os": os or "",
-            "filter_compiler": compiler or "",
-            "filter_status": status or "",
+            "options": options,
+            "filters": {
+                "name": name or "", "project": project or "", "kind": kind or "",
+                "mode": mode or "", "os": os or "", "os_version": os_version or "",
+                "distro": distro or "", "distro_version": distro_version or "",
+                "flavor": flavor or "", "flavor_version": flavor_version or "",
+                "arch": arch or "", "compiler": compiler or "",
+                "compiler_version": compiler_version or "", "isolation": isolation or "",
+                "toolchain": toolchain or "", "status": status or "",
+            },
             "include_anonymous": include_anonymous,
             **_template_globals(request, current_user),
         })
@@ -998,16 +1091,31 @@ def matrices_list(
     current_user: User = Depends(require_user()),
     name: str = Query(default=None),
     project: str = Query(default=None),
+    test: str = Query(default=None),
+    mode: str = Query(default=None),
     error: str = Query(default=None),
 ):
     session = SessionLocal()
     try:
+        # Options are drawn from all matrices (config holds the test/mode axes
+        # as JSON, so those are filtered in Python below).
+        all_matrices = session.execute(select(TestMatrix)).scalars().all()
+        options = {
+            "project": sorted({m.project for m in all_matrices if m.project}),
+            "test": sorted({t for m in all_matrices for t in (m.config.get("tests") or [])}),
+            "mode": sorted({md for m in all_matrices for md in (m.config.get("modes") or [])}),
+        }
+
         query = select(TestMatrix).order_by(TestMatrix.id)
         if name:
             query = query.where(TestMatrix.name.ilike(f"%{name}%"))
         if project:
-            query = query.where(TestMatrix.project.ilike(f"%{project}%"))
+            query = query.where(TestMatrix.project == project)
         matrices = session.execute(query).scalars().all()
+        if test:
+            matrices = [m for m in matrices if test in (m.config.get("tests") or [])]
+        if mode:
+            matrices = [m for m in matrices if mode in (m.config.get("modes") or [])]
 
         run_counts = {}
         for m in matrices:
@@ -1021,8 +1129,11 @@ def matrices_list(
         return templates.TemplateResponse(request, "matrices.html", {
             "matrices": matrices,
             "run_counts": run_counts,
-            "filter_name": name or "",
-            "filter_project": project or "",
+            "options": options,
+            "filters": {
+                "name": name or "", "project": project or "",
+                "test": test or "", "mode": mode or "",
+            },
             "error": error,
             **_template_globals(request, current_user),
         })
@@ -1283,7 +1394,10 @@ def matrix_runs_list(
     request: Request,
     current_user: User = Depends(require_user()),
     project: str = Query(default=None),
+    trigger: str = Query(default=None),
+    ref: str = Query(default=None),
     verdict: str = Query(default=None),
+    actual: str = Query(default=None),
     since: str = Query(default=None),
     limit: int = Query(default=50),
 ):
@@ -1298,9 +1412,18 @@ def matrix_runs_list(
         )
         if project:
             query = query.where(TestMatrix.project == project)
+        if trigger:
+            query = query.where(TestMatrixRun.trigger == trigger)
+        if ref:
+            query = query.where(TestMatrixRun.ref.ilike(f"%{ref}%"))
         if verdict:
             try:
                 query = query.where(TestMatrixRun.verdict == TestVerdictKind(verdict))
+            except ValueError:
+                pass
+        if actual:
+            try:
+                query = query.where(TestMatrixRun.actual_summary == TestResultCode(actual))
             except ValueError:
                 pass
         if since:
@@ -1311,11 +1434,16 @@ def matrix_runs_list(
                 pass
 
         rows = session.execute(query).all()
+        options = _distinct_options(session, TestMatrix.project, TestMatrixRun.trigger)
+        options["verdict"] = ["EXPECTED", "UNEXPECTED", "UNKNOWN"]
+        options["actual"] = ["PASS", "FAIL", "ERROR", "SKIPPED"]
         return templates.TemplateResponse(request, "matrix_runs.html", {
             "rows": rows,
-            "filter_project": project or "",
-            "filter_verdict": verdict or "",
-            "filter_since": since or "",
+            "options": options,
+            "filters": {
+                "project": project or "", "trigger": trigger or "", "ref": ref or "",
+                "verdict": verdict or "", "actual": actual or "", "since": since or "",
+            },
             **_template_globals(request, current_user),
         })
     finally:
