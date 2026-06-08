@@ -29,6 +29,35 @@ from opp_ci.db.models import (
 _logger = logging.getLogger(__name__)
 
 
+def status_filter(query, status_str):
+    """Filter a TestRun ``select()`` by a status string, lifecycle *or* outcome.
+
+    A status string is either a lifecycle value
+    (``queued``/``running``/``finished``/``cancelled``/``timed_out``) — matched
+    against ``TestRun.lifecycle`` — or an outcome value
+    (``PASS``/``FAIL``/``ERROR``/``SKIPPED``) — matched against
+    ``TestRun.result_code``. This is the single source of truth for the
+    ``status``-filter vocabulary shared by the CLI, web UI, and REST API.
+
+    Raises ``ValueError`` if ``status_str`` is neither a lifecycle nor an
+    outcome value; callers decide whether to surface that (CLI/REST 400) or
+    swallow it (web UI no-rows fallback).
+    """
+    try:
+        return query.where(TestRun.lifecycle == TestRunLifecycle(status_str))
+    except ValueError:
+        pass
+    try:
+        return query.where(TestRun.result_code == TestResultCode(status_str))
+    except ValueError:
+        pass
+    raise ValueError(
+        f"Invalid status {status_str!r}: expected a lifecycle "
+        f"(queued/running/finished/cancelled/timed_out) or outcome "
+        f"(PASS/FAIL/ERROR/SKIPPED) value."
+    )
+
+
 def job_to_coord(job, *, project=None, opp_file=None):
     """Project a job spec (or form-field dict) into the Test coord shape.
 

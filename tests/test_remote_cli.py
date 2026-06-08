@@ -486,6 +486,33 @@ class CliRemoteHandlerTests(unittest.TestCase):
         self.assertIn("requires --matrix", res.output)
 
 
+class StatusFilterTests(unittest.TestCase):
+    """Unit-cover the shared persistence.status_filter helper directly."""
+
+    def test_lifecycle_value_filters(self):
+        from sqlalchemy import select
+        from opp_ci.db.models import TestRun
+        from opp_ci.persistence import status_filter
+        q = select(TestRun)
+        out = status_filter(q, "queued")
+        self.assertIsNot(out, q)  # a WHERE clause was appended
+
+    def test_result_code_value_filters(self):
+        from sqlalchemy import select
+        from opp_ci.db.models import TestRun
+        from opp_ci.persistence import status_filter
+        q = select(TestRun)
+        out = status_filter(q, "PASS")
+        self.assertIsNot(out, q)
+
+    def test_bad_value_raises_valueerror(self):
+        from sqlalchemy import select
+        from opp_ci.db.models import TestRun
+        from opp_ci.persistence import status_filter
+        with self.assertRaises(ValueError):
+            status_filter(select(TestRun), "bogus")
+
+
 def tearDownModule():
     try:
         os.unlink(_DB_PATH)
