@@ -28,7 +28,7 @@ Implementation: `opp_ci/auth.py`.
 
 | Endpoint | Method | Role | Purpose |
 |---|---|---|---|
-| `/api/runs` | POST | submitter | Submit a single test run to the queue. Body fields: `project`, `kind` (required); plus the same coordinate fields that appear on a [Test](data_model.md#test). |
+| `/api/runs` | POST | submitter | Submit a single test run to the queue. Body fields: `project`, `kind` (required unless `test_name` is given); plus the same coordinate fields that appear on a [Test](data_model.md#test). Optional `name` labels the Test on first run (409 on a duplicate name). Alternatively pass `test_name` to run an existing named Test by name (no coordinate needed; 404 if not found). |
 | `/api/runs/matrix` | POST | submitter | (Legacy) Expand a named matrix and queue all jobs as one `TestMatrixRun`. Body: `{"matrix_name": "..."}`. Response includes `matrix_run_id` and `run_ids`. Prefer the more flexible `/api/matrix-runs` below. |
 | `/api/runs` | GET | readonly | List runs. Filters: `project`, `kind`, `status` (matches `lifecycle`), `os`, `os_version`, `distro`, `distro_version`, `flavor`, `flavor_version`, `limit`. |
 | `/api/runs/{id}` | GET | readonly | Run detail including `stdout`, `stderr`, and `details` (read off the same `TestRun` row). |
@@ -69,7 +69,7 @@ child [`TestVerdict`](data_model.md#testverdict) cells finalize.
 
 | Endpoint | Method | Role | Purpose |
 |---|---|---|---|
-| `/api/matrix-runs` | POST | submitter | Launch a matrix run. Body: either `{"matrix_name": "..."}` (existing named matrix) **or** `{"project": "...", "kinds": [...], "modes": [...], "os": [...], ...}` (anonymous matrix; same axis keys as a `TestMatrix.config`). Optional `name`, `opp_file`, `deps`, and `no_cache: true` to bypass the content-addressable cache. Anonymous matrices persist as `adhoc:<project>:<UTC-timestamp>` rows so the resulting `TestMatrixRun` has a stable parent. Response: `{"matrix_run_id", "jobs_queued", "run_ids", "status"}`. |
+| `/api/matrix-runs` | POST | submitter | Launch a matrix run. Body: either `{"matrix_name": "..."}` (existing named matrix) **or** `{"project": "...", "kinds": [...], "modes": [...], "os": [...], ...}` (anonymous matrix; same axis keys as a `TestMatrix.config`). Optional `name`, `opp_file`, `deps`, and `no_cache: true` to bypass the content-addressable cache. An inline spec with no `name` persists as an **anonymous** `TestMatrix` (name = NULL); pass `name` to make it reusable. A duplicate `name` returns 409. Response: `{"matrix_run_id", "jobs_queued", "run_ids", "status"}`. |
 | `/api/matrix-runs` | GET | readonly | Recent `TestMatrixRun` rows with their rollup verdict. Filters: `project`, `verdict` (`EXPECTED` / `UNEXPECTED` / `UNKNOWN`), `since` (ISO date), `limit`. |
 | `/api/matrix-runs/{id}` | GET | readonly | Rollup header plus a `cells` array of `TestVerdict` rows joined to their `TestRun` + `Test` (per-cell verdict, actual, expected, cache_hit, recorded_at, …). |
 

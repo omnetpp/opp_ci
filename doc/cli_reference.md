@@ -37,7 +37,7 @@ role mapping, and notes (e.g. `run-matrix --remote` is named-matrix-only;
 
 | Command | Purpose |
 |---|---|
-| `opp_ci run` | Run a single test for a project. Required: `--project`, `--kind`. Common: `--ref`, `--mode`, `--isolation {none\|podman}`, `--toolchain {none\|nix}`, `--os`, `--os-version`, `--arch`, `--compiler`, `--compiler-version`, `--pin <dep>=<ver>` (repeatable), `--force`, `--skip-install`. |
+| `opp_ci run` | Run a single test for a project. Either give a coordinate (`--project`, `--kind`) or run a previously named test with `--test NAME` (mutually exclusive). `--name NAME` labels the test on creation so it can be re-run by name later (single `--kind` only). Common: `--ref`, `--mode`, `--isolation {none\|podman}`, `--toolchain {none\|nix}`, `--os`, `--os-version`, `--arch`, `--compiler`, `--compiler-version`, `--pin <dep>=<ver>` (repeatable), `--force`, `--skip-install`. |
 | `opp_ci run-matrix` | Universal matrix launcher — three input modes, choose exactly one. See below. |
 
 `run-matrix` accepts any one of:
@@ -46,9 +46,10 @@ role mapping, and notes (e.g. `run-matrix --remote` is named-matrix-only;
 - **Spec file**: `--spec-file path.json` (or `-` to read JSON from stdin) — a JSON object with `project`, optional `name` / `opp_file`, and the same axis keys as a `TestMatrix.config`.
 - **Inline axis flags**: `--project NAME` plus any of `--kinds`, `--modes`, `--refs` / `--ref`, `--versions`, `--os`, `--os-version`, `--distro`, `--distro-version`, `--flavor`, `--flavor-version`, `--compiler`, `--compiler-version`, `--arch`, `--isolation`, `--toolchain` (all comma-separated for multi-value axes).
 
-Spec-file and inline forms persist an anonymous `TestMatrix` row named
-`adhoc:<project>:<UTC-timestamp>` so the resulting `TestMatrixRun` has
-a stable parent.
+Spec-file and inline forms persist an **anonymous** `TestMatrix` row
+(name = NULL) so the resulting `TestMatrixRun` has a stable parent. Pass
+`--name NAME` (or a `name` key in a spec file) to save it under a name
+instead, making it reusable; a duplicate name is an error.
 
 Cross-cutting options:
 

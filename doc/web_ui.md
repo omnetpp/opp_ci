@@ -19,15 +19,16 @@ with `opp_ci serve` (default `127.0.0.1:8080`).
 | `/projects` | Project catalog list with last tested version and status |
 | `/projects/{name}` | Per-project summary, version history, run buttons. Carries a "Latest release run" card showing the most recent tag-triggered `TestMatrixRun` with its verdict (EXPECTED ⇒ release-ready), counters, and links to the matrix / matrix-run detail. |
 | `/runs` | Test runs list — filterable/sortable, cancel and re-run actions |
-| `/runs/new` | Submit form — single run or "Run from Matrix" |
-| `/runs/{run_id}` | Run detail — metadata, the outcome columns (`result_code`, `stdout`, `stderr`, `details`) off the same `TestRun` row, colored stdout (ANSI→HTML), re-run / cancel buttons |
+| `/runs/new` | Run a test, two ways: a **filterable table of named tests** (each row shows the coordinate + a Run button) for "run by name", and an **anonymous** coordinate form with an optional Name field (naming it on first run makes it reusable). |
+| `/runs/{run_id}` | Run detail — metadata, the outcome columns (`result_code`, `stdout`, `stderr`, `details`) off the same `TestRun` row, colored stdout (ANSI→HTML), re-run / cancel buttons, and a rename form for the underlying `Test` (submitter+). |
 | `/results` | Multi-dimensional results search — Detailed and Summary modes, CSV export |
 | `/compare` | Side-by-side diff of two runs or two branches |
 | `/queue` | Currently queued / running jobs |
-| `/matrices` | Matrix CRUD — create form, list, delete |
-| `/matrices/{id}` | Matrix detail and expansion preview |
-| `/matrix-runs` | Index of recent `TestMatrixRun` rows with their stored rollup verdict. Filters by project / verdict (EXPECTED / UNEXPECTED / UNKNOWN) / since. |
-| `/matrix-runs/{id}` | Rollup header + per-cell `TestVerdict` table for one matrix run. UNEXPECTED rows are highlighted; UNKNOWN rows carry an inline expectation editor (submitter+) that posts a new `ExpectedTestResult` for that cell's `Test`. `?unexpected_only=1` filters to diverged + undeclared cells. |
+| `/matrices` | Matrix CRUD — create form, list, delete. Anonymous (unnamed) matrices render as `(anonymous #id)`. |
+| `/matrices/{id}` | Matrix detail and expansion preview, plus a rename form and a "Run this matrix" button (submitter+). |
+| `/matrix-runs/new` | Run a matrix, mirroring `/runs/new`: a **filterable table of named matrices** (per-row Run button) for "run by name", and an **anonymous** axis form with an optional Name field. |
+| `/matrix-runs` | Index of recent `TestMatrixRun` rows with their stored rollup verdict. Filters by project / verdict (EXPECTED / UNEXPECTED / UNKNOWN) / since. Header `+ Run Matrix` button and per-row Re-run / Cancel actions (submitter+), mirroring `/runs`. |
+| `/matrix-runs/{id}` | Rollup header + per-cell `TestVerdict` table for one matrix run, with Re-run / Cancel actions. UNEXPECTED rows are highlighted; UNKNOWN rows carry an inline expectation editor (submitter+) that posts a new `ExpectedTestResult` for that cell's `Test`. `?unexpected_only=1` filters to diverged + undeclared cells. |
 | `/tests/{id}/expectations` | Per-Test expectation edit history (newest first) plus the "set expectation" form for submitters/admins. |
 | `/rules` | AutoTestRule CRUD for GitHub triggers |
 | `/rules/{id}` | Rule detail |

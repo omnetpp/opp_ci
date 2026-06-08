@@ -108,13 +108,17 @@ opp_env understands.
 
 ### TestMatrix
 
-A named JSON configuration describing the cross-product to test.
-Attached to a [Project](#project). Defines which [axes](#axis) to vary
-(`kinds`, `modes`, `versions`, `refs`, `deps`, `os`, `compiler`,
-`isolation`, `toolchain`, `features`). Expanded by the
-[scheduler](#scheduler) into [jobs](#job) that are persisted as
-[Test](#test) + [TestRun](#testrun) rows under one
-[TestMatrixRun](#testmatrixrun) umbrella.
+A JSON configuration describing the cross-product to test. Attached to
+a [Project](#project). Defines which [axes](#axis) to vary (`kinds`,
+`modes`, `versions`, `refs`, `deps`, `os`, `compiler`, `isolation`,
+`toolchain`, `features`). Expanded by the [scheduler](#scheduler) into
+[jobs](#job) that are persisted as [Test](#test) + [TestRun](#testrun)
+rows under one [TestMatrixRun](#testmatrixrun) umbrella.
+
+The `name` is **optional**: a named matrix is reusable and can be run
+by name; an anonymous one (name = NULL, e.g. an ad-hoc inline run) is a
+one-shot. Named matrices are unique; any number may be anonymous.
+Anonymous matrices display as `(anonymous #id)`.
 
 ### Test
 
@@ -125,7 +129,9 @@ the execution environment (`isolation`, `toolchain`), and `opp_file`.
 A SHA-256 `coord_hash` over that field set is the dedup key: matrix
 expansion looks the row up and inserts a new one only on first sight.
 A single `name` column is the only mutable field and sits outside the
-hash. Expected outcomes live in
+hash — it is an optional, editable label (unique when set) that lets a
+test be found and re-run by name, independent of dedup. Expected
+outcomes live in
 [ExpectedTestResult](#expectedtestresult), keyed by `test_id`, *not*
 on the Test row. Every [TestRun](#testrun) points at exactly one
 `Test` via `test_id`.

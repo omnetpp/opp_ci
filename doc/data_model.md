@@ -164,13 +164,13 @@ foreign-keyed from `tests` — see [Denormalised columns](#denormalised-columns)
 
 ## TestMatrix
 
-`test_matrices` — named cross-product configuration. Expanded by the
+`test_matrices` — cross-product configuration. Expanded by the
 scheduler into `Test` + `TestRun` rows under a `TestMatrixRun` umbrella.
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | int PK | |
-| `name` | string, unique, not null | CLI identifier (`inet-default`, `omnetpp-full`, …) |
+| `name` | string, unique, **nullable** | Optional identifier (`inet-default`, …). NULL = anonymous (one-shot, ad-hoc run); named matrices are reusable and unique. |
 | `project` | string, not null | Project name (stored by name, not FK) |
 | `opp_file` | string, nullable | Optional `.opp` file the matrix targets |
 | `config` | JSON, not null | The axes (versions, modes, os, compiler, isolation, toolchain, kinds, …) |
@@ -221,7 +221,7 @@ excluded from `coord_hash` so renaming never produces a new row.
 
 | Column | Type | Notes |
 |---|---|---|
-| `name` | string, nullable | Optional human label |
+| `name` | string, nullable, unique-when-set | Optional human label; lets a test be found and re-run by name |
 
 ### `coord_hash` field list
 
@@ -298,7 +298,7 @@ recomputed in app code on every render.
 | Column | Type | Notes |
 |---|---|---|
 | `id` | int PK | |
-| `matrix_id` | int FK → `test_matrices.id`, not null | The matrix this submission expanded. Anonymous / ad-hoc matrices still get a row (with a generated `adhoc:<project>:<UTC-timestamp>` name). |
+| `matrix_id` | int FK → `test_matrices.id`, not null | The matrix this submission expanded. Anonymous / ad-hoc matrices still get a row (with `name = NULL`). |
 | `trigger` | string, default `"manual"` | `manual` / `cli` / `web` / `remote` / `webhook` / `tag` / `schedule` / `rerun`. `"tag"` is set by the webhook handler for tag-push events; the project page's "Latest release run" card filters on it. |
 | `ref` | string, nullable | Git ref / tag the run was triggered against (set for `trigger="tag"`; left empty for branch/PR pushes) |
 | `github_owner` | string, nullable | GitHub repository owner |
