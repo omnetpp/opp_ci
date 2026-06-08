@@ -5,6 +5,7 @@ import os
 import shlex
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 
@@ -29,7 +30,64 @@ def _log_captured_output(label, result, level):
     _logger.log(level, "[%s] stderr:\n%s", label, _tail(result.stderr))
 
 
-def run_external(args, *, label, timeout=None, env=None, cwd=None):
+def _pump_stream(stream, sink, emit):
+    """Read *stream* line by line, append each line to *sink* and pass it to
+    *emit*. Runs on its own thread so stdout and stderr can be teed
+    concurrently without one blocking the other."""
+    try:
+        for line in iter(stream.readline, ""):
+            sink.append(line)
+            emit(line.rstrip("\n"))
+    finally:
+        stream.close()
+
+
+def _run_external_streaming(args, *, label, timeout, env, cwd, start):
+    """Popen variant of :py:func:`run_external` that logs the child's output
+    line by line *as it is produced* (each line at INFO, prefixed with
+    *label*), so a long ``podman build`` or ``opp_env`` compile shows live
+    progress in the worker's journal instead of one tail dump at the end.
+
+    stdout and stderr are teed on separate threads, so the returned
+    CompletedProcess keeps them separate just like ``subprocess.run`` —
+    callers that store ``result.stdout`` / ``result.stderr`` are unaffected.
+    """
+    proc = subprocess.Popen(
+        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1, env=env, cwd=cwd,
+    )
+    out_lines, err_lines = [], []
+    emit = lambda line: _logger.info("[%s] %s", label, line)
+    threads = [
+        threading.Thread(target=_pump_stream, args=(proc.stdout, out_lines, emit)),
+        threading.Thread(target=_pump_stream, args=(proc.stderr, err_lines, emit)),
+    ]
+    for t in threads:
+        t.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        for t in threads:
+            t.join()
+        raise subprocess.TimeoutExpired(
+            args, timeout, output="".join(out_lines), stderr="".join(err_lines),
+        )
+    for t in threads:
+        t.join()
+    elapsed = time.time() - start
+    if proc.returncode == 0:
+        _logger.info("[%s] exit=0 (%.1fs)", label, elapsed)
+    else:
+        _logger.warning("[%s] exit=%d (%.1fs)", label, proc.returncode, elapsed)
+    return subprocess.CompletedProcess(
+        args, proc.returncode,
+        stdout="".join(out_lines), stderr="".join(err_lines),
+    )
+
+
+def run_external(args, *, label, timeout=None, env=None, cwd=None, stream=False):
     """subprocess.run + structured logging.
 
     Always logs the command at INFO and the exit code + elapsed time. On a
@@ -40,10 +98,20 @@ def run_external(args, *, label, timeout=None, env=None, cwd=None):
     With DEBUG logging enabled (e.g. `opp_ci -v worker start ...`), the
     full output is logged on every call, success or not.
 
+    With *stream=True* the child's output is teed to the log line by line as
+    it runs (see :py:func:`_run_external_streaming`) — use it for the slow
+    commands (podman build, the container run, opp_env compile) so the admin
+    can watch the build/compile progress in the journal rather than waiting
+    for one dump at the end.
+
     Returns the CompletedProcess.
     """
     _logger.info("[%s] $ %s", label, _format_argv(args))
     start = time.time()
+    if stream:
+        return _run_external_streaming(
+            args, label=label, timeout=timeout, env=env, cwd=cwd, start=start,
+        )
     result = subprocess.run(
         args, capture_output=True, text=True,
         timeout=timeout, env=env, cwd=cwd,
@@ -559,6 +627,7 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
         result = run_external(
             ["podman", "build", "-t", tag, "-f", containerfile_path, tmp],
             label=f"podman build {tag}",
+            stream=True,
         )
         if result.returncode != 0:
             raise RuntimeError(f"podman build {tag} failed (exit {result.returncode})")
@@ -723,7 +792,7 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
 
     start = time.time()
     try:
-        result = run_external(podman_cmd, label=f"podman:{image}")
+        result = run_external(podman_cmd, label=f"podman:{image}", stream=True)
         duration = time.time() - start
     finally:
         if worktree_path:
@@ -762,7 +831,7 @@ def _run_test_via_opp_env(project, kind, **kwargs):
     args = ["opp_env", "run", effective_project, "-c", cmd]
 
     start = time.time()
-    result = run_external(args, label=f"opp_env:{effective_project}", env=env)
+    result = run_external(args, label=f"opp_env:{effective_project}", env=env, stream=True)
     duration = time.time() - start
 
     result_code = "PASS" if result.returncode == 0 else "FAIL"
