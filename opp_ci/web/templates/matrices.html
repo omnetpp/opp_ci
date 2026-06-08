@@ -15,8 +15,7 @@
     <div class="filter-grid">
         {{ f.txt(filters, "name", "Name", "contains…") }}
         {{ f.sel(filters, "project", "Project", options.project) }}
-        {{ f.sel(filters, "test", "Test", options.test) }}
-        {{ f.sel(filters, "mode", "Mode", options.mode) }}
+        {% for param, label in axes %}{{ f.sel(filters, param, label, options[param]) }}{% endfor %}
     </div>
     <div class="filter-actions">
         <button type="submit">Filter</button>
@@ -31,7 +30,7 @@
             <th>ID</th>
             <th>Name</th>
             <th>Project</th>
-            <th>Tests</th>
+            <th>Kinds</th>
             <th>Modes</th>
             <th>Refs</th>
             <th>Runs</th>
@@ -44,7 +43,7 @@
             <td>{{ m.id }}</td>
             <td>{{ m.display_name }}</td>
             <td>{{ m.project }}</td>
-            <td>{{ m.config.get("tests", [])|join(", ") }}</td>
+            <td>{{ m.config.get("kinds", [])|join(", ") }}</td>
             <td>{{ m.config.get("modes", [])|join(", ") }}</td>
             {% set refs = m.config.get("refs", []) %}
             {% set ref_range = m.config.get("ref_range") %}

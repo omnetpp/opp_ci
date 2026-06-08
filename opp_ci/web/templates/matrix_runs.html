@@ -12,11 +12,19 @@
 <form method="get" action="/test-matrix-runs" class="filters filters-stacked">
     <div class="filter-grid">
         {{ f.sel(filters, "project", "Project", options.project) }}
+        <label class="filter-field"><span>Matrix</span>
+            <select name="matrix">
+                <option value="">Any</option>
+                {% for m in matrices_opt %}<option value="{{ m.id }}" {{ "selected" if filters.matrix == m.id|string }}>{{ m.name }}</option>{% endfor %}
+            </select>
+        </label>
         {{ f.sel(filters, "trigger", "Trigger", options.trigger) }}
         {{ f.txt(filters, "ref", "Ref", "contains…") }}
         {{ f.sel(filters, "verdict", "Verdict", options.verdict) }}
         {{ f.sel(filters, "actual", "Actual", options.actual) }}
+        {{ f.sel(filters, "state", "State", options.state) }}
         {{ f.date(filters, "since", "Since") }}
+        {{ f.date(filters, "until", "Until") }}
     </div>
     <div class="filter-actions">
         <button type="submit">Filter</button>

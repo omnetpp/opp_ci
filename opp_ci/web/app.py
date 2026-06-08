@@ -1091,20 +1091,38 @@ def matrices_list(
     current_user: User = Depends(require_user()),
     name: str = Query(default=None),
     project: str = Query(default=None),
-    test: str = Query(default=None),
-    mode: str = Query(default=None),
     error: str = Query(default=None),
 ):
     session = SessionLocal()
     try:
-        # Options are drawn from all matrices (config holds the test/mode axes
-        # as JSON, so those are filtered in Python below).
+        # A matrix stores its coordinate axes inside the `config` JSON rather
+        # than as columns, so every axis is offered as a dropdown built from
+        # the values present across all matrices and filtered in Python. Each
+        # tuple is (filter param, config key, label).
+        axes = [
+            ("kind", "kinds", "Kind"),
+            ("mode", "modes", "Mode"),
+            ("version", "versions", "Version"),
+            ("os", "os", "OS"),
+            ("os_version", "os_version", "OS version"),
+            ("distro", "distro", "Distro"),
+            ("distro_version", "distro_version", "Distro version"),
+            ("flavor", "flavor", "Flavor"),
+            ("flavor_version", "flavor_version", "Flavor version"),
+            ("compiler", "compiler", "Compiler"),
+            ("compiler_version", "compiler_version", "Compiler version"),
+            ("arch", "arch", "Arch"),
+            ("isolation", "isolation", "Isolation"),
+            ("toolchain", "toolchain", "Toolchain"),
+        ]
+        axis_filters = {p: (request.query_params.get(p) or "") for p, _, _ in axes}
+
         all_matrices = session.execute(select(TestMatrix)).scalars().all()
-        options = {
-            "project": sorted({m.project for m in all_matrices if m.project}),
-            "test": sorted({t for m in all_matrices for t in (m.config.get("tests") or [])}),
-            "mode": sorted({md for m in all_matrices for md in (m.config.get("modes") or [])}),
-        }
+        options = {"project": sorted({m.project for m in all_matrices if m.project})}
+        for param, ckey, _ in axes:
+            options[param] = sorted({
+                v for m in all_matrices for v in (m.config.get(ckey) or [])
+            })
 
         query = select(TestMatrix).order_by(TestMatrix.id)
         if name:
@@ -1112,10 +1130,10 @@ def matrices_list(
         if project:
             query = query.where(TestMatrix.project == project)
         matrices = session.execute(query).scalars().all()
-        if test:
-            matrices = [m for m in matrices if test in (m.config.get("tests") or [])]
-        if mode:
-            matrices = [m for m in matrices if mode in (m.config.get("modes") or [])]
+        for param, ckey, _ in axes:
+            val = axis_filters[param]
+            if val:
+                matrices = [m for m in matrices if val in (m.config.get(ckey) or [])]
 
         run_counts = {}
         for m in matrices:
@@ -1130,10 +1148,8 @@ def matrices_list(
             "matrices": matrices,
             "run_counts": run_counts,
             "options": options,
-            "filters": {
-                "name": name or "", "project": project or "",
-                "test": test or "", "mode": mode or "",
-            },
+            "axes": [(p, label) for p, _, label in axes],
+            "filters": {"name": name or "", "project": project or "", **axis_filters},
             "error": error,
             **_template_globals(request, current_user),
         })
@@ -1394,11 +1410,14 @@ def matrix_runs_list(
     request: Request,
     current_user: User = Depends(require_user()),
     project: str = Query(default=None),
+    matrix: str = Query(default=None),
     trigger: str = Query(default=None),
     ref: str = Query(default=None),
     verdict: str = Query(default=None),
     actual: str = Query(default=None),
+    state: str = Query(default=None),
     since: str = Query(default=None),
+    until: str = Query(default=None),
     limit: int = Query(default=50),
 ):
     """Index of recent TestMatrixRun rows with their rollup verdict."""
@@ -1412,6 +1431,8 @@ def matrix_runs_list(
         )
         if project:
             query = query.where(TestMatrix.project == project)
+        if matrix and matrix.isdigit():
+            query = query.where(TestMatrixRun.matrix_id == int(matrix))
         if trigger:
             query = query.where(TestMatrixRun.trigger == trigger)
         if ref:
@@ -1426,10 +1447,22 @@ def matrix_runs_list(
                 query = query.where(TestMatrixRun.actual_summary == TestResultCode(actual))
             except ValueError:
                 pass
+        if state == "completed":
+            query = query.where(TestMatrixRun.completed_at.isnot(None))
+        elif state == "pending":
+            query = query.where(TestMatrixRun.completed_at.is_(None))
         if since:
             try:
-                cutoff = datetime.datetime.fromisoformat(since)
-                query = query.where(TestMatrixRun.created_at >= cutoff)
+                query = query.where(
+                    TestMatrixRun.created_at >= datetime.datetime.fromisoformat(since)
+                )
+            except ValueError:
+                pass
+        if until:
+            try:
+                # Inclusive upper bound: a bare date covers the whole day.
+                end = datetime.datetime.fromisoformat(until) + datetime.timedelta(days=1)
+                query = query.where(TestMatrixRun.created_at < end)
             except ValueError:
                 pass
 
@@ -1437,12 +1470,21 @@ def matrix_runs_list(
         options = _distinct_options(session, TestMatrix.project, TestMatrixRun.trigger)
         options["verdict"] = ["EXPECTED", "UNEXPECTED", "UNKNOWN"]
         options["actual"] = ["PASS", "FAIL", "ERROR", "SKIPPED"]
+        options["state"] = ["completed", "pending"]
+        matrices_opt = session.execute(
+            select(TestMatrix.id, TestMatrix.name).order_by(TestMatrix.name, TestMatrix.id)
+        ).all()
         return templates.TemplateResponse(request, "matrix_runs.html", {
             "rows": rows,
             "options": options,
+            "matrices_opt": [
+                {"id": mid, "name": mname or f"(anonymous #{mid})"}
+                for mid, mname in matrices_opt
+            ],
             "filters": {
-                "project": project or "", "trigger": trigger or "", "ref": ref or "",
-                "verdict": verdict or "", "actual": actual or "", "since": since or "",
+                "project": project or "", "matrix": matrix or "", "trigger": trigger or "",
+                "ref": ref or "", "verdict": verdict or "", "actual": actual or "",
+                "state": state or "", "since": since or "", "until": until or "",
             },
             **_template_globals(request, current_user),
         })
