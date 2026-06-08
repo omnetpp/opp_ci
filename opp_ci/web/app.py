@@ -258,6 +258,8 @@ def runs_list(
     version: str = Query(default=None),
     worker: str = Query(default=None),
     status: str = Query(default=None),
+    since: str = Query(default=None),
+    until: str = Query(default=None),
     limit: int = Query(default=50),
 ):
     session = SessionLocal()
@@ -295,6 +297,20 @@ def runs_list(
                 # Forgiving on URL params: a bad ?status= just shows no rows
                 # and the user corrects the filter.
                 query = query.where(false())
+        if since:
+            try:
+                query = query.where(
+                    TestRun.created_at >= datetime.datetime.fromisoformat(since)
+                )
+            except ValueError:
+                pass
+        if until:
+            try:
+                # Inclusive upper bound: a bare date covers the whole day.
+                end = datetime.datetime.fromisoformat(until) + datetime.timedelta(days=1)
+                query = query.where(TestRun.created_at < end)
+            except ValueError:
+                pass
 
         runs = session.execute(query).scalars().all()
         options = _distinct_options(
@@ -312,6 +328,7 @@ def runs_list(
                 "os": os or "", "distro": distro or "", "compiler": compiler or "",
                 "git_ref": git_ref or "", "version": version or "",
                 "worker": worker or "", "status": status or "",
+                "since": since or "", "until": until or "",
             },
             **_template_globals(request, current_user),
         })
@@ -1050,14 +1067,40 @@ def compatibility_index(request: Request, current_user: User = Depends(require_u
 
 @web_router.get("/compatibility/{project_name}", response_class=HTMLResponse)
 def compatibility_page(request: Request, project_name: str,
-                       current_user: User = Depends(require_user())):
-    from opp_ci.compatibility import get_compatibility_matrix
+                       current_user: User = Depends(require_user()),
+                       os: str = Query(default=None, alias="os"),
+                       os_version: str = Query(default=None),
+                       distro: str = Query(default=None),
+                       distro_version: str = Query(default=None),
+                       flavor: str = Query(default=None),
+                       flavor_version: str = Query(default=None),
+                       compiler: str = Query(default=None),
+                       compiler_version: str = Query(default=None),
+                       mode: str = Query(default=None),
+                       kind: str = Query(default=None),
+                       toolchain: str = Query(default=None),
+                       isolation: str = Query(default=None),
+                       arch: str = Query(default=None)):
+    from opp_ci.compatibility import _DIMENSIONS, get_compatibility_matrix
     session = SessionLocal()
     try:
-        matrices = get_compatibility_matrix(session, project_name)
+        # One dropdown per execution dimension. An unset dropdown is dropped
+        # from `filters` (no-op), so the bare URL matches the unfiltered view.
+        dims = {
+            "os": os, "os_version": os_version,
+            "distro": distro, "distro_version": distro_version,
+            "flavor": flavor, "flavor_version": flavor_version,
+            "compiler": compiler, "compiler_version": compiler_version,
+            "mode": mode, "kind": kind,
+            "toolchain": toolchain, "isolation": isolation, "arch": arch,
+        }
+        filters = {dim: dims[dim] for dim in _DIMENSIONS if dims.get(dim)}
+        result = get_compatibility_matrix(session, project_name, filters)
         return templates.TemplateResponse(request, "compatibility.html", {
             "project_name": project_name,
-            "matrices": matrices,
+            "matrices": result["matrices"],
+            "options": result["options"],
+            "filters": {dim: dims.get(dim) or "" for dim in _DIMENSIONS},
             **_template_globals(request, current_user),
         })
     finally:

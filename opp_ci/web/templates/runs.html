@@ -24,6 +24,8 @@
             </select>
         </label>
         {{ f.sel(filters, "status", "Status", options.status, any_label="All statuses") }}
+        {{ f.date(filters, "since", "Since") }}
+        {{ f.date(filters, "until", "Until") }}
     </div>
     <div class="filter-actions">
         <button type="submit">Filter</button>
