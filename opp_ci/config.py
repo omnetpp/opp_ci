@@ -83,6 +83,18 @@ WORKER_POLL_INTERVAL = int(os.environ.get("OPP_CI_WORKER_POLL_INTERVAL", "10"))
 WORKER_HEARTBEAT_INTERVAL = int(os.environ.get("OPP_CI_WORKER_HEARTBEAT_INTERVAL", "30"))
 WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("OPP_CI_WORKER_HEARTBEAT_TIMEOUT", "120"))
 
+# How often the coordinator sweeps for workers that have gone silent past
+# WORKER_HEARTBEAT_TIMEOUT, marks them offline, and reclaims their orphaned
+# `running` runs. Defaults to half the timeout (min 15s) so worst-case
+# detection latency is timeout + interval.
+WORKER_REAP_INTERVAL = int(os.environ.get(
+    "OPP_CI_WORKER_REAP_INTERVAL", str(max(15, WORKER_HEARTBEAT_TIMEOUT // 2))))
+# A `running` run is re-queued up to this many times when its worker goes
+# dark before it is treated as a poison pill (a run that keeps killing its
+# worker) and retired to a terminal `timed_out`/ERROR state. See
+# opp_ci.persistence.reclaim_orphaned_runs.
+MAX_RECLAIMS = int(os.environ.get("OPP_CI_MAX_RECLAIMS", "2"))
+
 WORKER_TOKEN = os.environ.get("OPP_CI_WORKER_TOKEN", "")
 
 GITHUB_TOKEN_FILE = os.environ.get("OPP_CI_GITHUB_TOKEN_FILE", os.path.expanduser("~/.ssh/opp_ci_github_token"))

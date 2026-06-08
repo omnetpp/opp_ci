@@ -10,7 +10,7 @@ import datetime
 import logging
 import platform as _platform
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from opp_ci.db.models import (
     TEST_COORD_FIELDS,
@@ -23,6 +23,7 @@ from opp_ci.db.models import (
     TestRunLifecycle,
     TestVerdict,
     TestVerdictKind,
+    Worker,
     compute_test_coord_hash,
 )
 
@@ -396,7 +397,12 @@ def finalize_verdict_for_run(session, run_id):
     run = session.get(TestRun, run_id)
     if run is None:
         return
-    if run.lifecycle != TestRunLifecycle.finished or run.result_code is None:
+    # `timed_out` is a terminal outcome too (a run retired after exhausting
+    # its reclaim budget — see retire_poison_run), and it carries a
+    # synthetic result_code, so it must promote its verdict just like a
+    # `finished` run does.
+    if run.lifecycle not in (TestRunLifecycle.finished,
+                             TestRunLifecycle.timed_out) or run.result_code is None:
         return
 
     # Every finished run carries its own verdict. Matrix runs already have
@@ -444,6 +450,90 @@ def finalize_verdict_for_run(session, run_id):
     for mid in affected_matrix_runs:
         if mid is not None:
             recompute_matrix_run_rollup(session, mid)
+
+
+# ── Orphan recovery ───────────────────────────────────────────────────
+
+
+def retire_poison_run(session, run, now):
+    """Terminally fail a run that has exhausted its reclaim budget.
+
+    Marks it `timed_out` with a synthetic ERROR outcome and resolves its
+    matrix cell so the parent TestMatrixRun can complete instead of being
+    wedged open forever by a run that keeps killing its worker. Caller
+    owns the transaction (does NOT commit).
+    """
+    run.lifecycle = TestRunLifecycle.timed_out
+    run.worker_id = None
+    run.finished_at = now            # started_at left as-is for forensics
+    run.result_code = TestResultCode.ERROR
+    run.stderr = (run.stderr or "") + (
+        f"\n[opp_ci] retired after {run.reclaim_count} reclaim(s): the run "
+        f"repeatedly outlived its worker (suspected crash/OOM loop)."
+    )
+    run.details = {**(run.details or {}),
+                   "reclaim_exhausted": True,
+                   "reclaim_count": run.reclaim_count}
+    finalize_verdict_for_run(session, run.id)
+
+
+def reclaim_orphaned_runs(session, worker_id, now, max_reclaims):
+    """Reclaim every TestRun left `running` on `worker_id`.
+
+    Each orphan is either re-queued for another attempt or, once it has
+    burned through `max_reclaims` attempts, retired to a terminal
+    `timed_out` state (see retire_poison_run). Returns
+    ``(requeued, retired)``. Caller owns the transaction (does NOT commit).
+    """
+    orphans = session.execute(
+        select(TestRun).where(
+            TestRun.worker_id == worker_id,
+            TestRun.lifecycle == TestRunLifecycle.running,
+        )
+    ).scalars().all()
+    requeued = retired = 0
+    for run in orphans:
+        run.reclaim_count = (run.reclaim_count or 0) + 1
+        if run.reclaim_count > max_reclaims:
+            retire_poison_run(session, run, now)
+            retired += 1
+        else:
+            run.lifecycle = TestRunLifecycle.queued
+            run.worker_id = None
+            run.started_at = None
+            # running->queued keeps the matrix cell non-finished, so the
+            # parent rollup's completed_at stays NULL either way — no
+            # rollup recompute needed for the re-queue path.
+            requeued += 1
+    return requeued, retired
+
+
+def mark_stale_workers_offline(session, now, timeout_seconds, max_reclaims):
+    """Flip online/busy workers whose last_heartbeat is older than the
+    timeout to `offline`, reclaim their orphaned `running` runs, and zero
+    their job count.
+
+    A freshly-registered worker (status `offline`, last_heartbeat NULL) is
+    not matched by the online/busy filter, so this never churns workers
+    that have not connected yet. Returns a list of
+    ``(worker_name, requeued, retired)`` for workers that were flipped.
+    Caller owns the transaction (does NOT commit).
+    """
+    threshold = now - datetime.timedelta(seconds=timeout_seconds)
+    stale = session.execute(
+        select(Worker).where(
+            Worker.status.in_(("online", "busy")),
+            or_(Worker.last_heartbeat.is_(None),
+                Worker.last_heartbeat < threshold),
+        )
+    ).scalars().all()
+    results = []
+    for w in stale:
+        requeued, retired = reclaim_orphaned_runs(session, w.id, now, max_reclaims)
+        w.status = "offline"
+        w.current_job_count = 0
+        results.append((w.name, requeued, retired))
+    return results
 
 
 # ── Enqueue ───────────────────────────────────────────────────────────

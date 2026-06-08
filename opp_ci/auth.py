@@ -103,22 +103,17 @@ def require_worker_token():
             if worker is None:
                 raise HTTPException(status_code=401, detail="Invalid worker token")
             # Update heartbeat
-            worker.last_heartbeat = datetime.datetime.utcnow()
+            now = datetime.datetime.utcnow()
+            worker.last_heartbeat = now
             if worker.status == "offline":
                 worker.status = "online"
-                # Re-queue any runs that were left in running state on this
-                # worker (presumably because the worker disconnected mid-run).
-                from opp_ci.db.models import TestRun, TestRunLifecycle
-                orphans = session.execute(
-                    select(TestRun).where(
-                        TestRun.worker_id == worker.id,
-                        TestRun.lifecycle == TestRunLifecycle.running,
-                    )
-                ).scalars().all()
-                for run in orphans:
-                    run.lifecycle = TestRunLifecycle.queued
-                    run.worker_id = None
-                    run.started_at = None
+                # Reclaim any runs left `running` on this worker — it was
+                # marked offline (by the reaper, or because it never came
+                # back) while mid-run. Usually a no-op because the reaper
+                # already reclaimed them; idempotent if so.
+                from opp_ci import config as cfg
+                from opp_ci.persistence import reclaim_orphaned_runs
+                reclaim_orphaned_runs(session, worker.id, now, cfg.MAX_RECLAIMS)
                 worker.current_job_count = 0
             session.commit()
             return {"worker_id": worker.id, "worker_name": worker.name}

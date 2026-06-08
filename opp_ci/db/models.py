@@ -468,6 +468,12 @@ class TestRun(Base):
     # Content-addressable cache key (Phase 4). NULL on legacy rows.
     cache_fingerprint = Column(String, nullable=True, index=True)
 
+    # How many times this run has been reclaimed (re-queued after its
+    # worker went dark mid-run). Bounds poison-pill loops: once it exceeds
+    # config.MAX_RECLAIMS the run is retired to timed_out. See
+    # opp_ci.persistence.reclaim_orphaned_runs / retire_poison_run.
+    reclaim_count = Column(Integer, nullable=False, default=0, server_default="0")
+
     test = relationship("Test", back_populates="runs")
     matrix_run = relationship("TestMatrixRun", back_populates="test_runs")
     worker = relationship("Worker", backref="test_runs")

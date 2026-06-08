@@ -1,6 +1,9 @@
+import asyncio
 import datetime
+import logging
 import os
 import re
+from contextlib import asynccontextmanager
 from html import escape as html_escape
 from pathlib import Path
 
@@ -23,9 +26,11 @@ from opp_ci.db.models import (
 from opp_ci.persistence import (
     create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
     get_current_expectation, get_matrix_by_name, get_or_create_test,
-    get_test_by_name, insert_expectation, set_matrix_name, set_test_name,
-    status_filter,
+    get_test_by_name, insert_expectation, mark_stale_workers_offline,
+    set_matrix_name, set_test_name, status_filter,
 )
+
+_logger = logging.getLogger(__name__)
 
 _ANSI_RE = re.compile(r'\x1b\[([0-9;]*)m')
 
@@ -99,7 +104,61 @@ def _resolve_ansi_style(codes):
     return ";".join(parts)
 
 
-app = FastAPI(title="opp_ci")
+def _reap_stale_workers():
+    """Sweep once for workers silent past WORKER_HEARTBEAT_TIMEOUT: mark
+    them offline and reclaim their orphaned `running` runs. Sync DB work,
+    meant to be called via asyncio.to_thread off the event loop."""
+    session = SessionLocal()
+    try:
+        results = mark_stale_workers_offline(
+            session,
+            datetime.datetime.utcnow(),
+            cfg.WORKER_HEARTBEAT_TIMEOUT,
+            cfg.MAX_RECLAIMS,
+        )
+        session.commit()
+    finally:
+        session.close()
+    for name, requeued, retired in results:
+        _logger.warning(
+            "Reaped stale worker '%s': %d run(s) re-queued, %d retired "
+            "(poison pill)", name, requeued, retired)
+    return results
+
+
+async def _reaper_loop():
+    """Periodically reap stale workers until cancelled."""
+    while True:
+        await asyncio.sleep(cfg.WORKER_REAP_INTERVAL)
+        try:
+            await asyncio.to_thread(_reap_stale_workers)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # never let a transient DB error kill the loop
+            _logger.warning("Stale-worker reaper sweep failed: %s", e)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    # Startup reconciliation: a coordinator restart leaves no one to mark
+    # crashed workers offline, so sweep once immediately. This also covers
+    # workers that went stale while the coordinator was down.
+    try:
+        await asyncio.to_thread(_reap_stale_workers)
+    except Exception as e:
+        _logger.warning("Startup stale-worker reconciliation failed: %s", e)
+    task = asyncio.create_task(_reaper_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="opp_ci", lifespan=lifespan)
 
 # Session middleware signs cookies with OPP_CI_SESSION_SECRET. We fail
 # closed if it's unset: a random per-process secret would silently log

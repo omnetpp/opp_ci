@@ -567,7 +567,14 @@ async def worker_report_snapshot(
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run #{req.run_id} not found")
         if run.worker_id != worker_info["worker_id"]:
-            raise HTTPException(status_code=403, detail="Run not assigned to this worker")
+            # Reclaimed/reassigned while this worker was out of contact —
+            # drop the stale snapshot quietly (benign 200, see the result
+            # endpoint for the full rationale).
+            _logger.warning(
+                "Dropping stale snapshot for run #%d from worker '%s' "
+                "(current worker_id=%s)",
+                req.run_id, worker_info["worker_name"], run.worker_id)
+            return {"status": "dropped", "reason": "reclaimed"}
         run.system_snapshot = req.snapshot
         session.commit()
         return {"status": "ok"}
@@ -596,7 +603,18 @@ async def worker_report_result(
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run #{req.run_id} not found")
         if run.worker_id != worker_info["worker_id"]:
-            raise HTTPException(status_code=403, detail="Run not assigned to this worker")
+            # The run was reclaimed (worker_id cleared, then possibly
+            # re-queued, reassigned to another worker, or retired as a
+            # poison pill) while this worker was out of contact. Drop the
+            # now-stale result rather than clobbering the run's current
+            # state or its new owner's work. Benign 200 so the worker just
+            # moves on instead of logging an error / retrying.
+            _logger.warning(
+                "Dropping stale result for run #%d from worker '%s': no "
+                "longer assigned to it (current worker_id=%s, lifecycle=%s)",
+                req.run_id, worker_info["worker_name"], run.worker_id,
+                run.lifecycle.value if run.lifecycle else None)
+            return {"status": "dropped", "run_id": run.id, "reason": "reclaimed"}
 
         try:
             result_code = TestResultCode(req.result_code)
