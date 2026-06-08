@@ -829,6 +829,7 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
                 "isolation": isolation,
                 "toolchain": toolchain,
                 "opp_file": None,
+                "resolved_deps": resolved_deps,
             }
             test = get_or_create_test(session, coord)
             if name:

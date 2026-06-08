@@ -684,6 +684,7 @@ def test_new_submit(
             "isolation": isolation or None,
             "toolchain": toolchain or None,
             "opp_file": None,
+            "resolved_deps": resolved_deps,
         }
         test = get_or_create_test(session, coord)
         if name.strip():

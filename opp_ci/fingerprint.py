@@ -25,6 +25,8 @@ import hashlib
 import json
 import logging
 
+from opp_ci.db.models import normalise_deps
+
 _logger = logging.getLogger(__name__)
 
 
@@ -89,19 +91,6 @@ def _resolve_git_ref_to_sha(project_name, git_ref):
         return git_ref
 
 
-def _normalised_deps(resolved_deps):
-    """Canonicalise resolved_deps into a sorted-keys dict.
-
-    `None` and empty dict are equivalent for fingerprint purposes.
-    """
-    if not resolved_deps:
-        return {}
-    if isinstance(resolved_deps, dict):
-        return {k: resolved_deps[k] for k in sorted(resolved_deps)}
-    # Defensive: stringify whatever it is so callers don't crash.
-    return {"_raw": str(resolved_deps)}
-
-
 def compute_cache_fingerprint(job, *, project=None, opp_file=None,
                               resolve_refs=True):
     """SHA-256 hex of the canonical JSON over every fingerprint-bearing input.
@@ -123,7 +112,7 @@ def compute_cache_fingerprint(job, *, project=None, opp_file=None,
         payload["resolved_project_ref"] = _resolve_git_ref_to_sha(proj_name, git_ref)
     else:
         payload["resolved_project_ref"] = git_ref
-    payload["resolved_deps"] = _normalised_deps(job.get("resolved_deps"))
+    payload["resolved_deps"] = normalise_deps(job.get("resolved_deps"))
     # version is the opp_env version identifier; it can pin different
     # install plans even when the project name + ref match.
     payload["version"] = job.get("version")

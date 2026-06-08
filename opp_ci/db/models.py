@@ -205,8 +205,31 @@ TEST_COORD_FIELDS = (
 )
 
 
+def normalise_deps(resolved_deps):
+    """Canonicalise a resolved_deps mapping into a sorted-keys dict.
+
+    `None` and the empty dict are equivalent (no pinned dependencies), so
+    they hash identically. Defined here (the lowest-level module) so both
+    Test identity and the cache fingerprint share one canonicalisation;
+    `fingerprint.py` imports this rather than redefining it.
+    """
+    if not resolved_deps:
+        return {}
+    if isinstance(resolved_deps, dict):
+        return {k: resolved_deps[k] for k in sorted(resolved_deps)}
+    # Defensive: stringify whatever it is so callers don't crash.
+    return {"_raw": str(resolved_deps)}
+
+
 def compute_test_coord_hash(coord):
-    """SHA-256 hex of sorted-keys canonical JSON over `TEST_COORD_FIELDS`.
+    """SHA-256 hex of sorted-keys canonical JSON over the Test coordinate.
+
+    The coordinate is `TEST_COORD_FIELDS` plus the resolved dependency
+    versions (`resolved_deps`): the dependency environment is part of what
+    a Test *is*, so e.g. mm1k against omnetpp 6.4.0 and 6.3.0 are distinct
+    Tests. `resolved_deps` is normalised (`None` == `{}`, key order
+    irrelevant) so a pinned and an auto-resolved identical version collapse
+    to the same Test — identity tracks resolved versions, not pin intent.
 
     Unknown keys in `coord` are ignored; missing keys are treated as None
     so the hash is stable regardless of whether the caller passed every
@@ -215,6 +238,7 @@ def compute_test_coord_hash(coord):
     deliberately excluded.
     """
     payload = {field: coord.get(field) for field in TEST_COORD_FIELDS}
+    payload["resolved_deps"] = normalise_deps(coord.get("resolved_deps"))
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -276,6 +300,11 @@ class Test(Base):
     isolation = Column(String, nullable=True)         # "none" | "podman"
     toolchain = Column(String, nullable=True)         # "none" | "nix"
     opp_file = Column(String, nullable=True)
+
+    # Resolved dependency versions (e.g. {"omnetpp": "6.4.0"}). Part of the
+    # coordinate / identity — folded into coord_hash via normalise_deps —
+    # not a per-run knob. NULL/{} means no pinned dependencies.
+    resolved_deps = Column(JSON, nullable=True)
 
     coord_hash = Column(String(64), unique=True, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)

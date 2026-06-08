@@ -62,11 +62,13 @@ def job_to_coord(job, *, project=None, opp_file=None):
     """Project a job spec (or form-field dict) into the Test coord shape.
 
     Job-spec keys match the `Test` column names one-to-one, so this is
-    just a filter to the closed `TEST_COORD_FIELDS` set. `project` and
+    just a filter to the closed `TEST_COORD_FIELDS` set plus the
+    `resolved_deps` mapping (also part of Test identity). `project` and
     `opp_file` can be supplied by the caller for sites where the job
     dict omits them.
     """
     coord = {field: job.get(field) for field in TEST_COORD_FIELDS}
+    coord["resolved_deps"] = job.get("resolved_deps")
     if project is not None:
         coord["project"] = project
     if opp_file is not None and coord.get("opp_file") is None:
@@ -77,8 +79,9 @@ def job_to_coord(job, *, project=None, opp_file=None):
 def get_or_create_test(session, coord):
     """Return the Test row matching `coord`, creating it if missing.
 
-    `coord` is a dict over `TEST_COORD_FIELDS` (unknown keys ignored,
-    missing keys treated as None). Caller is responsible for commit/flush.
+    `coord` is a dict over `TEST_COORD_FIELDS` plus `resolved_deps`
+    (unknown keys ignored, missing keys treated as None). Caller is
+    responsible for commit/flush.
     """
     h = compute_test_coord_hash(coord)
     existing = session.execute(
@@ -87,7 +90,7 @@ def get_or_create_test(session, coord):
     if existing is not None:
         return existing
     fields = {field: coord.get(field) for field in TEST_COORD_FIELDS}
-    test = Test(coord_hash=h, **fields)
+    test = Test(coord_hash=h, resolved_deps=coord.get("resolved_deps"), **fields)
     session.add(test)
     session.flush()
     return test

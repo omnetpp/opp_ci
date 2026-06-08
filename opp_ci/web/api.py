@@ -140,6 +140,23 @@ async def submit_run(
             distro_ver = req.distro_version if resolved_distro else None
             flavor_ver = req.flavor_version if resolved_flavor else None
 
+            if req.pins:
+                # Resolve pins server-side so --remote works without the
+                # opp_env catalog on the client. resolve_dependencies validates
+                # against the project's compatible versions when registered;
+                # the setdefault loop still honours an explicit pin for custom
+                # projects (e.g. mm1k) that have no registered dep metadata.
+                # Resolved before get_or_create_test: deps are part of Test
+                # identity, so they must be in the coord that keys the hash.
+                from opp_ci.dependency import resolve_dependencies, parse_pins
+                try:
+                    pin_dict = parse_pins(req.pins)
+                    resolved_deps = dict(resolve_dependencies(req.project, pins=pin_dict) or {})
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+                for name, ver in pin_dict.items():
+                    resolved_deps.setdefault(name, ver)
+
             coord = {
                 "project": req.project,
                 "kind": req.kind,
@@ -156,6 +173,7 @@ async def submit_run(
                 "isolation": req.isolation,
                 "toolchain": req.toolchain,
                 "opp_file": None,
+                "resolved_deps": resolved_deps,
             }
             test = get_or_create_test(session, coord)
             if req.name:
@@ -163,20 +181,6 @@ async def submit_run(
                     set_test_name(session, test, req.name)
                 except ValueError as e:
                     raise HTTPException(status_code=409, detail=str(e))
-            if req.pins:
-                # Resolve pins server-side so --remote works without the
-                # opp_env catalog on the client. resolve_dependencies validates
-                # against the project's compatible versions when registered;
-                # the setdefault loop still honours an explicit pin for custom
-                # projects (e.g. mm1k) that have no registered dep metadata.
-                from opp_ci.dependency import resolve_dependencies, parse_pins
-                try:
-                    pin_dict = parse_pins(req.pins)
-                    resolved_deps = dict(resolve_dependencies(req.project, pins=pin_dict) or {})
-                except ValueError as e:
-                    raise HTTPException(status_code=400, detail=str(e))
-                for name, ver in pin_dict.items():
-                    resolved_deps.setdefault(name, ver)
         run = create_test_run(
             session,
             test_id=test.id,
@@ -1823,6 +1827,7 @@ def _run_to_dict(run):
         "isolation": test.isolation,
         "toolchain": test.toolchain,
         "opp_file": test.opp_file,
+        "resolved_deps": test.resolved_deps,
         "git_ref": run.git_ref,
         "version": run.version,
         "commit_sha": run.commit_sha,
