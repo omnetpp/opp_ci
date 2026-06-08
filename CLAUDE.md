@@ -4,21 +4,11 @@ Guidance for Claude Code when working in this repository.
 
 ## Plans
 
-This project keeps design/implementation plans as Markdown files under
-[`plan/`](plan/), split into two folders by status:
-
-- **`plan/pending/`** — plans not yet implemented (or in progress).
-- **`plan/done/`** — plans that have been implemented to completion.
-
-Rules:
-
-- When you create a **new plan**, save it in `plan/pending/`.
-- When a plan has been **executed to completion**, move it to
-  `plan/done/` (e.g. `git mv plan/pending/<name>.md plan/done/<name>.md`).
-
-Match the style of the existing plans: code-anchored (link to
-`file:line`), with a background section, design-decision table, a
-commit-by-commit migration sequence, verification steps, and risks.
+Plans live under [`plan/`](plan/) (`plan/pending/` → `plan/done/`); the
+folder workflow is in the global `~/.claude/CLAUDE.md`. Match the style
+of the existing plans: code-anchored (link to `file:line`), with a
+background section, design-decision table, a commit-by-commit migration
+sequence, verification steps, and risks.
 
 ## Database schema
 
