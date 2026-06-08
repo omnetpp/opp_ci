@@ -155,6 +155,12 @@ def _build_declared_matrix(versions, dep_name, test_overlays, filters=None):
 
     Declared cells start as "compatible" and are overlaid with the
     aggregated status/verdict of the test runs that match `filters`.
+
+    The overlay is keyed only by (dep_name, dep_version): a run is attributed
+    to a cell by the dependency version it pinned, never by the project
+    version / git ref it ran on. So a run lands in its dep-version column on
+    every project-version row that declares that column. Only the visible
+    filter dimensions (os/compiler/...) narrow it further -- see `filters`.
     """
     filters = filters or {}
     declared = set()
@@ -183,7 +189,7 @@ def _build_declared_matrix(versions, dep_name, test_overlays, filters=None):
             if (pv, dv) not in declared:
                 row_cells[dv] = None
                 continue
-            runs = test_overlays.get((pv, dep_name, dv), [])
+            runs = test_overlays.get((dep_name, dv), [])
             if filters:
                 runs = [r for r in runs if _run_matches_filters(r, filters)]
             # Empty `runs` (declared but untested, or filtered away) yields
@@ -220,18 +226,22 @@ def _run_dict(run):
 
 def _collect_test_overlays(session, project_name, versions):
     """
-    Match finished test runs to (version_label, dep_name, dep_version) triples.
+    Group finished test runs by the dependency version they pinned.
 
-    A run is matched to a version record via run.version, run.git_ref, or
-    run.project.  The dependency version is inferred from the version
-    record's resolved_dependencies — only when a dep resolves to exactly
-    one version (string format or single-element list).
+    A run contributes if its Test.project belongs to this project (by name or
+    by any of the project's version labels) and it pins a dependency to a
+    single version via run.resolved_deps. The run is deliberately NOT tied to
+    a project version / git ref: the matrix narrows the overlay only by the
+    visible filter dimensions (os/compiler/...), never by the hidden
+    version/ref identity. A run therefore lands in its dep-version column on
+    every project-version row that declares that column (see
+    `_build_declared_matrix`).
 
-    Returns: {(version_label, dep_name, dep_version): [run-dict, ...]}
-    where each run-dict is produced by `_run_dict` (carries result_code,
-    verdict, and every `_DIMENSIONS` value).
+    Returns: {(dep_name, dep_version): [run-dict, ...]} where each run-dict is
+    produced by `_run_dict` (carries result_code, verdict, and every
+    `_DIMENSIONS` value).
     """
-    # All keys that might appear as TestRun.project for this project
+    # Every label under which this project's runs may have been recorded.
     project_keys = {project_name}
     for v in versions:
         if v.opp_env_version:
@@ -248,44 +258,17 @@ def _collect_test_overlays(session, project_name, versions):
         )
     ).scalars().all()
 
-    if not runs:
-        return {}
-
-    # key -> (version_label, resolved_dependencies)
-    key_to_version = {}
-    for v in versions:
-        info = (_version_label(v), v.resolved_dependencies)
-        if v.opp_env_version:
-            key_to_version[v.opp_env_version] = info
-        if v.label and v.label != v.opp_env_version:
-            key_to_version[v.label] = info
-
     overlays = defaultdict(list)
     for run in runs:
-        matched = None
-        for candidate in (run.version, run.git_ref, run.project):
-            if candidate and candidate in key_to_version:
-                matched = key_to_version[candidate]
-                break
-        if not matched:
+        # A run can only be placed in a dep-version column if it pinned that
+        # dep to a single version. Runs with no resolved_deps carry no column
+        # coordinate and are skipped.
+        if not run.resolved_deps:
             continue
-
-        vlabel, declared_deps = matched
         rd = _run_dict(run)
-
-        # Prefer the run's own resolved_deps (exact pins from the matrix
-        # deps axis).  Fall back to the version record's declared deps
-        # only when they pin a dep to exactly one version.
-        if run.resolved_deps:
-            for dep_name, dep_ver in run.resolved_deps.items():
-                if isinstance(dep_ver, str):
-                    overlays[(vlabel, dep_name, dep_ver)].append(rd)
-        elif declared_deps:
-            for dep_name, dep_val in declared_deps.items():
-                if isinstance(dep_val, str):
-                    overlays[(vlabel, dep_name, dep_val)].append(rd)
-                elif isinstance(dep_val, list) and len(dep_val) == 1:
-                    overlays[(vlabel, dep_name, dep_val[0])].append(rd)
+        for dep_name, dep_ver in run.resolved_deps.items():
+            if isinstance(dep_ver, str):
+                overlays[(dep_name, dep_ver)].append(rd)
 
     return overlays
 

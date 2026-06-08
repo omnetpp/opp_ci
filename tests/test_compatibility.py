@@ -62,14 +62,21 @@ class CompatibilityMatrixTests(unittest.TestCase):
     def tearDown(self):
         self.s.close()
 
-    def _add_run(self, result_code, *, expectation=None, finalize=True, **coord):
-        """Add a finished run for the (inet-4.5, omnetpp 6.1) cell."""
+    def _add_run(self, result_code, *, expectation=None, finalize=True,
+                 git_ref=None, deps={"omnetpp": DEPVER}, **coord):
+        """Add a finished run for the (inet-4.5, omnetpp 6.1) cell.
+
+        By default the run carries NO version/git_ref -- only Test.project and
+        the dep pin -- mirroring `opp_ci --remote run --project <p> --pin
+        omnetpp=...`. Attribution must come from the pin alone, never the
+        version/ref. `git_ref`/`deps` can be overridden to probe that.
+        """
         test = get_or_create_test(self.s, _coord(**coord))
         if expectation is not None:
             insert_expectation(self.s, test_id=test.id,
                                expected_result_code=expectation)
-        run = create_test_run(self.s, test_id=test.id, version=VLABEL,
-                              resolved_deps={"omnetpp": DEPVER})
+        run = create_test_run(self.s, test_id=test.id,
+                              git_ref=git_ref, resolved_deps=deps)
         run.lifecycle = TestRunLifecycle.finished
         run.result_code = result_code
         run.finished_at = datetime.datetime(2026, 1, 1)
@@ -113,6 +120,21 @@ class CompatibilityMatrixTests(unittest.TestCase):
         cell = self._cell({"os": "Windows"})
         self.assertEqual(cell["status"], "compatible")
         self.assertIsNone(cell["verdict"])
+        self.assertEqual(cell["runs"], [])
+
+    def test_attributed_by_pin_not_by_version_or_ref(self):
+        # The mm1k regression: a run whose git_ref does NOT match the version
+        # label ("inet-4.5") must still overlay -- the overlay filters only on
+        # visible dimensions, never on the hidden version/ref.
+        self._add_run(TestResultCode.PASS, git_ref="some-unrelated-branch",
+                      compiler="gcc")
+        self.assertEqual(self._cell()["status"], "PASS")
+
+    def test_run_without_dep_pin_is_not_overlaid(self):
+        # No resolved_deps -> no column coordinate -> cell stays compatible.
+        self._add_run(TestResultCode.PASS, deps=None, compiler="gcc")
+        cell = self._cell()
+        self.assertEqual(cell["status"], "compatible")
         self.assertEqual(cell["runs"], [])
 
     # ── verdict channel ───────────────────────────────────────────────
