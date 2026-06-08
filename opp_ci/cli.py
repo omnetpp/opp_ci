@@ -930,9 +930,6 @@ def _run_remote(project, kinds, git_ref, *, mode=None,
         click.echo("ERROR: Set OPP_CI_API_TOKEN env var for remote submission.")
         return
 
-    if pins:
-        click.echo("WARNING: --pin is not yet supported over --remote; ignoring.")
-
     base = COORDINATOR_URL.rstrip("/")
     api_url = base if base.endswith("/api") else base + "/api"
 
@@ -950,6 +947,7 @@ def _run_remote(project, kinds, git_ref, *, mode=None,
                 flavor=flavor, flavor_version=flavor_version,
                 arch=arch,
                 compiler=compiler, compiler_version=compiler_version,
+                pins=list(pins) if pins else None,
             )
             click.echo(f"Submitted run #{result['id']}: {project} / {kind} → {result['lifecycle']}")
         except Exception as e:

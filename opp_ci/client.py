@@ -88,8 +88,13 @@ class OppCiClient:
                    flavor=None, flavor_version=None,
                    arch=None,
                    compiler=None, compiler_version=None,
-                   isolation=None, toolchain=None):
-        """Submit a single test run. Returns {"id": ..., "lifecycle": "queued"}."""
+                   isolation=None, toolchain=None, pins=None):
+        """Submit a single test run. Returns {"id": ..., "lifecycle": "queued"}.
+
+        ``pins`` is a list of ``"dep=version"`` strings (e.g.
+        ``["omnetpp=6.4.0"]``); the coordinator resolves them into the run's
+        ``resolved_deps`` (required for ``isolation=podman`` image selection).
+        """
         payload = {"project": project, "kind": kind}
         for key, value in (
             ("mode", mode), ("git_ref", git_ref),
@@ -102,6 +107,8 @@ class OppCiClient:
         ):
             if value:
                 payload[key] = value
+        if pins:
+            payload["pins"] = list(pins)
         return self._post("/runs", payload)
 
     def submit_matrix(self, matrix_name):

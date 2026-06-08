@@ -72,6 +72,7 @@ class SubmitRunRequest(BaseModel):
     compiler_version: str | None = None
     isolation: str | None = None    # "none" | "podman"
     toolchain: str | None = None    # "none" | "nix"
+    pins: list[str] | None = None   # ["omnetpp=6.4.0", ...] → sets the run's resolved_deps
 
 class SubmitMatrixRequest(BaseModel):
     matrix_name: str
@@ -113,6 +114,7 @@ async def submit_run(
     """
     session = SessionLocal()
     try:
+        resolved_deps = None
         if req.test_name:
             # Run an existing named test by name.
             test = get_test_by_name(session, req.test_name)
@@ -161,11 +163,26 @@ async def submit_run(
                     set_test_name(session, test, req.name)
                 except ValueError as e:
                     raise HTTPException(status_code=409, detail=str(e))
+            if req.pins:
+                # Resolve pins server-side so --remote works without the
+                # opp_env catalog on the client. resolve_dependencies validates
+                # against the project's compatible versions when registered;
+                # the setdefault loop still honours an explicit pin for custom
+                # projects (e.g. mm1k) that have no registered dep metadata.
+                from opp_ci.dependency import resolve_dependencies, parse_pins
+                try:
+                    pin_dict = parse_pins(req.pins)
+                    resolved_deps = dict(resolve_dependencies(req.project, pins=pin_dict) or {})
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+                for name, ver in pin_dict.items():
+                    resolved_deps.setdefault(name, ver)
         run = create_test_run(
             session,
             test_id=test.id,
             git_ref=req.git_ref,
             version=req.version,
+            resolved_deps=resolved_deps,
         )
         session.commit()
         _logger.info("Run #%d submitted by %s", run.id, identity.get("name"))
