@@ -13,8 +13,7 @@ from opp_ci.db.models import (
 )
 from opp_ci.executor import install_project, run_test
 from opp_ci.persistence import (
-    CannotDeleteRunningRun, capture_system_snapshot, create_matrix_run,
-    create_test_run, delete_matrix_run, delete_test_run, enqueue_job,
+    capture_system_snapshot, create_matrix_run, create_test_run, enqueue_job,
     finalize_verdict_for_run, get_or_create_test, insert_expectation,
     status_filter,
 )
@@ -306,42 +305,6 @@ def _show_results_remote(project, git_ref, kind, status, limit):
                        f"{(r.get('kind') or '-'):<14} {_row_status(r):<10} "
                        f"{_fmt_duration(r.get('duration_seconds')):<10} "
                        f"{_fmt_started(r.get('started_at'))}")
-    _remote(op)
-
-
-def _delete_run_remote(run_id, yes):
-    def op(c):
-        if not yes:
-            click.confirm(f"Delete run #{run_id}?", abort=True)
-        c.delete_run(run_id)
-        click.echo(f"Run #{run_id} deleted.")
-    _remote(op)
-
-
-def _delete_runs_remote(project, git_ref, kind, status, before_date, yes):
-    if git_ref:
-        click.echo("WARNING: --ref is not supported over --remote; ignoring.")
-    if not any([project, kind, status, before_date]):
-        click.echo("ERROR: At least one filter is required "
-                   "(--project, --kind, --status, --before).", err=True)
-        raise SystemExit(1)
-    if not yes:
-        click.confirm("Delete all matching runs on the coordinator?", abort=True)
-
-    def op(c):
-        result = c.delete_runs(project=project, kind=kind, status=status,
-                               before=before_date, confirm=True)
-        click.echo(f"Deleted {result.get('deleted', 0)} run(s).")
-    _remote(op)
-
-
-def _delete_matrix_run_remote(matrix_run_id, yes):
-    def op(c):
-        if not yes:
-            click.confirm(f"Delete matrix run #{matrix_run_id} and its child runs?",
-                          abort=True)
-        c.delete_matrix_run(matrix_run_id)
-        click.echo(f"Matrix run #{matrix_run_id} deleted.")
     _remote(op)
 
 
@@ -1212,13 +1175,14 @@ def list_runs(project, git_ref, kind, status, limit):
             click.echo("No runs found.")
             return
 
-        click.echo(f"{'ID':<6} {'Project':<20} {'Ref':<16} {'Kind':<14} {'Status':<10} {'Duration':<10} {'Started'}")
-        click.echo("-" * 106)
+        click.echo(f"{'ID':<6} {'Project':<20} {'Ref':<16} {'Kind':<14} {'Status':<10} {'Verdict':<11} {'Duration':<10} {'Started'}")
+        click.echo("-" * 118)
         for run in runs:
             duration = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
             started = run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-"
             ref = run.git_ref or "-"
-            click.echo(f"{run.id:<6} {run.project:<20} {ref:<16} {run.kind:<14} {run.effective_status:<10} {duration:<10} {started}")
+            verdict = run.recorded_verdict or "-"
+            click.echo(f"{run.id:<6} {run.project:<20} {ref:<16} {run.kind:<14} {run.effective_status:<10} {verdict:<11} {duration:<10} {started}")
     finally:
         session.close()
 
@@ -1264,130 +1228,6 @@ def show_run(run_id):
         session.close()
 
 
-@main.command("delete-run")
-@click.argument("run_id", type=int)
-@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
-@remoteable(_delete_run_remote)
-def delete_run(run_id, yes):
-    """Delete a single test run by ID."""
-    session = SessionLocal()
-    try:
-        run = session.execute(
-            select(TestRun).where(TestRun.id == run_id)
-        ).scalar_one_or_none()
-        if run is None:
-            click.echo(f"Run #{run_id} not found.")
-            return
-        if not yes:
-            click.confirm(f"Delete run #{run.id} ({run.project} / {run.kind} / {run.effective_status})?", abort=True)
-        try:
-            delete_test_run(session, run_id)
-        except CannotDeleteRunningRun as e:
-            raise click.ClickException(str(e))
-        session.commit()
-        click.echo(f"Run #{run_id} deleted.")
-    finally:
-        session.close()
-
-
-@main.command("delete-runs")
-@click.option("--project", default=None, help="Filter by project")
-@click.option("--ref", "git_ref", default=None, help="Filter by git ref")
-@click.option("--kind", default=None, help="Filter by test kind")
-@click.option("--status", default=None, help="Filter by status (PASS/FAIL/ERROR/running/queued)")
-@click.option("--before", "before_date", default=None, help="Delete runs started before this date (YYYY-MM-DD)")
-@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
-@remoteable(_delete_runs_remote)
-def delete_runs(project, git_ref, kind, status, before_date, yes):
-    """Delete multiple test runs matching the given filters."""
-    if not any([project, git_ref, kind, status, before_date]):
-        click.echo("ERROR: At least one filter is required (--project, --ref, --kind, --status, --before).")
-        return
-
-    session = SessionLocal()
-    try:
-        query = select(TestRun).join(Test, TestRun.test_id == Test.id)
-        if project:
-            query = query.where(Test.project == project)
-        if git_ref:
-            query = query.where(TestRun.git_ref == git_ref)
-        if kind:
-            query = query.where(Test.kind == kind)
-        if status:
-            try:
-                query = status_filter(query, status)
-            except ValueError as e:
-                raise click.ClickException(str(e))
-        if before_date:
-            cutoff = datetime.datetime.strptime(before_date, "%Y-%m-%d")
-            query = query.where(TestRun.started_at < cutoff)
-
-        runs = session.execute(query).scalars().all()
-        if not runs:
-            click.echo("No matching runs found.")
-            return
-
-        click.echo(f"Found {len(runs)} run(s) to delete:")
-        for run in runs[:10]:
-            started = run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-"
-            click.echo(f"  #{run.id} {run.project} / {run.kind} / {run.effective_status} ({started})")
-        if len(runs) > 10:
-            click.echo(f"  ... and {len(runs) - 10} more")
-
-        if not yes:
-            click.confirm(f"Delete {len(runs)} run(s)?", abort=True)
-
-        deleted = skipped = 0
-        for run in runs:
-            try:
-                delete_test_run(session, run.id)
-                deleted += 1
-            except CannotDeleteRunningRun:
-                skipped += 1  # never delete a run that's still executing
-        session.commit()
-        msg = f"Deleted {deleted} run(s)."
-        if skipped:
-            msg += f" Skipped {skipped} still-running run(s)."
-        click.echo(msg)
-    finally:
-        session.close()
-
-
-@main.command("delete-matrix-run")
-@click.argument("matrix_run_id", type=int)
-@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
-@remoteable(_delete_matrix_run_remote)
-def delete_matrix_run_cmd(matrix_run_id, yes):
-    """Delete a matrix run and cascade to its child runs.
-
-    Child runs shared with another matrix run via a cache-hit cell are
-    detached rather than deleted. Refused if any child run is still running.
-    """
-    session = SessionLocal()
-    try:
-        mr = session.get(TestMatrixRun, matrix_run_id)
-        if mr is None:
-            click.echo(f"Matrix run #{matrix_run_id} not found.")
-            return
-        if not yes:
-            click.confirm(
-                f"Delete matrix run #{matrix_run_id} and its child runs?",
-                abort=True,
-            )
-        try:
-            result = delete_matrix_run(session, matrix_run_id)
-        except CannotDeleteRunningRun as e:
-            raise click.ClickException(str(e))
-        session.commit()
-        click.echo(
-            f"Matrix run #{matrix_run_id} deleted "
-            f"({result['deleted_runs']} run(s) deleted, "
-            f"{result['detached_runs']} detached)."
-        )
-    finally:
-        session.close()
-
-
 @main.command("show-results")
 @click.option("--project", default=None, help="Filter by project")
 @click.option("--ref", "git_ref", default=None, help="Filter by git ref")
@@ -1422,12 +1262,13 @@ def show_results(project, git_ref, kind, status, limit):
             click.echo("No results found.")
             return
 
-        click.echo(f"{'ID':<6} {'Project':<20} {'Kind':<14} {'Status':<10} {'Duration':<10} {'Started'}")
-        click.echo("-" * 90)
+        click.echo(f"{'ID':<6} {'Project':<20} {'Kind':<14} {'Status':<10} {'Verdict':<11} {'Duration':<10} {'Started'}")
+        click.echo("-" * 102)
         for run in runs:
             duration = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "-"
             started = run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-"
-            click.echo(f"{run.id:<6} {run.project:<20} {run.kind:<14} {run.effective_status:<10} {duration:<10} {started}")
+            verdict = run.recorded_verdict or "-"
+            click.echo(f"{run.id:<6} {run.project:<20} {run.kind:<14} {run.effective_status:<10} {verdict:<11} {duration:<10} {started}")
     finally:
         session.close()
 

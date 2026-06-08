@@ -147,11 +147,6 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-success btn-sm">Run this matrix</button>
     </form>
-    <form method="post" action="/test-matrices/{{ matrix.id }}/delete" class="inline-form">
-
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete matrix {{ matrix.name }}?')">Delete</button>
-    </form>
     <a href="/test-matrices" class="btn btn-secondary btn-sm">&larr; Back to matrices</a>
 </div>
 {% endblock %}

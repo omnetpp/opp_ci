@@ -129,9 +129,9 @@ class RestEndpointTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertTrue(any(v["label"] == "v1.0" for v in r.json()))
 
-    # ── Runs lifecycle (submit → list → get → delete) ────────────────
+    # ── Runs lifecycle (submit → list → get) ─────────────────────────
 
-    def test_run_submit_get_delete(self):
+    def test_run_submit_and_get(self):
         r = self.client.post("/api/runs",
                              json={"project": "mm1k", "kind": "smoke"},
                              headers=self._h(self.submitter))
@@ -141,18 +141,6 @@ class RestEndpointTests(unittest.TestCase):
         r = self.client.get(f"/api/runs/{run_id}", headers=self._h(self.readonly))
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["project"], "mm1k")
-
-        # readonly cannot delete
-        r = self.client.delete(f"/api/runs/{run_id}", headers=self._h(self.readonly))
-        self.assertEqual(r.status_code, 403)
-
-        # admin can
-        r = self.client.delete(f"/api/runs/{run_id}", headers=self._h(self.admin))
-        self.assertEqual(r.status_code, 204)
-
-        # gone now
-        r = self.client.get(f"/api/runs/{run_id}", headers=self._h(self.readonly))
-        self.assertEqual(r.status_code, 404)
 
     def test_run_status_filters(self):
         # POST /runs response now keys the lifecycle as "lifecycle", not "status".
@@ -186,27 +174,6 @@ class RestEndpointTests(unittest.TestCase):
         for qs in ("status=bogus", "lifecycle=bogus", "result_code=bogus"):
             r = self.client.get(f"/api/runs?{qs}", headers=self._h(self.readonly))
             self.assertEqual(r.status_code, 400, f"{qs}: {r.text}")
-
-    def test_bulk_delete_guards(self):
-        # seed two runs
-        for _ in range(2):
-            self.client.post("/api/runs",
-                             json={"project": "mm1k", "kind": "build"},
-                             headers=self._h(self.submitter))
-
-        # missing confirm → 400
-        r = self.client.delete("/api/runs?project=mm1k", headers=self._h(self.admin))
-        self.assertEqual(r.status_code, 400)
-
-        # confirm but no filter and no all → 400
-        r = self.client.delete("/api/runs?confirm=true", headers=self._h(self.admin))
-        self.assertEqual(r.status_code, 400)
-
-        # filtered + confirm → deletes
-        r = self.client.delete("/api/runs?kind=build&confirm=true",
-                              headers=self._h(self.admin))
-        self.assertEqual(r.status_code, 200, r.text)
-        self.assertGreaterEqual(r.json()["deleted"], 2)
 
     # ── Matrix create (config dict, Option A) ────────────────────────
 
@@ -369,12 +336,7 @@ class ClientMethodTests(unittest.TestCase):
             self.assertEqual(kwargs["json"]["github"], "o/r")
             self.assertEqual(kwargs["json"]["deps"], ["omnetpp"])
 
-    def test_delete_and_patch_verbs(self):
-        with self._patch(status=204, content=b"") as req:
-            self.assertIsNone(self.c.delete_run(7))
-            self.assertEqual(req.call_args[0][0], "DELETE")
-            self.assertEqual(req.call_args[0][1], "https://ci.example/api/runs/7")
-
+    def test_patch_verb(self):
         with self._patch(json_body={"username": "alice"}) as req:
             self.c.update_user("alice", enabled=False, role="submitter")
             self.assertEqual(req.call_args[0][0], "PATCH")
@@ -382,14 +344,6 @@ class ClientMethodTests(unittest.TestCase):
                              "https://ci.example/api/users/alice")
             self.assertEqual(req.call_args[1]["json"],
                              {"enabled": False, "role": "submitter"})
-
-    def test_bulk_delete_passes_confirm(self):
-        with self._patch(json_body={"deleted": 3}) as req:
-            out = self.c.delete_runs(project="mm1k", confirm=True)
-            self.assertEqual(out["deleted"], 3)
-            params = req.call_args[1]["params"]
-            self.assertEqual(params["project"], "mm1k")
-            self.assertEqual(params["confirm"], "true")
 
     def test_error_surface(self):
         from opp_ci.client import OppCiClientError
@@ -477,14 +431,6 @@ class CliRemoteHandlerTests(unittest.TestCase):
         self.assertIn("mm1k", res.output)
         self.assertIn("PASS", res.output)
         fake.list_runs.assert_called_once()
-
-    def test_delete_run_remote_confirm_skip(self):
-        fake = mock.Mock()
-        fake.delete_run.return_value = None
-        res = self._run(fake, ["delete-run", "9", "--yes"])
-        self.assertEqual(res.exit_code, 0, res.output)
-        fake.delete_run.assert_called_once_with(9)
-        self.assertIn("deleted", res.output)
 
     def test_create_matrix_remote_composes_config(self):
         fake = mock.Mock()

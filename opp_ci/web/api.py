@@ -40,8 +40,7 @@ from opp_ci.db.models import (
     TestVerdictKind, User, Version, Worker,
 )
 from opp_ci.persistence import (
-    CannotDeleteRunningRun, create_matrix_from_axes, create_matrix_run,
-    create_test_run, delete_matrix_run, delete_test_run, enqueue_job,
+    create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
     finalize_verdict_for_run, get_current_expectation, get_matrix_by_name,
     get_or_create_test, get_test_by_name, insert_expectation, job_to_coord,
     set_test_name, status_filter,
@@ -1345,133 +1344,6 @@ async def ack_notes(
     """
     _logger.info("Notes ack from %s/%s: %d sha(s)", owner, repo, len(req.shas))
     return None
-
-
-# ── Run deletion ───────────────────────────────────────────────────────
-
-
-@router.delete("/runs/{run_id}", status_code=204)
-async def delete_run(
-    run_id: int,
-    _identity: dict = Depends(require_role("submitter")),
-):
-    """Delete a single test run by id (submitter). 204 on success, 404 if
-    missing, 409 if the run is still running."""
-    session = SessionLocal()
-    try:
-        try:
-            deleted = delete_test_run(session, run_id)
-        except CannotDeleteRunningRun as e:
-            raise HTTPException(status_code=409, detail=str(e))
-        if deleted is None:
-            raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
-        session.commit()
-        return None
-    finally:
-        session.close()
-
-
-@router.delete("/matrix-runs/{matrix_run_id}", status_code=204)
-async def delete_matrix_run_endpoint(
-    matrix_run_id: int,
-    _identity: dict = Depends(require_role("submitter")),
-):
-    """Delete a matrix run and cascade to its child runs (submitter).
-
-    204 on success, 404 if missing, 409 if any child run is still running.
-    Child runs shared with another matrix run via a cache-hit cell are
-    detached rather than deleted.
-    """
-    session = SessionLocal()
-    try:
-        try:
-            result = delete_matrix_run(session, matrix_run_id)
-        except CannotDeleteRunningRun as e:
-            raise HTTPException(status_code=409, detail=str(e))
-        if result is None:
-            raise HTTPException(
-                status_code=404, detail=f"Matrix run #{matrix_run_id} not found"
-            )
-        session.commit()
-        _logger.info(
-            "Deleted matrix run #%d (%d run(s) deleted, %d detached) by %s",
-            matrix_run_id, result["deleted_runs"], result["detached_runs"],
-            _identity.get("name"),
-        )
-        return None
-    finally:
-        session.close()
-
-
-@router.delete("/runs")
-async def delete_runs(
-    project: str | None = None,
-    kind: str | None = None,
-    status: str | None = None,
-    before: str | None = None,
-    all: bool = False,
-    confirm: bool = False,
-    _identity: dict = Depends(require_role("submitter")),
-):
-    """Bulk-delete runs matching the given filters (submitter).
-
-    At least one filter (project/kind/status/before) is required unless
-    `all=true` is passed — the unfiltered form must be deliberate so a
-    typo can't wipe the whole table. `confirm=true` is also required (the
-    CLI prompts the operator, then sends it) so a script that forgets to
-    confirm 400s rather than silently nuking data. Returns
-    `{"deleted": <n>}`.
-    """
-    if not confirm:
-        raise HTTPException(
-            status_code=400,
-            detail="Bulk delete requires confirm=true.",
-        )
-    has_filter = any([project, kind, status, before])
-    if not has_filter and not all:
-        raise HTTPException(
-            status_code=400,
-            detail="Refusing to delete all runs without a filter; "
-                   "pass at least one of project/kind/status/before, "
-                   "or all=true to delete everything.",
-        )
-
-    session = SessionLocal()
-    try:
-        query = select(TestRun).join(Test, TestRun.test_id == Test.id)
-        if project:
-            query = query.where(Test.project == project)
-        if kind:
-            query = query.where(Test.kind == kind)
-        if status:
-            try:
-                query = status_filter(query, status)
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
-        if before:
-            try:
-                cutoff = datetime.datetime.strptime(before, "%Y-%m-%d")
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid before date (want YYYY-MM-DD): {before!r}",
-                )
-            query = query.where(TestRun.started_at < cutoff)
-
-        runs = session.execute(query).scalars().all()
-        deleted = skipped = 0
-        for run in runs:
-            try:
-                delete_test_run(session, run.id)
-                deleted += 1
-            except CannotDeleteRunningRun:
-                skipped += 1  # never delete a run that's still executing
-        session.commit()
-        _logger.info("Bulk-deleted %d run(s) (%d running skipped) by %s",
-                     deleted, skipped, _identity.get("name"))
-        return {"deleted": deleted, "skipped_running": skipped}
-    finally:
-        session.close()
 
 
 # ── Projects ───────────────────────────────────────────────────────────

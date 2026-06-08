@@ -132,35 +132,6 @@ class OppCiClient:
         params.update({key: value for key, value in filters.items() if value})
         return self._get("/runs", params=params)
 
-    def delete_run(self, run_id):
-        """Delete a single run by id (submitter). Returns None on success."""
-        return self._delete(f"/runs/{run_id}")
-
-    def delete_matrix_run(self, matrix_run_id):
-        """Delete a matrix run and its child runs (submitter). Returns None
-        on success. The coordinator refuses (409) if a child is running."""
-        return self._delete(f"/matrix-runs/{matrix_run_id}")
-
-    def delete_runs(self, *, project=None, kind=None, status=None,
-                    before=None, confirm=False):
-        """Bulk-delete runs by filter (submitter). Returns
-        {"deleted": <n>, "skipped_running": <n>}.
-
-        At least one filter is required server-side unless the caller
-        opts into `?all=true` (not exposed here). `confirm` must be True
-        — the CLI prompts before issuing the delete.
-        """
-        params = {}
-        for key, value in (
-            ("project", project), ("kind", kind),
-            ("status", status), ("before", before),
-        ):
-            if value:
-                params[key] = value
-        if confirm:
-            params["confirm"] = "true"
-        return self._delete("/runs", params=params)
-
     # ── Projects / versions ─────────────────────────────────────────────
 
     def list_projects(self):

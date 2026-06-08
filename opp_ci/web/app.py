@@ -3,7 +3,6 @@ import os
 import re
 from html import escape as html_escape
 from pathlib import Path
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, FastAPI, Form, Request, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -22,8 +21,7 @@ from opp_ci.db.models import (
     TestVerdict, TestVerdictKind, User, Version, Worker,
 )
 from opp_ci.persistence import (
-    CannotDeleteRunningRun, create_matrix_from_axes, create_matrix_run,
-    create_test_run, delete_matrix_run, delete_test_run, enqueue_job,
+    create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
     get_current_expectation, get_matrix_by_name, get_or_create_test,
     get_test_by_name, insert_expectation, set_matrix_name, set_test_name,
     status_filter,
@@ -798,25 +796,6 @@ def run_cancel(run_id: int, current_user: User = Depends(require_user("submitter
         session.close()
 
 
-@web_router.post("/test-runs/{run_id}/delete", dependencies=[Depends(require_csrf)])
-def run_delete(run_id: int, current_user: User = Depends(require_user("submitter"))):
-    """Delete a run (submitter). Running runs are refused — let them finish
-    first. On success the run is gone, so redirect to the list."""
-    session = SessionLocal()
-    try:
-        try:
-            delete_test_run(session, run_id)
-        except CannotDeleteRunningRun as e:
-            return RedirectResponse(
-                url=f"/test-runs/{run_id}?message={quote(str(e))}&message_type=error",
-                status_code=303,
-            )
-        session.commit()
-        return RedirectResponse(url="/test-runs", status_code=303)
-    finally:
-        session.close()
-
-
 @web_router.get("/test-runs/{run_id}", response_class=HTMLResponse)
 def run_detail(request: Request, run_id: int, current_user: User = Depends(require_user()),
                message: str = Query(default=None), message_type: str = Query(default=None)):
@@ -1350,21 +1329,6 @@ def matrix_create(
         session.close()
 
 
-@web_router.post("/test-matrices/{matrix_id}/delete", dependencies=[Depends(require_csrf)])
-def matrix_delete(matrix_id: int, current_user: User = Depends(require_user("submitter"))):
-    session = SessionLocal()
-    try:
-        matrix = session.execute(
-            select(TestMatrix).where(TestMatrix.id == matrix_id)
-        ).scalar_one_or_none()
-        if matrix:
-            session.delete(matrix)
-            session.commit()
-        return RedirectResponse(url="/test-matrices", status_code=303)
-    finally:
-        session.close()
-
-
 @web_router.post("/test-matrices/{matrix_id}/rename", dependencies=[Depends(require_csrf)])
 def matrix_rename(matrix_id: int,
                   current_user: User = Depends(require_user("submitter")),
@@ -1572,35 +1536,11 @@ def matrix_run_cancel(matrix_run_id: int,
         session.close()
 
 
-@web_router.post("/test-matrix-runs/{matrix_run_id}/delete",
-                 dependencies=[Depends(require_csrf)])
-def matrix_run_delete(matrix_run_id: int,
-                      current_user: User = Depends(require_user("submitter"))):
-    """Delete a matrix run and cascade to its child runs (submitter). If any
-    child is still running the whole delete is refused; redirect back with an
-    error. On success the run is gone, so redirect to the list."""
-    session = SessionLocal()
-    try:
-        try:
-            delete_matrix_run(session, matrix_run_id)
-        except CannotDeleteRunningRun as e:
-            return RedirectResponse(
-                url=f"/test-matrix-runs/{matrix_run_id}"
-                    f"?message={quote(str(e))}&message_type=error",
-                status_code=303,
-            )
-        session.commit()
-        return RedirectResponse(url="/test-matrix-runs", status_code=303)
-    finally:
-        session.close()
-
-
 @web_router.get("/test-matrix-runs/{matrix_run_id}", response_class=HTMLResponse)
 def matrix_run_detail(
     request: Request, matrix_run_id: int,
     current_user: User = Depends(require_user()),
     unexpected_only: int = Query(default=0),
-    message: str = Query(default=None), message_type: str = Query(default=None),
 ):
     """Rollup header + per-cell verdict table for one TestMatrixRun."""
     session = SessionLocal()
@@ -1648,8 +1588,6 @@ def matrix_run_detail(
             "matrix": matrix,
             "cells": cells,
             "unexpected_only": bool(unexpected_only),
-            "message": message,
-            "message_type": message_type,
             **_template_globals(request, current_user),
         })
     finally:

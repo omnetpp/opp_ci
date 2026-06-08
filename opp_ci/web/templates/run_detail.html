@@ -47,6 +47,7 @@
         <tr><th>Worker</th><td>{% if run.worker %}{{ run.worker.name }}{% elif run.worker_id %}#{{ run.worker_id }}{% else %}-{% endif %}</td></tr>
         <tr><th>Lifecycle</th><td>{{ run.lifecycle.value }}</td></tr>
         <tr><th>Result</th><td>{{ run.result_code.value if run.result_code else "-" }}</td></tr>
+        <tr><th>Verdict</th><td>{% if run.recorded_verdict %}<span class="badge badge-{{ run.recorded_verdict }}">{{ run.recorded_verdict }}</span>{% else %}-{% endif %}</td></tr>
         <tr><th>Duration</th><td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td></tr>
         <tr><th>Started</th><td>{{ run.started_at.strftime("%Y-%m-%d %H:%M:%S") if run.started_at else "-" }}</td></tr>
         <tr><th>Finished</th><td>{{ run.finished_at.strftime("%Y-%m-%d %H:%M:%S") if run.finished_at else "-" }}</td></tr>
@@ -118,12 +119,6 @@
     <form method="post" action="/test-runs/{{ run.id }}/cancel" class="inline-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Cancel this run?')">Cancel</button>
-    </form>
-    {% endif %}
-    {% if current_user and current_user.role in ("submitter", "admin") and run.lifecycle.value != "running" %}
-    <form method="post" action="/test-runs/{{ run.id }}/delete" class="inline-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this run? This cannot be undone.')">Delete</button>
     </form>
     {% endif %}
     <a href="/test-runs" class="btn btn-secondary btn-sm">&larr; Back to runs</a>
