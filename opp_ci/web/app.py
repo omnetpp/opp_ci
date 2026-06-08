@@ -340,7 +340,7 @@ def results_page(
     run_ids: str = Query(default=None),
     view: str = Query(default="summary"),
     grouping: str = Query(default="any"),
-    hide_obsolete: bool = Query(default=False),
+    show_obsolete: bool = Query(default=False),
     limit: int = Query(default=200),
 ):
     from opp_ci.web.rollup import rollup_runs, visible_extra_dims
@@ -386,10 +386,10 @@ def results_page(
                 # Forgiving on URL params: a bad ?status= just shows no rows
                 # and the user corrects the filter.
                 query = query.where(false())
-        if hide_obsolete:
-            # Drop runs overridden by a newer finished run at the same
-            # (test_id, commit_sha). is_not_distinct_from makes NULL
-            # commit_shas (legacy rows) compare equal to each other.
+        if not show_obsolete:
+            # By default, drop runs overridden by a newer finished run at
+            # the same (test_id, commit_sha). is_not_distinct_from makes
+            # NULL commit_shas (legacy rows) compare equal to each other.
             newer = aliased(TestRun)
             query = query.where(~exists().where(and_(
                 newer.test_id == TestRun.test_id,
@@ -409,7 +409,7 @@ def results_page(
             "extra_dims": extra_dims,
             "view": view,
             "grouping": grouping,
-            "hide_obsolete": hide_obsolete,
+            "show_obsolete": show_obsolete,
             "filter_project": project or "",
             "filter_kind": kind or "",
             "filter_mode": mode or "",

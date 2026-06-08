@@ -32,8 +32,8 @@
         <option value="cartesian" {{ "selected" if grouping == "cartesian" }}>●</option>
         <option value="none" {{ "selected" if grouping == "none" }}>-</option>
     </select>
-    <label style="font-size:0.85rem;" title="Hide results overridden by a newer run at the same commit">
-        <input type="checkbox" name="hide_obsolete" value="1" {{ "checked" if hide_obsolete }} onchange="this.form.submit()"> Hide obsolete
+    <label style="font-size:0.85rem;" title="Include results overridden by a newer run at the same commit (hidden by default)">
+        <input type="checkbox" name="show_obsolete" value="1" {{ "checked" if show_obsolete }} onchange="this.form.submit()"> Show obsolete
     </label>
 </form>
 
