@@ -1070,6 +1070,7 @@ def matrices_list(
     current_user: User = Depends(require_user()),
     name: str = Query(default=None),
     project: str = Query(default=None),
+    include_anonymous: bool = Query(default=False),
     error: str = Query(default=None),
 ):
     session = SessionLocal()
@@ -1103,7 +1104,11 @@ def matrices_list(
                 v for m in all_matrices for v in (m.config.get(ckey) or [])
             })
 
-        query = select(TestMatrix).order_by(TestMatrix.id)
+        # Named matrices only by default; the anonymous ad-hoc matrices are
+        # pulled in with ?include_anonymous=1 (mirrors the Tests catalog).
+        query = select(TestMatrix).order_by(TestMatrix.name.is_(None), TestMatrix.id)
+        if not include_anonymous:
+            query = query.where(TestMatrix.name.isnot(None))
         if name:
             query = query.where(TestMatrix.name.ilike(f"%{name}%"))
         if project:
@@ -1129,6 +1134,7 @@ def matrices_list(
             "options": options,
             "axes": [(p, label) for p, _, label in axes],
             "filters": {"name": name or "", "project": project or "", **axis_filters},
+            "include_anonymous": include_anonymous,
             "error": error,
             **_template_globals(request, current_user),
         })

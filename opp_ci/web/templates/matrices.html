@@ -16,10 +16,14 @@
         {{ f.txt(filters, "name", "Name", "contains…") }}
         {{ f.sel(filters, "project", "Project", options.project) }}
         {% for param, label in axes %}{{ f.sel(filters, param, label, options[param]) }}{% endfor %}
+        <label class="filter-field checkbox">
+            <input type="checkbox" name="include_anonymous" value="true" {{ "checked" if include_anonymous }}>
+            include anonymous
+        </label>
     </div>
     <div class="filter-actions">
         <button type="submit">Filter</button>
-        {% if filters.values()|select|list %}<a href="/test-matrices" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+        {% if filters.values()|select|list or include_anonymous %}<a href="/test-matrices" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
     </div>
 </form>
 
@@ -67,6 +71,6 @@ document.querySelectorAll("tr[data-href]").forEach(row => {
 });
 </script>
 {% else %}
-<p class="empty">No matrices match. <a href="/test-matrices/new">Create one</a> or use <code>opp_ci seed-matrices</code>.</p>
+<p class="empty">No matrices match.{% if not include_anonymous %} Anonymous ad-hoc matrices are hidden — tick <em>include anonymous</em> to show them.{% endif %} <a href="/test-matrices/new">Create one</a> or use <code>opp_ci seed-matrices</code>.</p>
 {% endif %}
 {% endblock %}
