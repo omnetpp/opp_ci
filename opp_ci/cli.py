@@ -706,8 +706,10 @@ def _drop_everything(engine):
 
 
 @main.command("run")
-@click.option("--project", required=True, help="opp_env project name (e.g. inet-4.5)")
-@click.option("--kind", "kinds", required=True, help="Kind(s) of test, comma-separated (e.g. smoke,fingerprint)")
+@click.option("--project", default=None, help="opp_env project name (e.g. inet-4.5)")
+@click.option("--kind", "kinds", default=None, help="Kind(s) of test, comma-separated (e.g. smoke,fingerprint)")
+@click.option("--name", default=None, help="Label this test so it can be re-run by name later (single --kind only)")
+@click.option("--test", "test_name", default=None, help="Run an existing named test (skips the coordinate flags)")
 @click.option("--ref", "git_ref", default=None, help="Git branch, tag, or commit to test (e.g. master, topic/my-feature)")
 @click.option("--mode", default=None, type=click.Choice(["debug", "release"]), help="Build mode (debug or release)")
 @click.option("--isolation", default="none", type=click.Choice(["none", "podman"]), help="Run on the host (none) or inside a Podman container")
@@ -725,33 +727,74 @@ def _drop_everything(engine):
 @click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
 @click.pass_context
-def run_cmd(ctx, project, kinds, git_ref, mode, isolation, toolchain,
+def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, toolchain,
             os_name, os_version, distro, distro_version, flavor, flavor_version,
             arch, compiler, compiler_version, pins, skip_install):
-    """Run test(s) for a project and store the results."""
+    """Run test(s) for a project and store the results.
+
+    Either give a coordinate (--project/--kind …) or run a previously
+    named test with --test NAME. The two modes are mutually exclusive.
+    """
     from opp_ci import platforms
     from opp_ci.scheduler import _parse_name_version
+    from opp_ci.persistence import get_test_by_name
 
-    # Allow combined 'Ubuntu 24.04' / 'Kubuntu 24.04' shorthand on --distro/--flavor.
-    if distro and not distro_version:
-        distro, distro_version = _parse_name_version(distro)
-    if flavor and not flavor_version:
-        flavor, flavor_version = _parse_name_version(flavor)
-    try:
-        resolved_os, resolved_distro, resolved_flavor = platforms.resolve_platform(
-            os=os_name, distro=distro, flavor=flavor,
-        )
-    except ValueError as e:
-        raise click.ClickException(str(e))
-    os_name = platforms._os_canonical(resolved_os) if resolved_os else None
-    distro = resolved_distro
-    flavor = resolved_flavor
-    if os_name == "Linux":
-        os_version = None
-    if not resolved_distro:
-        distro_version = None
-    if not resolved_flavor:
-        flavor_version = None
+    if test_name:
+        if project or kinds or name:
+            raise click.ClickException(
+                "Pick exactly one of: --test NAME, or --project/--kind coordinate flags."
+            )
+        if ctx.obj.get("remote"):
+            raise click.ClickException("--test (run by name) is not supported with --remote.")
+        # Unpack the named test's coordinate into the run variables; the
+        # stored fields are already canonical, so skip resolve_platform.
+        Base.metadata.create_all(engine)
+        _s = SessionLocal()
+        try:
+            named = get_test_by_name(_s, test_name)
+            if named is None:
+                raise click.ClickException(f"Test {test_name!r} not found.")
+            project = named.project
+            kinds = named.kind
+            mode = named.mode
+            os_name = named.os
+            os_version = named.os_version
+            distro = named.distro
+            distro_version = named.distro_version
+            flavor = named.flavor
+            flavor_version = named.flavor_version
+            arch = named.arch
+            compiler = named.compiler
+            compiler_version = named.compiler_version
+            isolation = named.isolation or "none"
+            toolchain = named.toolchain or "none"
+        finally:
+            _s.close()
+    else:
+        if not project or not kinds:
+            raise click.ClickException("--project and --kind are required (or use --test NAME).")
+        if name and len([k for k in kinds.split(",") if k.strip()]) > 1:
+            raise click.ClickException("--name applies to a single test; pass exactly one --kind.")
+        # Allow combined 'Ubuntu 24.04' / 'Kubuntu 24.04' shorthand on --distro/--flavor.
+        if distro and not distro_version:
+            distro, distro_version = _parse_name_version(distro)
+        if flavor and not flavor_version:
+            flavor, flavor_version = _parse_name_version(flavor)
+        try:
+            resolved_os, resolved_distro, resolved_flavor = platforms.resolve_platform(
+                os=os_name, distro=distro, flavor=flavor,
+            )
+        except ValueError as e:
+            raise click.ClickException(str(e))
+        os_name = platforms._os_canonical(resolved_os) if resolved_os else None
+        distro = resolved_distro
+        flavor = resolved_flavor
+        if os_name == "Linux":
+            os_version = None
+        if not resolved_distro:
+            distro_version = None
+        if not resolved_flavor:
+            flavor_version = None
 
     if ctx.obj.get("remote"):
         _run_remote(
@@ -813,6 +856,12 @@ def run_cmd(ctx, project, kinds, git_ref, mode, isolation, toolchain,
                 "opp_file": None,
             }
             test = get_or_create_test(session, coord)
+            if name:
+                from opp_ci.persistence import set_test_name
+                try:
+                    set_test_name(session, test, name)
+                except ValueError as e:
+                    raise click.ClickException(str(e))
             test_run = create_test_run(
                 session,
                 test_id=test.id,
@@ -1630,19 +1679,11 @@ def _spec_from_flags(*, project, kinds, modes, refs, os_names, os_versions,
     return config
 
 
-def _generate_anonymous_matrix_name(project):
-    """Synthesise a stable, human-readable name for an anonymous matrix.
-
-    Phase 1 schema persists every matrix; anonymous matrices get a row
-    too so the rollup and per-cell verdict stay attached to a TestMatrix.
-    """
-    ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    return f"adhoc:{project}:{ts}"
-
-
 @main.command("run-matrix")
 @click.option("--matrix", "matrix_name", default=None,
               help="Run a named matrix from the database")
+@click.option("--name", "new_name", default=None,
+              help="Name to save an inline/spec matrix under (omit to leave it anonymous)")
 @click.option("--spec-file", "spec_file", default=None,
               help="JSON spec for an anonymous matrix; '-' reads stdin")
 @click.option("--project", default=None, help="Anonymous matrix: project name")
@@ -1682,7 +1723,7 @@ def _generate_anonymous_matrix_name(project):
               help="Stream per-cell progress until the matrix terminates")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
 @remoteable(_run_matrix_remote)
-def run_matrix(matrix_name, spec_file, project, kinds, modes, refs, single_ref,
+def run_matrix(matrix_name, new_name, spec_file, project, kinds, modes, refs, single_ref,
                versions, os_names, os_versions, distros, distro_versions,
                flavors, flavor_versions, compilers, compiler_versions, arches,
                isolation, toolchain, no_cache, follow, skip_install):
@@ -1721,7 +1762,10 @@ def run_matrix(matrix_name, spec_file, project, kinds, modes, refs, single_ref,
                 click.echo(f"Matrix '{matrix_name}' not found.")
                 return
         else:
-            # Build a TestMatrix row from the inline spec / spec file.
+            from opp_ci.persistence import create_matrix_from_axes
+            # Build a TestMatrix row from the inline spec / spec file. An
+            # unnamed matrix stays anonymous (name = NULL); pass --name (or
+            # a spec "name") to make it reusable.
             if spec_file:
                 import sys as _sys
                 stream = _sys.stdin if spec_file == "-" else open(spec_file)
@@ -1735,7 +1779,7 @@ def run_matrix(matrix_name, spec_file, project, kinds, modes, refs, single_ref,
                 ad_hoc_config = {k: v for k, v in spec.items()
                                  if k not in ("project", "opp_file", "name")}
                 opp_file = spec.get("opp_file")
-                proposed_name = spec.get("name") or _generate_anonymous_matrix_name(ad_hoc_project)
+                proposed_name = new_name or spec.get("name")
             else:
                 if not project:
                     raise click.ClickException(
@@ -1754,17 +1798,16 @@ def run_matrix(matrix_name, spec_file, project, kinds, modes, refs, single_ref,
                     versions=versions,
                 )
                 opp_file = None
-                proposed_name = _generate_anonymous_matrix_name(project)
+                proposed_name = new_name
 
-            matrix = TestMatrix(
-                name=proposed_name,
-                project=ad_hoc_project,
-                opp_file=opp_file,
-                config=ad_hoc_config,
-            )
-            session.add(matrix)
-            session.flush()
-            click.echo(f"Anonymous matrix '{matrix.name}' created.")
+            try:
+                matrix = create_matrix_from_axes(
+                    session, project=ad_hoc_project, config=ad_hoc_config,
+                    name=proposed_name, opp_file=opp_file,
+                )
+            except ValueError as e:
+                raise click.ClickException(str(e))
+            click.echo(f"Matrix '{matrix.display_name}' created.")
 
         jobs = expand_matrix(matrix.project, matrix.config)
         click.echo(f"Running matrix '{matrix.name}': {len(jobs)} jobs"
