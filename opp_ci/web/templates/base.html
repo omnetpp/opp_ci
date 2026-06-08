@@ -41,11 +41,15 @@
         tr:hover td { background: #f1f3f5; }
 
         .badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
-        .badge-passed { background: #d1e7dd; color: var(--pass); }
-        .badge-failed { background: #f8d7da; color: var(--fail); }
-        .badge-error { background: #ffe5d0; color: var(--error); }
+        /* Status badges are emitted in both cases across templates
+           (badge-{{ effective_status }} → PASS; explicit maps → passed),
+           so each color covers both spellings plus the matching verdict. */
+        .badge-passed, .badge-PASS, .badge-EXPECTED { background: #d1e7dd; color: var(--pass); }
+        .badge-failed, .badge-FAIL, .badge-UNEXPECTED { background: #f8d7da; color: var(--fail); }
+        .badge-error, .badge-ERROR { background: #ffe5d0; color: var(--error); }
         .badge-running { background: #cfe2ff; color: var(--running); }
-        .badge-queued { background: #e2e3e5; color: var(--muted); }
+        .badge-queued, .badge-skipped, .badge-SKIPPED, .badge-UNKNOWN,
+        .badge-cancelled, .badge-timed_out { background: #e2e3e5; color: var(--muted); }
         .badge-compatible { background: #cfe2ff; color: var(--primary); }
 
         .compat-matrix { width: auto; }
