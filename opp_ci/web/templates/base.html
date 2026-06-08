@@ -41,6 +41,9 @@
         th { background: var(--bg); font-weight: 600; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; }
         tr:last-child td { border-bottom: none; }
         tr:hover td { background: #f1f3f5; }
+        /* Whole-row navigation: a row with data-href is clickable; the
+           delegated handler near </body> performs the navigation. */
+        tr[data-href] { cursor: pointer; }
 
         .badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
         /* Status badges are emitted in both cases across templates
@@ -177,5 +180,21 @@
     <div class="container">
         {% block content %}{% endblock %}
     </div>
+    <script>
+    // Whole-row navigation. Any <tr data-href="..."> navigates on click, so
+    // the user doesn't have to hit the small ID link. Delegated once here so
+    // list pages only need the data-href attribute.
+    document.addEventListener("click", function (e) {
+        const row = e.target.closest("tr[data-href]");
+        if (!row) return;
+        // Preserve modified clicks (open in new tab/window) and non-primary buttons.
+        if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        // Let genuine interactive controls (links, buttons, form fields) act normally.
+        if (e.target.closest("a, button, input, select, textarea, label, form")) return;
+        // Don't hijack a click that the user made to select text.
+        if (window.getSelection && window.getSelection().toString()) return;
+        window.location = row.dataset.href;
+    });
+    </script>
 </body>
 </html>

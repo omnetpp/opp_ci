@@ -40,11 +40,6 @@
         {% endfor %}
     </tbody>
 </table>
-<script>
-document.querySelectorAll("tr[data-href]").forEach(row => {
-    row.addEventListener("click", () => { window.location = row.dataset.href; });
-});
-</script>
 {% else %}
 <p class="empty">No compilers match. <a href="/compilers/new">Add one</a>.</p>
 {% endif %}

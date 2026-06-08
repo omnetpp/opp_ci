@@ -65,11 +65,6 @@
         {% endfor %}
     </tbody>
 </table>
-<script>
-document.querySelectorAll("tr[data-href]").forEach(row => {
-    row.addEventListener("click", () => { window.location = row.dataset.href; });
-});
-</script>
 {% else %}
 <p class="empty">No matrices match.{% if not include_anonymous %} Anonymous ad-hoc matrices are hidden — tick <em>include anonymous</em> to show them.{% endif %} <a href="/test-matrices/new">Create one</a> or use <code>opp_ci seed-matrices</code>.</p>
 {% endif %}

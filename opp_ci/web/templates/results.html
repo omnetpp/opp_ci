@@ -68,7 +68,7 @@
     </thead>
     <tbody>
         {% for s in summaries %}
-        <tr style="cursor:pointer;" onclick="window.location='/results?run_ids={{ s.run_ids | join(',') }}&amp;view=detailed'">
+        <tr data-href="/results?run_ids={{ s.run_ids | join(',') }}&amp;view=detailed">
             {% for dim in primary_dims + extra_dims %}
             <td>
                 {% set val = s.columns[dim] %}
@@ -126,7 +126,7 @@
     </thead>
     <tbody>
         {% for run in runs %}
-        <tr>
+        <tr data-href="/test-runs/{{ run.id }}">
             <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
             <td>{{ run.project }}</td>
             <td>{{ run.kind }}</td>

@@ -98,7 +98,7 @@
         <tbody>
             {% for c in cells %}
             {% set v = c.verdict.verdict.value if c.verdict.verdict else None %}
-            <tr {% if v == 'UNEXPECTED' %}style="background:#fff5f5;"{% elif v == 'UNKNOWN' %}style="background:#fff8e6;"{% endif %}>
+            <tr data-href="/test-runs/{{ c.run.id }}" {% if v == 'UNEXPECTED' %}style="background:#fff5f5;"{% elif v == 'UNKNOWN' %}style="background:#fff8e6;"{% endif %}>
                 <td>#{{ c.verdict.id }}</td>
                 <td><a href="/test-runs/{{ c.run.id }}">#{{ c.run.id }}</a></td>
                 <td>{{ c.test.kind }}</td>

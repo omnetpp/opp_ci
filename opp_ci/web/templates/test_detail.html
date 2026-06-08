@@ -74,7 +74,7 @@
         </thead>
         <tbody>
             {% for run in runs %}
-            <tr>
+            <tr data-href="/test-runs/{{ run.id }}">
                 <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.mode or "-" }}</td>
                 {% set sha = run.commit_sha or run.github_commit_sha %}

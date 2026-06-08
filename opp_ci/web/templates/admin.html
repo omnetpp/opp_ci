@@ -141,7 +141,7 @@
         </thead>
         <tbody>
             {% for run in recent_errors %}
-            <tr>
+            <tr data-href="/test-runs/{{ run.id }}">
                 <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
                 <td>{{ run.project }}</td>
                 <td>{{ run.kind }}</td>

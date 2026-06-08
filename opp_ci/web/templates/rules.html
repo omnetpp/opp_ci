@@ -65,7 +65,7 @@
     </thead>
     <tbody>
         {% for r in rules %}
-        <tr style="{{ 'opacity:0.5;' if not r.enabled else '' }}">
+        <tr data-href="/rules/{{ r.id }}" style="{{ 'opacity:0.5;' if not r.enabled else '' }}">
             <td><a href="/rules/{{ r.id }}">#{{ r.id }}</a></td>
             <td><a href="/projects/{{ r.project_name }}">{{ r.project_name }}</a></td>
             <td><span class="badge" style="background:#e2e3e5; color:var(--text);">{{ r.rule_type }}</span></td>

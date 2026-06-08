@@ -62,7 +62,7 @@
     </thead>
     <tbody>
         {% for t in tests %}
-        <tr>
+        <tr data-href="/tests/{{ t.id }}">
             <td><a href="/tests/{{ t.id }}">#{{ t.id }}</a></td>
             <td>{% if t.name %}<a href="/tests/{{ t.id }}">{{ t.name }}</a>{% else %}<span style="color:var(--muted);">(anonymous)</span>{% endif %}</td>
             <td>{{ t.project }}</td>

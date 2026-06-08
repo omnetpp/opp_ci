@@ -23,7 +23,7 @@
     </thead>
     <tbody>
         {% for p in projects %}
-        <tr>
+        <tr data-href="/compatibility/{{ p.name }}">
             <td><a href="/projects/{{ p.name }}">{{ p.name }}</a></td>
             <td>{{ p.dependency_names | join(", ") }}</td>
             <td><a href="/compatibility/{{ p.name }}" class="btn btn-sm btn-primary">View Matrix</a></td>

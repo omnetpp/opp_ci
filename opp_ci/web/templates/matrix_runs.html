@@ -54,7 +54,7 @@
     </thead>
     <tbody>
         {% for mr, m in rows %}
-        <tr>
+        <tr data-href="/test-matrix-runs/{{ mr.id }}">
             <td><a href="/test-matrix-runs/{{ mr.id }}">#{{ mr.id }}</a></td>
             <td><a href="/test-matrices/{{ m.id }}">{{ m.display_name }}</a></td>
             <td><a href="/projects/{{ m.project }}">{{ m.project }}</a></td>
