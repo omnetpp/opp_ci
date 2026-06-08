@@ -500,7 +500,13 @@ def render_containerfile(toolchain, os_name, os_version, compiler, compiler_vers
         with open(pkgs_path) as f:
             pkg_map = yaml.safe_load(f) or {}
         key = f"{ctx['os']}+{ctx['compiler']}-{ctx['compiler_version']}"
-        ctx["compiler_package"] = pkg_map.get(key, f"{ctx['compiler']}-{ctx['compiler_version']}")
+        # For gcc the Debian/Ubuntu C++ compiler lives in the separate g++-N
+        # package (gcc-N is C-only); g++-N depends on gcc-N, so it installs
+        # both — which OMNeT++'s ./configure needs. clang ships clang++ in the
+        # same package.
+        default_pkg = (f"g++-{ctx['compiler_version']}" if ctx['compiler'] == 'gcc'
+                       else f"{ctx['compiler']}-{ctx['compiler_version']}")
+        ctx["compiler_package"] = pkg_map.get(key, default_pkg)
         ctx["opp_env_ref"] = _resolve_remote_head(_OPP_ENV_REPO) or "HEAD"
     elif template_name == "nix":
         ctx["opp_env_ref"] = _resolve_remote_head(_OPP_ENV_REPO) or "HEAD"

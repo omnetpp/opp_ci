@@ -1,25 +1,27 @@
 # Maps (os + "+" + compiler + "-" + version) → the package name to install via
 # the base OS's package manager. Used by Containerfile.host.j2.
 #
-# When a key is missing, the build falls back to the literal "<compiler>-<version>"
-# string. Add an entry here only when that fallback doesn't match the distro's
-# package naming.
+# When a key is missing, the build falls back to "g++-<version>" for gcc and
+# "<compiler>-<version>" otherwise (see executor._render_containerfile). Add an
+# entry here only when that fallback doesn't match the distro's package naming.
 
-# Ubuntu — clang/gcc package names usually match the version directly.
-ubuntu+gcc-13: gcc-13
-ubuntu+gcc-14: gcc-14
-ubuntu+gcc-15: gcc-15
+# Ubuntu — clang ships clang++ in the clang-N package, but gcc-N is C-only; the
+# C++ compiler OMNeT++ needs is the separate g++-N package (which depends on
+# gcc-N, so installing it pulls in both compilers).
+ubuntu+gcc-13: g++-13
+ubuntu+gcc-14: g++-14
+ubuntu+gcc-15: g++-15
 ubuntu+clang-18: clang-18
 ubuntu+clang-19: clang-19
 ubuntu+clang-22: clang-22
 
 # Debian
-debian+gcc-13: gcc-13
+debian+gcc-13: g++-13
 debian+clang-19: clang-19
 
-# Fedora — different naming convention: just "gcc" or "clang" pins via the
-# distro release; version-specific packages are gccN-c++ or compat-gccN.
-fedora+gcc-14: gcc
-fedora+gcc-15: gcc
+# Fedora — different naming convention. gcc-c++ is Fedora's C++ compiler
+# package (it depends on gcc); clang ships clang++ in the clang package.
+fedora+gcc-14: gcc-c++
+fedora+gcc-15: gcc-c++
 fedora+clang-18: clang
 fedora+clang-22: clang
