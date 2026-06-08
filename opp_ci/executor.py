@@ -637,6 +637,16 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
     is_catalog = not opp_file
     worktree_path = None
     scratch_dir = None
+    # For catalog runs the worker collapses (project, version) into one name.
+    # opp_env needs a *versioned* identifier (e.g. mm1k-latest, inet-4.5) while
+    # opp_repl needs the *bare* project name (e.g. mm1k, inet) to match the
+    # .opp definition opp_env clones. Split them back out: keep an
+    # already-versioned name as-is, otherwise install the "-latest" alias.
+    import re
+    _ver_match = re.match(r"^(.*?)-(\d.*|latest|git)$", project)
+    catalog_bare = _ver_match.group(1) if _ver_match else project
+    catalog_install_id = project if _ver_match else f"{project}-latest"
+    repl_project = catalog_bare if is_catalog else project
     if is_catalog:
         # Source comes from `opp_env install` inside the container. We still
         # mount *something* at /work so the image's WORKDIR resolves; an
@@ -661,7 +671,7 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
     if is_catalog:
         # The entrypoint reads this, opp_env-installs each project, and cd's
         # into the first one's install dir.
-        podman_cmd += ["-e", f"OPP_CI_INSTALL_PROJECTS={project}"]
+        podman_cmd += ["-e", f"OPP_CI_INSTALL_PROJECTS={catalog_install_id}"]
     # The image's ENTRYPOINT is the runner binary (opp_env / opp_ci), so we
     # only need to pass its arguments here — repeating the binary name would
     # produce `opp_ci opp_ci ...` and "No such command" from click.
@@ -699,7 +709,7 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
                           "-c", f"env -u PYTHONPATH {inner_cmd}"]
     else:
         container_args = ["internal", "run-direct",
-                          "--project", project, "--kind", kind]
+                          "--project", repl_project, "--kind", kind]
         if mode:
             container_args += ["--mode", mode]
         if opp_file:

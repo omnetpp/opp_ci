@@ -56,7 +56,11 @@ if [ -n "$OPP_CI_INSTALL_PROJECTS" ]; then
         if [ -d "/opt/opp_env_workspace/$FIRST_PROJECT" ]; then
             cd "/opt/opp_env_workspace/$FIRST_PROJECT"
         else
-            workdir=$(ls -d /opt/opp_env_workspace/${FIRST_PROJECT}*/ 2>/dev/null | head -1)
+            # FIRST_PROJECT may be a "-latest" alias while opp_env installs the
+            # resolved version (e.g. mm1k-latest → mm1k-git). Glob by the bare
+            # project name (strip a trailing -latest/-git/-<version>).
+            prefix=$(echo "$FIRST_PROJECT" | sed -E "s/-(latest|git|[0-9].*)$//")
+            workdir=$(ls -d /opt/opp_env_workspace/${prefix}*/ 2>/dev/null | head -1)
             [ -n "$workdir" ] && cd "$workdir"
         fi
     fi
