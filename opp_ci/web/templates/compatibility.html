@@ -1,11 +1,67 @@
 {% extends "base.html" %}
+{% import "_filters.html" as f %}
 {% block title %}Compatibility — {{ project_name }} — opp_ci{% endblock %}
+
+{# status string -> dot class; verdict string -> overlaid symbol. #}
+{% set status_class = {
+    "compatible": "cm2-compatible", "PASS": "cm2-pass", "FAIL": "cm2-fail",
+    "ERROR": "cm2-error", "SKIPPED": "cm2-skipped", "mixed": "cm2-mixed"
+} %}
+{% set verdict_sym = {
+    "EXPECTED": "✓", "UNKNOWN": "?", "UNEXPECTED": "!", "mixed": "*"
+} %}
+
+{% macro cell_glyph(cell) -%}
+{%- if cell is none -%}
+    <span class="cm-dot cm-none" title="not declared compatible">·</span>
+{%- else -%}
+    {%- set parts = [] -%}
+    {%- for r in cell.runs -%}
+        {%- set _ = parts.append(
+            (r.result_code.value if r.result_code else "?") ~ "/" ~ (r.verdict or "UNKNOWN")
+            ~ " — " ~ (r.os or "?") ~ "/" ~ (r.compiler or "?")
+            ~ (" (" ~ r.mode ~ ")" if r.mode else "")) -%}
+    {%- endfor -%}
+    {%- set title = parts|join("; ") if parts else cell.status -%}
+    <span class="cm2 {{ status_class.get(cell.status, 'cm2-none') }}" title="{{ title }}">
+        <span class="cm2-disc">&#x25cf;</span>
+        {%- if cell.verdict %}<span class="cm2-sym">{{ verdict_sym.get(cell.verdict, "") }}</span>{% endif -%}
+    </span>
+{%- endif -%}
+{%- endmacro %}
+
 {% block content %}
 <h2 style="margin-bottom: 1rem;">Compatibility: {{ project_name }}</h2>
 
+{% if matrices or filters.values()|select|list %}
+<form class="filters filters-stacked" method="get" action="/compatibility/{{ project_name }}">
+    <div class="filter-grid">
+        {{ f.sel(filters, "os", "OS", options.os) }}
+        {{ f.sel(filters, "os_version", "OS version", options.os_version) }}
+        {{ f.sel(filters, "distro", "Distro", options.distro) }}
+        {{ f.sel(filters, "distro_version", "Distro version", options.distro_version) }}
+        {{ f.sel(filters, "flavor", "Flavor", options.flavor) }}
+        {{ f.sel(filters, "flavor_version", "Flavor version", options.flavor_version) }}
+        {{ f.sel(filters, "compiler", "Compiler", options.compiler) }}
+        {{ f.sel(filters, "compiler_version", "Compiler version", options.compiler_version) }}
+        {{ f.sel(filters, "mode", "Mode", options.mode) }}
+        {{ f.sel(filters, "kind", "Kind", options.kind) }}
+        {{ f.sel(filters, "toolchain", "Toolchain", options.toolchain) }}
+        {{ f.sel(filters, "isolation", "Isolation", options.isolation) }}
+        {{ f.sel(filters, "arch", "Arch", options.arch) }}
+    </div>
+    <div class="filter-actions">
+        <button type="submit">Filter</button>
+        {% if filters.values()|select|list %}
+        <a href="/compatibility/{{ project_name }}" class="btn btn-secondary btn-sm">Clear</a>
+        {% endif %}
+    </div>
+</form>
+{% endif %}
+
 {% if not matrices %}
 <div class="empty">
-    <p>No compatibility data available for <strong>{{ project_name }}</strong>.</p>
+    <p>No compatibility data available for <strong>{{ project_name }}</strong>{% if filters.values()|select|list %} with the current filters{% endif %}.</p>
     <p style="font-size: 0.85rem; margin-top: 0.5rem;">
         Run <code>opp_ci sync-catalog</code> to import version compatibility
         data from opp_env.
@@ -30,22 +86,7 @@
             <tr>
                 <td><strong>{{ row.version }}</strong></td>
                 {% for dv in matrix.dep_versions %}
-                {% set cell = row.cells[dv] %}
-                <td>
-                    {% if cell == "PASS" %}
-                    <span class="cm-dot cm-passed" title="PASS">&#x25cf;</span>
-                    {% elif cell == "FAIL" %}
-                    <span class="cm-dot cm-failed" title="FAIL">&#x25cf;</span>
-                    {% elif cell == "ERROR" %}
-                    <span class="cm-dot cm-error" title="ERROR">&#x25cf;</span>
-                    {% elif cell == "mixed" %}
-                    <span class="cm-dot cm-error" title="mixed">&#x25d2;</span>
-                    {% elif cell == "compatible" %}
-                    <span class="cm-dot cm-compatible" title="compatible">&#x25cf;</span>
-                    {% else %}
-                    <span class="cm-dot cm-none">·</span>
-                    {% endif %}
-                </td>
+                <td>{{ cell_glyph(row.cells[dv]) }}</td>
                 {% endfor %}
             </tr>
             {% endfor %}
@@ -56,13 +97,29 @@
 {% endfor %}
 
 {% if matrices %}
-<p style="font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem;">
-    <span class="cm-dot cm-compatible">&#x25cf;</span> compatible &nbsp;
-    <span class="cm-dot cm-passed">&#x25cf;</span> PASS &nbsp;
-    <span class="cm-dot cm-failed">&#x25cf;</span> FAIL &nbsp;
-    <span class="cm-dot cm-error">&#x25cf;</span> ERROR &nbsp;
-    <span class="cm-dot cm-none">·</span> n/a
-</p>
+<div style="font-size: 0.8rem; color: var(--muted); margin-top: 0.75rem; line-height: 1.9;">
+    <div>
+        <strong style="color: var(--text);">Status (color):</strong>
+        <span class="cm2 cm2-compatible"><span class="cm2-disc">&#x25cf;</span></span> compatible &nbsp;
+        <span class="cm2 cm2-pass"><span class="cm2-disc">&#x25cf;</span></span> PASS &nbsp;
+        <span class="cm2 cm2-fail"><span class="cm2-disc">&#x25cf;</span></span> FAIL &nbsp;
+        <span class="cm2 cm2-error"><span class="cm2-disc">&#x25cf;</span></span> ERROR &nbsp;
+        <span class="cm2 cm2-skipped"><span class="cm2-disc">&#x25cf;</span></span> SKIPPED &nbsp;
+        <span class="cm2 cm2-mixed"><span class="cm2-disc">&#x25cf;</span></span> mixed &nbsp;
+        <span class="cm-dot cm-none">·</span> n/a
+    </div>
+    <div>
+        <strong style="color: var(--text);">Verdict (symbol):</strong>
+        <span class="cm2 cm2-skipped"><span class="cm2-disc">&#x25cf;</span><span class="cm2-sym">✓</span></span> expected &nbsp;
+        <span class="cm2 cm2-skipped"><span class="cm2-disc">&#x25cf;</span><span class="cm2-sym">?</span></span> unknown &nbsp;
+        <span class="cm2 cm2-skipped"><span class="cm2-disc">&#x25cf;</span><span class="cm2-sym">!</span></span> unexpected &nbsp;
+        <span class="cm2 cm2-skipped"><span class="cm2-disc">&#x25cf;</span><span class="cm2-sym">*</span></span> mixed
+    </div>
+    <div style="margin-top: 0.35rem;">
+        Filters narrow the <em>tested</em> overlay only;
+        <strong>compatible</strong> means "declared compatible, no matching test run."
+    </div>
+</div>
 {% endif %}
 
 <div style="margin-top: 1rem;">

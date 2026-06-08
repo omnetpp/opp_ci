@@ -12,8 +12,10 @@
             --muted: #6c757d;
             --border: #dee2e6;
             --pass: #198754;
-            --fail: #dc3545;
-            --error: #fd7e14;
+            --fail: #dc3545;   /* generic danger (buttons, flashes) */
+            --warn: #f2c037;   /* test outcome FAIL */
+            --error: #dc3545;  /* test outcome ERROR */
+            --mixed: #6f42c1;
             --running: #0d6efd;
             --primary: #0d6efd;
         }
@@ -43,10 +45,12 @@
         .badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
         /* Status badges are emitted in both cases across templates
            (badge-{{ effective_status }} → PASS; explicit maps → passed),
-           so each color covers both spellings plus the matching verdict. */
+           so each color covers both spellings plus the matching verdict.
+           Outcome colors: PASS=green, FAIL=yellow, ERROR=red (UNEXPECTED
+           shares ERROR's red as the "bad verdict" alert). */
         .badge-passed, .badge-PASS, .badge-EXPECTED { background: #d1e7dd; color: var(--pass); }
-        .badge-failed, .badge-FAIL, .badge-UNEXPECTED { background: #f8d7da; color: var(--fail); }
-        .badge-error, .badge-ERROR { background: #ffe5d0; color: var(--error); }
+        .badge-failed, .badge-FAIL { background: #fff3cd; color: var(--warn); }
+        .badge-error, .badge-ERROR, .badge-UNEXPECTED { background: #f8d7da; color: var(--error); }
         .badge-running { background: #cfe2ff; color: var(--running); }
         .badge-queued, .badge-skipped, .badge-SKIPPED, .badge-UNKNOWN,
         .badge-cancelled, .badge-timed_out { background: #e2e3e5; color: var(--muted); }
@@ -59,9 +63,24 @@
         .cm-dot { font-size: 0.9rem; }
         .cm-compatible { color: var(--primary); }
         .cm-passed { color: var(--pass); }
-        .cm-failed { color: var(--fail); }
+        .cm-failed { color: var(--warn); }
         .cm-error { color: var(--error); }
         .cm-none { color: var(--border); }
+
+        /* Two-channel compatibility cell: color = status, symbol = verdict.
+           Outcome colors match the rest of the app: FAIL=yellow, ERROR=red. */
+        .cm2 { position: relative; display: inline-block; width: 1.1rem; height: 1.1rem;
+               line-height: 1.1rem; text-align: center; }
+        .cm2 .cm2-disc { font-size: 1.05rem; }
+        .cm2 .cm2-sym { position: absolute; inset: 0; font-size: 0.72rem; font-weight: 700;
+                        color: #fff; text-shadow: 0 0 1px rgba(0,0,0,0.55); }
+        .cm2-compatible .cm2-disc { color: var(--primary); }
+        .cm2-pass .cm2-disc { color: var(--pass); }
+        .cm2-fail .cm2-disc { color: var(--warn); }
+        .cm2-error .cm2-disc { color: var(--error); }
+        .cm2-skipped .cm2-disc { color: var(--muted); }
+        .cm2-mixed .cm2-disc { color: var(--mixed); }
+        .cm2-none { color: var(--border); }
 
         .dim-set { font-size: 0.85em; color: var(--primary); }
 

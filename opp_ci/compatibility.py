@@ -11,70 +11,119 @@ from collections import defaultdict
 
 from sqlalchemy import select
 
-from opp_ci.db.models import Project, Test, TestResultCode, TestRun, TestRunLifecycle, Version
+from opp_ci.db.models import (
+    Project, Test, TestRun, TestRunLifecycle,
+    TestVerdictKind, Version,
+)
 
 _logger = logging.getLogger(__name__)
 
+# Execution dimensions that live on the Test row and that the empirical
+# overlay can be filtered by. Single source of truth shared by the per-run
+# capture, the filter, the scoped-option collection, and the web route.
+_DIMENSIONS = (
+    "os", "os_version", "distro", "distro_version",
+    "flavor", "flavor_version", "compiler", "compiler_version",
+    "mode", "kind", "toolchain", "isolation", "arch",
+)
 
-def get_compatibility_matrix(session, project_name):
+
+def get_compatibility_matrix(session, project_name, filters=None):
     """
     Build compatibility matrices for a project against each of its dependencies.
 
     The grid is populated primarily from opp_env's declared compatibility
     (Version.resolved_dependencies).  Where test runs exist and the
-    dependency version used can be determined, empirical pass/fail results
-    are overlaid on the declared-compatible cells.
+    dependency version used can be determined, empirical results are
+    overlaid on the declared-compatible cells.
 
-    Returns a list of dicts, one per dependency:
+    `filters` is an optional dict of {dimension: value} (keys drawn from
+    `_DIMENSIONS`) that subsets the empirical overlay only: a cell keeps
+    just the runs whose Test row matches every active filter, then
+    aggregates what survives. Declared compatibility carries no
+    OS/compiler, so a filter can never remove a `compatible` cell — it can
+    only revert a tested cell back toward `compatible` when no run on the
+    selected platform exists. Empty/None filters reproduce the unfiltered
+    page exactly.
+
+    Returns a dict:
         {
-            "project": "inet",
-            "dependency": "omnetpp",
-            "rows": [
+            "matrices": [               # one entry per dependency
                 {
-                    "version": "inet-4.5",
-                    "cells": {"6.1": "PASS", "6.0.3": "compatible"},
+                    "project": "inet",
+                    "dependency": "omnetpp",
+                    "rows": [
+                        {
+                            "version": "inet-4.5",
+                            "cells": {"6.1": <cell>, "6.0.3": <cell>},
+                        },
+                    ],
+                    "dep_versions": ["6.1", "6.0.3"],
                 },
             ],
-            "dep_versions": ["6.1", "6.0.3"],
+            "options": {dim: [sorted distinct values], ...},  # scoped to project
         }
 
-    Cell values:
-        "compatible" - declared compatible by opp_env, not yet tested
-        "PASS"       - tested and all runs passed
-        "FAIL"       - tested and at least one run failed
-        "ERROR"      - tested, at least one errored (none failed)
-        "mixed"      - tested with mixed results
-        None         - not declared compatible
+    Each cell is either None (not declared compatible) or a dict carrying
+    the two encoded channels plus the contributing runs:
+        {"status": str, "verdict": str | None, "runs": [run-dict, ...]}
+
+    Cell `status` values (→ color):
+        "compatible" - declared compatible, no matching test run
+        "PASS"/"FAIL"/"ERROR"/"SKIPPED" - all surviving runs share that code
+        "mixed"      - surviving runs disagree
+    Cell `verdict` values (→ symbol), aggregated the same homogeneous way:
+        "EXPECTED"/"UNKNOWN"/"UNEXPECTED", "mixed", or None (no runs).
     """
+    empty = {"matrices": [], "options": {dim: [] for dim in _DIMENSIONS}}
+
     project = session.execute(
         select(Project).where(Project.name == project_name)
     ).scalar_one_or_none()
 
     if project is None:
-        return []
+        return empty
 
     dep_names = project.dependency_names or []
     if not dep_names:
-        return []
+        return empty
 
     versions = session.execute(
         select(Version).where(Version.project_id == project.id)
     ).scalars().all()
 
     if not versions:
-        return []
+        return empty
 
     test_overlays = _collect_test_overlays(session, project_name, versions)
+    options = _collect_options(test_overlays)
+
+    # Drop blank/None filter values so an unset dropdown is a no-op.
+    filters = {k: v for k, v in (filters or {}).items() if v}
 
     results = []
     for dep_name in dep_names:
-        matrix = _build_declared_matrix(versions, dep_name, test_overlays)
+        matrix = _build_declared_matrix(versions, dep_name, test_overlays, filters)
         if matrix:
             matrix["project"] = project_name
             matrix["dependency"] = dep_name
             results.append(matrix)
 
-    return results
+    return {"matrices": results, "options": options}
+
+
+def _collect_options(test_overlays):
+    """Sorted distinct non-empty value of each dimension across all overlay
+    runs for the project — so the filter dropdowns offer only values that
+    actually occur here."""
+    opts = {dim: set() for dim in _DIMENSIONS}
+    for runs in test_overlays.values():
+        for run in runs:
+            for dim in _DIMENSIONS:
+                val = run.get(dim)
+                if val not in (None, ""):
+                    opts[dim].add(val)
+    return {dim: sorted(vals) for dim, vals in opts.items()}
 
 
 def _version_label(v):
@@ -100,13 +149,14 @@ def _dep_compatible_versions(resolved_deps, dep_name):
     return []
 
 
-def _build_declared_matrix(versions, dep_name, test_overlays):
+def _build_declared_matrix(versions, dep_name, test_overlays, filters=None):
     """
     Build the compatibility grid for one dependency from declared data.
 
-    Cells start as "compatible" and are overridden by test results
-    where available in test_overlays.
+    Declared cells start as "compatible" and are overlaid with the
+    aggregated status/verdict of the test runs that match `filters`.
     """
+    filters = filters or {}
     declared = set()
     all_dep_versions = set()
 
@@ -132,13 +182,40 @@ def _build_declared_matrix(versions, dep_name, test_overlays):
         for dv in dep_versions:
             if (pv, dv) not in declared:
                 row_cells[dv] = None
-            elif (pv, dep_name, dv) in test_overlays:
-                row_cells[dv] = _aggregate_status(test_overlays[(pv, dep_name, dv)])
-            else:
-                row_cells[dv] = "compatible"
+                continue
+            runs = test_overlays.get((pv, dep_name, dv), [])
+            if filters:
+                runs = [r for r in runs if _run_matches_filters(r, filters)]
+            # Empty `runs` (declared but untested, or filtered away) yields
+            # status "compatible" / verdict None from the aggregators.
+            row_cells[dv] = {
+                "status": _aggregate_status(runs),
+                "verdict": _aggregate_verdict(runs),
+                "runs": runs,
+            }
         rows.append({"version": pv, "cells": row_cells})
 
     return {"rows": rows, "dep_versions": dep_versions}
+
+
+def _run_matches_filters(run, filters):
+    """True iff the run-dict matches every active dimension filter."""
+    return all(run.get(dim) == val for dim, val in filters.items())
+
+
+def _run_dict(run):
+    """Flatten a TestRun (and its joined Test dimensions) into the per-run
+    record kept in the overlay. `verdict` is the recorded-verdict string
+    (or None); `result_code` is the TestResultCode enum."""
+    rec = {
+        "result_code": run.result_code,
+        "verdict": run.recorded_verdict,   # "EXPECTED"/"UNEXPECTED"/"UNKNOWN" or None
+        "run_id": run.id,
+        "finished_at": run.finished_at,
+    }
+    for dim in _DIMENSIONS:
+        rec[dim] = getattr(run, dim)
+    return rec
 
 
 def _collect_test_overlays(session, project_name, versions):
@@ -150,7 +227,9 @@ def _collect_test_overlays(session, project_name, versions):
     record's resolved_dependencies — only when a dep resolves to exactly
     one version (string format or single-element list).
 
-    Returns: {(version_label, dep_name, dep_version): [TestRunStatus, ...]}
+    Returns: {(version_label, dep_name, dep_version): [run-dict, ...]}
+    where each run-dict is produced by `_run_dict` (carries result_code,
+    verdict, and every `_DIMENSIONS` value).
     """
     # All keys that might appear as TestRun.project for this project
     project_keys = {project_name}
@@ -192,6 +271,7 @@ def _collect_test_overlays(session, project_name, versions):
             continue
 
         vlabel, declared_deps = matched
+        rd = _run_dict(run)
 
         # Prefer the run's own resolved_deps (exact pins from the matrix
         # deps axis).  Fall back to the version record's declared deps
@@ -199,27 +279,39 @@ def _collect_test_overlays(session, project_name, versions):
         if run.resolved_deps:
             for dep_name, dep_ver in run.resolved_deps.items():
                 if isinstance(dep_ver, str):
-                    overlays[(vlabel, dep_name, dep_ver)].append(run.result_code)
+                    overlays[(vlabel, dep_name, dep_ver)].append(rd)
         elif declared_deps:
             for dep_name, dep_val in declared_deps.items():
                 if isinstance(dep_val, str):
-                    overlays[(vlabel, dep_name, dep_val)].append(run.result_code)
+                    overlays[(vlabel, dep_name, dep_val)].append(rd)
                 elif isinstance(dep_val, list) and len(dep_val) == 1:
-                    overlays[(vlabel, dep_name, dep_val[0])].append(run.result_code)
+                    overlays[(vlabel, dep_name, dep_val[0])].append(rd)
 
     return overlays
 
 
-def _aggregate_status(codes):
-    """Aggregate a list of TestResultCode values into a single summary string."""
-    has_fail = any(c == TestResultCode.FAIL for c in codes)
-    has_error = any(c == TestResultCode.ERROR for c in codes)
-    all_pass = all(c == TestResultCode.PASS for c in codes)
+def _aggregate_status(runs):
+    """Aggregate the surviving runs' result_code into one status string by
+    pure homogeneity: a single shared code → that code's value; an empty
+    set → "compatible" (declared, untested); a disagreeing set → "mixed".
+    Note this is deliberately *not* the old precedence logic (where any
+    FAIL won) — the cell color must distinguish "all FAIL" from "mixed"."""
+    codes = {r["result_code"] for r in runs if r["result_code"] is not None}
+    if not codes:
+        return "compatible"
+    if len(codes) == 1:
+        return next(iter(codes)).value   # PASS / FAIL / ERROR / SKIPPED
+    return "mixed"
 
-    if all_pass:
-        return "PASS"
-    elif has_fail:
-        return "FAIL"
-    elif has_error:
-        return "ERROR"
+
+def _aggregate_verdict(runs):
+    """Aggregate the surviving runs' recorded verdict into one symbol-channel
+    string, same homogeneity rule. A run with no recorded verdict folds into
+    UNKNOWN. Empty set → None (a compatible/untested cell carries no symbol).
+    """
+    if not runs:
+        return None
+    kinds = {(r["verdict"] or TestVerdictKind.UNKNOWN.value) for r in runs}
+    if len(kinds) == 1:
+        return next(iter(kinds))         # EXPECTED / UNKNOWN / UNEXPECTED
     return "mixed"
