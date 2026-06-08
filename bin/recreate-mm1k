@@ -1,6 +1,10 @@
 #!/bin/bash
 #
-# Add the mm1k project, its build matrices, and auto-test rules to the database.
+# Add mm1k's build matrices and auto-test rules to the database.
+#
+# Assumes the mm1k project and its versions are already imported from the
+# opp_env catalog (via `opp_ci sync-catalog`), so this script only creates
+# the matrices and rules.
 #
 # Creates three matrices:
 #   mm1k-master-native                       build+smoke on master, native gcc-13
@@ -16,8 +20,6 @@ set -e
 
 COMMON=(--project mm1k --distro "Ubuntu 24.04" --compiler gcc-13 --opp-file /home/levy/workspace/mm1k/mm1k.opp --replace)
 
-opp_ci add-project --name mm1k --github levy/mm1k --git-url https://github.com/levy/mm1k.git --deps omnetpp || true
-opp_ci add-version --project mm1k --label master --deps '{"omnetpp": ["6.0.0","6.0.1","6.0.2","6.0.3","6.1.0","6.2.0","6.3.0","6.4.0"]}'
 opp_ci create-matrix --name mm1k-master-native          "${COMMON[@]}" --kinds build,smoke,opp --refs master --deps 'omnetpp=6.4.0'
 
 opp_ci create-matrix --name mm1k-master-ubuntu26.04-clang22-podman \
