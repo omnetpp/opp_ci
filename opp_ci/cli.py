@@ -875,6 +875,7 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
                     flavor=flavor, flavor_version=flavor_version,
                     arch=arch,
                     compiler=compiler, compiler_version=compiler_version,
+                    resolved_deps=resolved_deps,
                 )
             except Exception as e:
                 test_run.lifecycle = TestRunLifecycle.finished
@@ -1805,6 +1806,7 @@ def run_matrix(matrix_name, new_name, spec_file, project, kinds, modes, refs, si
                     flavor=job.get("flavor"), flavor_version=job.get("flavor_version"),
                     arch=job.get("arch"),
                     compiler=job.get("compiler"), compiler_version=job.get("compiler_version"),
+                    resolved_deps=job.get("resolved_deps"),
                 )
             except Exception as e:
                 test_run.lifecycle = TestRunLifecycle.finished
