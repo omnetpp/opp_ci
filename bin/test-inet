@@ -27,6 +27,6 @@ for version in 6.2.0 6.3.0 6.4.0; do
         --project "inet-$INET_VERSION" \
         --kind build \
         --pin omnetpp="$version" \
-        --isolation podman --toolchain none \
+        --isolation podman --toolchain nix \
         --distro "Ubuntu 24.04" --compiler gcc --compiler-version 13
 done
