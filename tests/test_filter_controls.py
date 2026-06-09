@@ -294,6 +294,13 @@ class FilterPageTests(unittest.TestCase):
         self.assertNotIn('/test-runs/1"', self._get("/test-runs?ref=master"))
         self.assertNotIn('/test-runs/1"', self._get("/test-runs?commit=deadbeef"))
 
+    def test_runs_flat_columns(self):
+        # Flat view carries the full result model + key coordinate columns.
+        body = self._get("/test-runs")
+        for header in ("State", "Result", "Verdict", "Deps", "Worker", "Compiler"):
+            self.assertIn(">%s</th>" % header, body)
+        self.assertIn("omnetpp=6.4.0", body)   # run #1's deps now visible in flat
+
     def test_runs_rollup_view(self):
         # The former Results summary is now /test-runs?view=merged (the View
         # axis is flat | merged | cartesian). Its rows drill down to the flat

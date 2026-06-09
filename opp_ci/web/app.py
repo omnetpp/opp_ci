@@ -461,7 +461,8 @@ def runs_list(
             select(TestRun)
             .join(Test, TestRun.test_id == Test.id)
             .outerjoin(TestMatrixRun, TestRun.matrix_run_id == TestMatrixRun.id)
-            .options(selectinload(TestRun.verdicts))
+            .options(selectinload(TestRun.verdicts), selectinload(TestRun.test),
+                     selectinload(TestRun.worker))
             .order_by(TestRun.id.desc())
             .limit(limit)
         )

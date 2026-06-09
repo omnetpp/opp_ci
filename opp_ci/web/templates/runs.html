@@ -160,10 +160,17 @@
             <th>Project</th>
             <th>Kind</th>
             <th>Mode</th>
+            <th>OS</th>
+            <th>Distro</th>
+            <th>Compiler</th>
+            <th>Deps</th>
             <th>Ref / Commit</th>
-            <th>Status</th>
+            <th>State</th>
+            <th>Result</th>
+            <th>Verdict</th>
             <th>Duration</th>
             <th>Trigger</th>
+            <th>Worker</th>
             <th>Started</th>
             <th>Actions</th>
         </tr>
@@ -175,13 +182,20 @@
             <td>{{ run.project }}</td>
             <td>{{ run.kind }}</td>
             <td>{{ run.mode or "-" }}</td>
+            <td>{{ run.os or "-" }}{% if run.os_version %} {{ run.os_version }}{% endif %}</td>
+            <td>{% if run.distro %}{{ run.distro|title }}{% if run.distro_version %} {{ run.distro_version }}{% endif %}{% else %}-{% endif %}</td>
+            <td>{{ run.compiler or "-" }}{% if run.compiler_version %}-{{ run.compiler_version }}{% endif %}</td>
+            <td>{{ run.deps_label or "-" }}</td>
             {% set sha = run.commit_sha or run.github_commit_sha %}
             {% set ref = run.git_ref %}
             {% set ref_is_sha = ref and ref|length == 40 and ref == ref|lower and ref|replace('a','')|replace('b','')|replace('c','')|replace('d','')|replace('e','')|replace('f','')|replace('0','')|replace('1','')|replace('2','')|replace('3','')|replace('4','')|replace('5','')|replace('6','')|replace('7','')|replace('8','')|replace('9','') == '' %}
             <td>{% if ref and sha and not ref_is_sha %}{{ ref }} (<code title="{{ sha }}">{{ sha[:8] }}</code>){% elif sha %}<code title="{{ sha }}">{{ sha[:8] }}</code>{% elif ref_is_sha %}<code title="{{ ref }}">{{ ref[:8] }}</code>{% elif ref %}{{ ref }}{% else %}-{% endif %}</td>
-            <td><span class="badge badge-{{ run.effective_status }}">{{ run.effective_status }}</span></td>
+            <td>{% if run.lifecycle and run.lifecycle.value != "finished" %}<span class="badge badge-{{ run.lifecycle.value }}">{{ run.lifecycle.value }}</span>{% endif %}</td>
+            <td>{% if run.result_code %}<span class="badge badge-{{ run.result_code.value }}">{{ run.result_code.value }}</span>{% else %}—{% endif %}</td>
+            <td>{% if run.recorded_verdict %}<span class="badge badge-{{ run.recorded_verdict }}">{{ run.recorded_verdict }}</span>{% else %}-{% endif %}</td>
             <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
             <td>{{ run.trigger or "-" }}</td>
+            <td>{{ run.worker.name if run.worker else "-" }}</td>
             <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
             <td>
                 <form method="post" action="/test-runs/{{ run.id }}/rerun" class="inline-form">
