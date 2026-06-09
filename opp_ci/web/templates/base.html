@@ -46,6 +46,14 @@
         .stat-section h3 { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin-bottom: 0.6rem; }
         .stat-section .muted-note { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--muted); margin-left: 0.4rem; }
 
+        /* Sub-grouped tiles within a section: each labelled cluster wraps as a
+           unit, so related counts stay together instead of reflowing one by
+           one into a lone stretched tile. */
+        .stat-groups { display: flex; flex-wrap: wrap; gap: 1.25rem 1.5rem; align-items: flex-start; }
+        .stat-group { flex: 1 1 auto; min-width: 0; }
+        .stat-group .sub-label { font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin-bottom: 0.4rem; }
+        .stat-group .stats { margin-bottom: 0; }
+
         /* Segmented Day/Week/Month/All selector. */
         .window-selector { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
         .window-selector a { padding: 0.35rem 0.8rem; font-size: 0.85rem; color: var(--muted); background: var(--surface); border-right: 1px solid var(--border); }
@@ -173,10 +181,10 @@
                 {% if current_user %}
                 <a href="/">Dashboard</a> &nbsp;
                 <a href="/queue">Activity</a> &nbsp;
-                <a href="/tests">Tests</a> &nbsp;
                 <a href="/test-runs">Test Runs</a> &nbsp;
-                <a href="/test-matrices">Test Matrices</a> &nbsp;
                 <a href="/test-matrix-runs">Test Matrix Runs</a> &nbsp;
+                <a href="/tests">Tests</a> &nbsp;
+                <a href="/test-matrices">Test Matrices</a> &nbsp;
                 <a href="/projects">Projects</a> &nbsp;
                 <a href="/rules">Rules</a> &nbsp;
                 <a href="/os">OSes</a> &nbsp;

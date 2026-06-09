@@ -228,7 +228,7 @@ web_router = APIRouter(dependencies=[Depends(require_user())])
 
 @web_router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, current_user: User = Depends(require_user()),
-              window: str = Query(default="all")):
+              window: str = Query(default="day")):
     window = _normalise_window(window)
     cutoff = _window_cutoff(window)
     session = SessionLocal()

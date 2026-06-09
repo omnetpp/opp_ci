@@ -69,35 +69,50 @@
 
 <div class="stat-section">
     <h3>Inventory</h3>
-    <div class="stats">
-        <a class="stat" href="/tests">
-            <div class="value">{{ inventory.tests }}</div>
-            <div class="label">Tests</div>
-        </a>
-        <a class="stat" href="/test-matrices">
-            <div class="value">{{ inventory.matrices }}</div>
-            <div class="label">Test Matrices</div>
-        </a>
-        <a class="stat" href="/test-matrix-runs">
-            <div class="value">{{ inventory.matrix_runs }}</div>
-            <div class="label">Matrix Runs</div>
-        </a>
-        <a class="stat" href="/projects">
-            <div class="value">{{ inventory.projects }}</div>
-            <div class="label">Projects</div>
-        </a>
-        <a class="stat" href="/rules">
-            <div class="value">{{ inventory.rules }}</div>
-            <div class="label">Rules</div>
-        </a>
-        <a class="stat" href="/os">
-            <div class="value">{{ inventory.oses }}</div>
-            <div class="label">OSes</div>
-        </a>
-        <a class="stat" href="/compilers">
-            <div class="value">{{ inventory.compilers }}</div>
-            <div class="label">Compilers</div>
-        </a>
+    <div class="stat-groups">
+        <div class="stat-group">
+            <div class="sub-label">Tests &amp; runs</div>
+            <div class="stats">
+                <a class="stat" href="/tests">
+                    <div class="value">{{ inventory.tests }}</div>
+                    <div class="label">Tests</div>
+                </a>
+                <a class="stat" href="/test-matrices">
+                    <div class="value">{{ inventory.matrices }}</div>
+                    <div class="label">Test Matrices</div>
+                </a>
+                <a class="stat" href="/test-matrix-runs">
+                    <div class="value">{{ inventory.matrix_runs }}</div>
+                    <div class="label">Matrix Runs</div>
+                </a>
+            </div>
+        </div>
+        <div class="stat-group">
+            <div class="sub-label">Definitions</div>
+            <div class="stats">
+                <a class="stat" href="/projects">
+                    <div class="value">{{ inventory.projects }}</div>
+                    <div class="label">Projects</div>
+                </a>
+                <a class="stat" href="/rules">
+                    <div class="value">{{ inventory.rules }}</div>
+                    <div class="label">Rules</div>
+                </a>
+            </div>
+        </div>
+        <div class="stat-group">
+            <div class="sub-label">Platforms</div>
+            <div class="stats">
+                <a class="stat" href="/os">
+                    <div class="value">{{ inventory.oses }}</div>
+                    <div class="label">OSes</div>
+                </a>
+                <a class="stat" href="/compilers">
+                    <div class="value">{{ inventory.compilers }}</div>
+                    <div class="label">Compilers</div>
+                </a>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}
