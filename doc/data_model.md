@@ -436,7 +436,8 @@ the kind string.
 - `worker` → one [`Worker`](#worker) (backref `Worker.test_runs`).
 - `verdicts` → many [`TestVerdict`](#testverdict) — a single TestRun
   can back many cells when cache hits attribute later matrix runs to
-  the same observation.
+  the same observation. The grade lives on the verdict, never on the
+  run; see [Why the verdict is not a column on TestRun](#why-the-verdict-is-not-a-column-on-testrun).
 
 ---
 
@@ -462,6 +463,36 @@ done yet".
 | `recorded_at` | datetime, nullable | When the verdict was written: `TestRun.finished_at` for miss-then-execute, insertion time for cache hits |
 | `created_at` | datetime, not null | When the cell was inserted (= matrix submit time) |
 | `cache_hit` | bool, not null, default `false` | True iff this cell reused a pre-existing TestRun via the content-addressable cache |
+
+### Why the verdict is not a column on TestRun
+
+`TestRun` records *what happened* when the test executed; `TestVerdict`
+records *how that outcome was graded* against expectations. Keeping
+them apart is deliberate — three properties only hold because the
+verdict lives in its own table:
+
+1. **One run, many verdicts (caching).** A finished `TestRun` is reused
+   across matrix cells with the same
+   [`cache_fingerprint`](#cache-fingerprint) — a cache hit creates a new
+   `TestVerdict` pointing at the existing run instead of re-executing.
+   The relationship is one-run-to-many-verdicts, so a single `verdict`
+   column on `TestRun` could not hold them all.
+2. **Snapshot grading.** A run's `result_code` is a fixed fact, but its
+   *grade* is relative to the [`ExpectedTestResult`](#expectedtestresult)
+   in force at recording time — which changes as expectations are
+   edited. Each verdict pins its own `expectation_id`, so a re-grade
+   never rewrites history. A column on the run would have nowhere to
+   record *which* expectation it was graded against.
+3. **Matrix-cell identity.** Membership in a `TestMatrixRun` is a
+   property of the cell (`TestVerdict.matrix_run_id`), not of the run.
+   The redesign deliberately kept `verdict` and matrix membership off
+   `test_runs` so a `TestRun` stays a clean, reusable execution record.
+
+The verdict's *lifecycle* (pending vs. recorded) is likewise derived
+from `TestRun.lifecycle` rather than duplicated — one source of truth
+for "is it done yet". See
+[`finalize_verdict_for_run`](#persistence-helpers), which promotes a
+pending verdict once its run finishes.
 
 ### Verdict computation
 
@@ -646,6 +677,52 @@ is by convention, not by referential integrity. Treat the catalog
 tables (`projects`, `versions`, `os_entries`, `compilers`) as the
 *current* truth and the `Test` string columns as the *historical*
 truth.
+
+### Paired `(name, version)` columns
+
+The platform coordinate stores each environment fact as **two columns** —
+`os` / `os_version`, `distro` / `distro_version`, `flavor` /
+`flavor_version`, `compiler` / `compiler_version` — rather than one
+merged string (`compiler = "gcc-11"`) or one JSON map. This is
+deliberate, and the deciding factor is that **the version is an
+independent query/grouping axis, not a decorative suffix on the name**:
+
+- [rollup](concepts.md#rollup) treats `compiler` and `compiler_version`
+  (and `distro` / `distro_version`) as **separate dimensions** and
+  computes Cartesian merge groups across them — "group by distro,
+  columns by version" (Ubuntu 22.04 vs 24.04; gcc-11 vs gcc-12) needs
+  the two axes split. The matrix expander does the same: name and
+  version cross-product within an axis (see
+  [test_matrix_dimensions.md](test_matrix_dimensions.md#axes-os-distro-flavor)).
+- Filtering by the name alone ("all gcc regardless of version") or the
+  version alone is plain column equality — no `LIKE`, no string surgery,
+  and it indexes.
+- No delimiter ambiguity. Versions carry the natural separators
+  (`gcc-11.2.0`, `Ubuntu 22.04 LTS`, `clang-17`), so a merged string
+  would need an escaping convention or a brittle "split on the last
+  dash/space" rule. The combined-input forms accepted by the CLI/matrix
+  *are* parsed back into `(name, version)` precisely so the stored form
+  stays split.
+- Per-field nullability semantics stay explicit: `os_version` is
+  Windows/MacOS-only, `distro_version` is Linux-only,  `flavor_version`
+  falls back to `distro_version`. Those rules read more clearly as
+  documented columns than as the presence/absence of a substring.
+
+`coord_hash` is **not** a reason either way: it hashes canonical JSON, so
+`{"compiler":"gcc","compiler_version":"11"}` is exactly as stable a
+dedup key as `{"compiler":"gcc-11"}` would be. Identity is preserved
+under either layout; the rollup/filter ergonomics above are what tip the
+decision to separate columns.
+
+Note the deliberate asymmetry with `resolved_deps` /
+`versions.resolved_dependencies`, which *do* use a merged
+name→version map. Dependency pins are looked up as a whole
+("which omnetpp did this run resolve?") and are never an
+independent grouping axis in the rollup, so the map form is the right
+shape there. The platform coordinate is the opposite case. Two idioms,
+each matched to how the data is queried — `arch` (no version) and
+Linux's NULL `os_version` are fine instances of the same
+"only carry what's queried" principle.
 
 ### Cascade behaviour
 

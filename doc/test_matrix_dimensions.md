@@ -232,6 +232,14 @@ The platform dimension is a three-level hierarchy — ``os`` ⊃ ``distro``
 cells (the levels do **not** cross-multiply); within an axis, name and
 version cross-product the same way the compiler axis does.
 
+Name and version are stored as **separate columns** (`distro` /
+`distro_version`, …), not merged into one string, precisely because they
+cross-product independently here and group independently in the
+[rollup](concepts.md#rollup). See [Paired `(name, version)`
+columns](data_model.md#paired-name-version-columns) for the full
+rationale. Combined inputs like `"Ubuntu 24.04"` are accepted for
+convenience but are parsed back into `(name, version)` before storage.
+
 The registry in [`opp_ci/platforms.py`](../opp_ci/platforms.py) maps
 each distro to its OS and each flavor to its parent distro, so a
 matrix that names only the most specific level still picks up the right
