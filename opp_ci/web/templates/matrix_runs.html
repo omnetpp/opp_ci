@@ -11,7 +11,7 @@
 
 <form method="get" action="/test-matrix-runs" class="filters filters-stacked">
     <div class="filter-grid">
-        {{ f.sel(filters, "project", "Project", options.project) }}
+        {{ f.combo(filters, "project", "Project", options.project) }}
         <label class="filter-field"><span>Matrix</span>
             <select name="matrix">
                 <option value="">Any</option>
@@ -20,9 +20,14 @@
         </label>
         {{ f.sel(filters, "trigger", "Trigger", options.trigger) }}
         {{ f.txt(filters, "ref", "Ref", "contains…") }}
+        {{ f.txt(filters, "github_owner", "GitHub owner", "contains…") }}
+        {{ f.txt(filters, "github_repo", "GitHub repo", "contains…") }}
+        {{ f.txt(filters, "github_commit_sha", "Commit", "contains…") }}
+        {{ f.txt(filters, "github_pr_number", "PR #", "contains…") }}
         {{ f.sel(filters, "verdict", "Verdict", options.verdict) }}
         {{ f.sel(filters, "actual", "Actual", options.actual) }}
         {{ f.sel(filters, "state", "State", options.state) }}
+        {% for param, label, control in axes %}{% if control == "combo" %}{{ f.combo(filters, param, label, options[param]) }}{% else %}{{ f.sel(filters, param, label, options[param]) }}{% endif %}{% endfor %}
         {{ f.date(filters, "since", "Since") }}
         {{ f.date(filters, "until", "Until") }}
     </div>

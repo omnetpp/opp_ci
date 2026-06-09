@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, FastAPI, Form, Request, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
-from sqlalchemy import and_, exists, false, func, select
+from sqlalchemy import and_, cast, exists, false, func, select, String, text
 from sqlalchemy.orm import aliased, selectinload
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -297,12 +297,114 @@ def _distinct_options(session, *columns):
     return opts
 
 
+def apply_str_filter(query, col, value, mode="eq"):
+    """Append one string predicate to `query` per the control taxonomy.
+
+    `mode` selects the match semantics behind each filter control:
+      * "eq"       — equality select (bounded categoricals)
+      * "contains" — typeable combo / text-contains (substring, ILIKE %v%)
+      * "prefix"   — typeable combo for ordered `*_version` fields (ILIKE v%),
+                     so `6` matches `6.x` but not `16.x`.
+    An empty/None value is a no-op (the filter is simply not applied).
+    """
+    if not value:
+        return query
+    if mode == "contains":
+        return query.where(col.ilike(f"%{value}%"))
+    if mode == "prefix":
+        return query.where(col.ilike(f"{value}%"))
+    return query.where(col == value)
+
+
+def apply_dep_filter(query, col, value):
+    """Substring filter over a JSON dependency column (`resolved_deps`,
+    `dependency_names`). Matches the serialized JSON text, so a bare version
+    (`6.4.0`) or a dependency name (`omnetpp`) both hit. First-cut blunt
+    instrument — see plan/pending/web-filter-controls-and-completeness.md."""
+    if not value:
+        return query
+    return query.where(cast(col, String).ilike(f"%{value}%"))
+
+
 # Status vocabulary shared by the run filters (lifecycle + outcome values,
 # matching opp_ci.persistence.status_filter).
 _RUN_STATUS_OPTIONS = [
     "PASS", "FAIL", "ERROR", "SKIPPED",
     "queued", "running", "finished", "cancelled", "timed_out",
 ]
+
+
+# Matrix coordinate axes. A matrix stores its axes inside the `config` JSON
+# (as lists) rather than as columns; they're filtered via a correlated
+# EXISTS over that JSON (see matrix_axis_sql_filter). Each tuple is
+# (filter param, config key, label, control), where control is "sel" (exact
+# membership, bounded categorical) or "combo" (substring membership, for the
+# open-ended version axes). Shared by the matrices and matrix-runs pages.
+_MATRIX_AXES = [
+    ("kind", "kinds", "Kind", "sel"),
+    ("mode", "modes", "Mode", "sel"),
+    ("version", "versions", "Version", "combo"),
+    ("os", "os", "OS", "sel"),
+    ("os_version", "os_version", "OS version", "combo"),
+    ("distro", "distro", "Distro", "sel"),
+    ("distro_version", "distro_version", "Distro version", "combo"),
+    ("flavor", "flavor", "Flavor", "sel"),
+    ("flavor_version", "flavor_version", "Flavor version", "combo"),
+    ("compiler", "compiler", "Compiler", "sel"),
+    ("compiler_version", "compiler_version", "Compiler version", "combo"),
+    ("arch", "arch", "Arch", "sel"),
+    ("isolation", "isolation", "Isolation", "sel"),
+    ("toolchain", "toolchain", "Toolchain", "sel"),
+]
+
+
+def matrix_axis_options(matrices):
+    """Sorted distinct values per matrix axis, gathered across `matrices`'
+    `config` lists. Keyed by filter param — feeds the axis dropdowns/combos."""
+    opts = {}
+    for param, ckey, _label, _control in _MATRIX_AXES:
+        opts[param] = sorted({
+            v for m in matrices for v in (m.config.get(ckey) or [])
+        })
+    return opts
+
+
+def matrix_axis_sql_filter(query, axis_filters, dialect):
+    """Add the matrix-axis filters to `query` as correlated EXISTS subqueries
+    over the `test_matrices.config` JSON.
+
+    Doing this in SQL (rather than a Python post-filter) is what makes the
+    filter correct under LIMIT: SQL evaluates WHERE before LIMIT, so a page
+    can't truncate rows out before the axis filter has a chance to look at
+    them. Each axis value in `config` is a JSON list, so we test membership;
+    "sel" axes match exactly (case-sensitive, like the old `val in list`),
+    "combo" axes match a case-insensitive substring. The JSON list is
+    expanded per dialect — SQLite `json_each` vs Postgres
+    `json_array_elements_text` — since the two have no common operator for
+    "is `x` an element of this JSON array". `ckey` comes from the fixed
+    `_MATRIX_AXES` table, never user input, so interpolating it into the JSON
+    path is safe; the compared value is always a bound parameter."""
+    for param, ckey, _label, control in _MATRIX_AXES:
+        val = axis_filters.get(param)
+        if not val:
+            continue
+        bind = f"axis_{param}"
+        if dialect == "postgresql":
+            op = "ILIKE" if control == "combo" else "="
+            pat = f"%{val}%" if control == "combo" else val
+            clause = text(
+                f"EXISTS (SELECT 1 FROM json_array_elements_text("
+                f"test_matrices.config -> '{ckey}') AS _ax(v) WHERE _ax.v {op} :{bind})"
+            )
+        else:  # sqlite (and the default) — LIKE is case-insensitive for ASCII
+            op = "LIKE" if control == "combo" else "="
+            pat = f"%{val}%" if control == "combo" else val
+            clause = text(
+                f"EXISTS (SELECT 1 FROM json_each(test_matrices.config, '$.{ckey}') "
+                f"WHERE value {op} :{bind})"
+            )
+        query = query.where(clause.bindparams(**{bind: pat}))
+    return query
 
 
 @web_router.get("/test-runs", response_class=HTMLResponse)
@@ -313,11 +415,25 @@ def runs_list(
     kind: str = Query(default=None),
     mode: str = Query(default=None),
     os: str = Query(default=None, alias="os"),
+    os_version: str = Query(default=None),
     distro: str = Query(default=None),
+    distro_version: str = Query(default=None),
+    flavor: str = Query(default=None),
+    flavor_version: str = Query(default=None),
+    arch: str = Query(default=None),
     compiler: str = Query(default=None),
+    compiler_version: str = Query(default=None),
+    isolation: str = Query(default=None),
+    toolchain: str = Query(default=None),
+    opp_file: str = Query(default=None),
+    dep: str = Query(default=None),
     git_ref: str = Query(default=None),
     version: str = Query(default=None),
     worker: str = Query(default=None),
+    trigger: str = Query(default=None),
+    github_owner: str = Query(default=None),
+    github_repo: str = Query(default=None),
+    github_pr_number: str = Query(default=None),
     status: str = Query(default=None),
     since: str = Query(default=None),
     until: str = Query(default=None),
@@ -325,30 +441,42 @@ def runs_list(
 ):
     session = SessionLocal()
     try:
+        # Left-join the parent matrix run so its trigger / GitHub context can
+        # be filtered; outer so standalone runs (matrix_run_id NULL) still
+        # appear when no matrix-run filter is active.
         query = (
             select(TestRun)
             .join(Test, TestRun.test_id == Test.id)
+            .outerjoin(TestMatrixRun, TestRun.matrix_run_id == TestMatrixRun.id)
             .order_by(TestRun.id.desc())
             .limit(limit)
         )
-        if project:
-            query = query.where(Test.project == project)
-        if kind:
-            query = query.where(Test.kind == kind)
-        if mode:
-            query = query.where(Test.mode == mode)
-        if os:
-            query = query.where(Test.os == os)
-        if distro:
-            query = query.where(Test.distro == distro)
-        if compiler:
-            query = query.where(Test.compiler == compiler)
+        query = apply_str_filter(query, Test.project, project, "contains")
+        query = apply_str_filter(query, Test.kind, kind)
+        query = apply_str_filter(query, Test.mode, mode)
+        query = apply_str_filter(query, Test.os, os)
+        query = apply_str_filter(query, Test.os_version, os_version, "prefix")
+        query = apply_str_filter(query, Test.distro, distro)
+        query = apply_str_filter(query, Test.distro_version, distro_version, "prefix")
+        query = apply_str_filter(query, Test.flavor, flavor)
+        query = apply_str_filter(query, Test.flavor_version, flavor_version, "prefix")
+        query = apply_str_filter(query, Test.arch, arch)
+        query = apply_str_filter(query, Test.compiler, compiler)
+        query = apply_str_filter(query, Test.compiler_version, compiler_version, "prefix")
+        query = apply_str_filter(query, Test.isolation, isolation)
+        query = apply_str_filter(query, Test.toolchain, toolchain)
+        query = apply_str_filter(query, Test.opp_file, opp_file, "contains")
+        query = apply_dep_filter(query, TestRun.resolved_deps, dep)
+        query = apply_str_filter(query, TestMatrixRun.trigger, trigger)
+        query = apply_str_filter(query, TestMatrixRun.github_owner, github_owner, "contains")
+        query = apply_str_filter(query, TestMatrixRun.github_repo, github_repo, "contains")
+        query = apply_str_filter(
+            query, cast(TestMatrixRun.github_pr_number, String), github_pr_number, "contains")
         if git_ref:
             query = query.where(
                 (TestRun.git_ref == git_ref) | (TestRun.commit_sha.startswith(git_ref))
             )
-        if version:
-            query = query.where(TestRun.version == version)
+        query = apply_str_filter(query, TestRun.version, version, "prefix")
         if worker and worker.isdigit():
             query = query.where(TestRun.worker_id == int(worker))
         if status:
@@ -375,8 +503,11 @@ def runs_list(
 
         runs = session.execute(query).scalars().all()
         options = _distinct_options(
-            session, Test.project, Test.kind, Test.mode, Test.os, Test.distro,
-            Test.compiler, TestRun.version,
+            session, Test.project, Test.kind, Test.mode, Test.os, Test.os_version,
+            Test.distro, Test.distro_version, Test.flavor, Test.flavor_version,
+            Test.arch, Test.compiler, Test.compiler_version, Test.isolation,
+            Test.toolchain, Test.opp_file, TestRun.version,
+            TestMatrixRun.trigger, TestMatrixRun.github_owner, TestMatrixRun.github_repo,
         )
         options["status"] = _RUN_STATUS_OPTIONS
         workers = session.execute(select(Worker).order_by(Worker.name)).scalars().all()
@@ -386,9 +517,16 @@ def runs_list(
             "workers": workers,
             "filters": {
                 "project": project or "", "kind": kind or "", "mode": mode or "",
-                "os": os or "", "distro": distro or "", "compiler": compiler or "",
-                "git_ref": git_ref or "", "version": version or "",
-                "worker": worker or "", "status": status or "",
+                "os": os or "", "os_version": os_version or "",
+                "distro": distro or "", "distro_version": distro_version or "",
+                "flavor": flavor or "", "flavor_version": flavor_version or "",
+                "arch": arch or "", "compiler": compiler or "",
+                "compiler_version": compiler_version or "", "isolation": isolation or "",
+                "toolchain": toolchain or "", "opp_file": opp_file or "",
+                "dep": dep or "", "git_ref": git_ref or "", "version": version or "",
+                "worker": worker or "", "trigger": trigger or "",
+                "github_owner": github_owner or "", "github_repo": github_repo or "",
+                "github_pr_number": github_pr_number or "", "status": status or "",
                 "since": since or "", "until": until or "",
             },
             **_template_globals(request, current_user),
@@ -416,6 +554,7 @@ def results_page(
     isolation: str = Query(default=None),
     toolchain: str = Query(default=None),
     opp_file: str = Query(default=None),
+    dep: str = Query(default=None),
     status: str = Query(default=None),
     run_ids: str = Query(default=None),
     view: str = Query(default="summary"),
@@ -437,36 +576,22 @@ def results_page(
         if run_ids:
             ids = [int(x) for x in run_ids.split(",") if x.strip().isdigit()]
             query = query.where(TestRun.id.in_(ids))
-        if project:
-            query = query.where(Test.project == project)
-        if kind:
-            query = query.where(Test.kind == kind)
-        if mode:
-            query = query.where(Test.mode == mode)
-        if os:
-            query = query.where(Test.os == os)
-        if os_version:
-            query = query.where(Test.os_version == os_version)
-        if distro:
-            query = query.where(Test.distro == distro.lower())
-        if distro_version:
-            query = query.where(Test.distro_version == distro_version)
-        if flavor:
-            query = query.where(Test.flavor == flavor.lower())
-        if flavor_version:
-            query = query.where(Test.flavor_version == flavor_version)
-        if compiler:
-            query = query.where(Test.compiler == compiler)
-        if compiler_version:
-            query = query.where(Test.compiler_version == compiler_version)
-        if arch:
-            query = query.where(Test.arch == arch)
-        if isolation:
-            query = query.where(Test.isolation == isolation)
-        if toolchain:
-            query = query.where(Test.toolchain == toolchain)
-        if opp_file:
-            query = query.where(Test.opp_file == opp_file)
+        query = apply_str_filter(query, Test.project, project, "contains")
+        query = apply_str_filter(query, Test.kind, kind)
+        query = apply_str_filter(query, Test.mode, mode)
+        query = apply_str_filter(query, Test.os, os)
+        query = apply_str_filter(query, Test.os_version, os_version, "prefix")
+        query = apply_str_filter(query, Test.distro, distro)
+        query = apply_str_filter(query, Test.distro_version, distro_version, "prefix")
+        query = apply_str_filter(query, Test.flavor, flavor)
+        query = apply_str_filter(query, Test.flavor_version, flavor_version, "prefix")
+        query = apply_str_filter(query, Test.compiler, compiler)
+        query = apply_str_filter(query, Test.compiler_version, compiler_version, "prefix")
+        query = apply_str_filter(query, Test.arch, arch)
+        query = apply_str_filter(query, Test.isolation, isolation)
+        query = apply_str_filter(query, Test.toolchain, toolchain)
+        query = apply_str_filter(query, Test.opp_file, opp_file, "contains")
+        query = apply_dep_filter(query, Test.resolved_deps, dep)
         if status:
             try:
                 query = status_filter(query, status)
@@ -491,6 +616,13 @@ def results_page(
         summaries = rollup_runs(runs, grouping=grouping) if view == "summary" else None
         extra_dims = visible_extra_dims(summaries) if summaries else []
 
+        options = _distinct_options(
+            session, Test.project, Test.kind, Test.mode, Test.os, Test.os_version,
+            Test.distro, Test.distro_version, Test.flavor, Test.flavor_version,
+            Test.arch, Test.compiler, Test.compiler_version, Test.isolation,
+            Test.toolchain, Test.opp_file,
+        )
+        options["status"] = ["PASS", "FAIL", "ERROR", "SKIPPED"]
         return templates.TemplateResponse(request, "results.html", {
             "runs": runs,
             "summaries": summaries,
@@ -498,22 +630,17 @@ def results_page(
             "view": view,
             "grouping": grouping,
             "show_obsolete": show_obsolete,
-            "filter_project": project or "",
-            "filter_kind": kind or "",
-            "filter_mode": mode or "",
-            "filter_os": os or "",
-            "filter_os_version": os_version or "",
-            "filter_distro": distro or "",
-            "filter_distro_version": distro_version or "",
-            "filter_flavor": flavor or "",
-            "filter_flavor_version": flavor_version or "",
-            "filter_compiler": compiler or "",
-            "filter_compiler_version": compiler_version or "",
-            "filter_arch": arch or "",
-            "filter_isolation": isolation or "",
-            "filter_toolchain": toolchain or "",
-            "filter_opp_file": opp_file or "",
-            "filter_status": status or "",
+            "options": options,
+            "filters": {
+                "project": project or "", "kind": kind or "", "mode": mode or "",
+                "os": os or "", "os_version": os_version or "",
+                "distro": distro or "", "distro_version": distro_version or "",
+                "flavor": flavor or "", "flavor_version": flavor_version or "",
+                "compiler": compiler or "", "compiler_version": compiler_version or "",
+                "arch": arch or "", "isolation": isolation or "",
+                "toolchain": toolchain or "", "opp_file": opp_file or "",
+                "dep": dep or "", "status": status or "",
+            },
             **_template_globals(request, current_user),
         })
     finally:
@@ -593,6 +720,8 @@ def tests_list(
     compiler_version: str = Query(default=None),
     isolation: str = Query(default=None),
     toolchain: str = Query(default=None),
+    opp_file: str = Query(default=None),
+    dep: str = Query(default=None),
     status: str = Query(default=None),
     include_anonymous: bool = Query(default=False),
     limit: int = Query(default=200),
@@ -605,36 +734,23 @@ def tests_list(
         query = select(Test).order_by(Test.name.is_(None), Test.name, Test.id.desc())
         if not include_anonymous:
             query = query.where(Test.name.isnot(None))
-        if name:
-            query = query.where(Test.name.ilike(f"%{name}%"))
-        if project:
-            query = query.where(Test.project == project)
-        if kind:
-            query = query.where(Test.kind == kind)
-        if mode:
-            query = query.where(Test.mode == mode)
-        if os:
-            query = query.where(Test.os == os)
-        if os_version:
-            query = query.where(Test.os_version == os_version)
-        if distro:
-            query = query.where(Test.distro == distro)
-        if distro_version:
-            query = query.where(Test.distro_version == distro_version)
-        if flavor:
-            query = query.where(Test.flavor == flavor)
-        if flavor_version:
-            query = query.where(Test.flavor_version == flavor_version)
-        if arch:
-            query = query.where(Test.arch == arch)
-        if compiler:
-            query = query.where(Test.compiler == compiler)
-        if compiler_version:
-            query = query.where(Test.compiler_version == compiler_version)
-        if isolation:
-            query = query.where(Test.isolation == isolation)
-        if toolchain:
-            query = query.where(Test.toolchain == toolchain)
+        query = apply_str_filter(query, Test.name, name, "contains")
+        query = apply_str_filter(query, Test.project, project, "contains")
+        query = apply_str_filter(query, Test.kind, kind)
+        query = apply_str_filter(query, Test.mode, mode)
+        query = apply_str_filter(query, Test.os, os)
+        query = apply_str_filter(query, Test.os_version, os_version, "prefix")
+        query = apply_str_filter(query, Test.distro, distro)
+        query = apply_str_filter(query, Test.distro_version, distro_version, "prefix")
+        query = apply_str_filter(query, Test.flavor, flavor)
+        query = apply_str_filter(query, Test.flavor_version, flavor_version, "prefix")
+        query = apply_str_filter(query, Test.arch, arch)
+        query = apply_str_filter(query, Test.compiler, compiler)
+        query = apply_str_filter(query, Test.compiler_version, compiler_version, "prefix")
+        query = apply_str_filter(query, Test.isolation, isolation)
+        query = apply_str_filter(query, Test.toolchain, toolchain)
+        query = apply_str_filter(query, Test.opp_file, opp_file, "contains")
+        query = apply_dep_filter(query, Test.resolved_deps, dep)
         tests = session.execute(query.limit(limit)).scalars().all()
 
         # Last-run status per test (N+1, mirrors projects_list; the page is
@@ -657,7 +773,7 @@ def tests_list(
             session, Test.project, Test.kind, Test.mode, Test.os, Test.os_version,
             Test.distro, Test.distro_version, Test.flavor, Test.flavor_version,
             Test.arch, Test.compiler, Test.compiler_version, Test.isolation,
-            Test.toolchain,
+            Test.toolchain, Test.opp_file,
         )
         options["status"] = [
             "PASS", "FAIL", "ERROR", "SKIPPED",
@@ -675,7 +791,8 @@ def tests_list(
                 "flavor": flavor or "", "flavor_version": flavor_version or "",
                 "arch": arch or "", "compiler": compiler or "",
                 "compiler_version": compiler_version or "", "isolation": isolation or "",
-                "toolchain": toolchain or "", "status": status or "",
+                "toolchain": toolchain or "", "opp_file": opp_file or "",
+                "dep": dep or "", "status": status or "",
             },
             "include_anonymous": include_anonymous,
             **_template_globals(request, current_user),
@@ -961,12 +1078,22 @@ def projects_list(
     request: Request,
     current_user: User = Depends(require_user()),
     name: str = Query(default=None),
+    opp_env_name: str = Query(default=None),
+    github_owner: str = Query(default=None),
+    github_repo: str = Query(default=None),
+    git_url: str = Query(default=None),
+    dep: str = Query(default=None),
+    status: str = Query(default=None),
 ):
     session = SessionLocal()
     try:
         query = select(Project).order_by(Project.name)
-        if name:
-            query = query.where(Project.name.ilike(f"%{name}%"))
+        query = apply_str_filter(query, Project.name, name, "contains")
+        query = apply_str_filter(query, Project.opp_env_name, opp_env_name, "contains")
+        query = apply_str_filter(query, Project.github_owner, github_owner, "contains")
+        query = apply_str_filter(query, Project.github_repo, github_repo, "contains")
+        query = apply_str_filter(query, Project.git_url, git_url, "contains")
+        query = apply_dep_filter(query, Project.dependency_names, dep)
         projects = session.execute(query).scalars().all()
 
         run_counts = {}
@@ -987,12 +1114,23 @@ def projects_list(
                 ).order_by(TestRun.id.desc()).limit(1)
             ).scalar_one_or_none()
             last_status[p.name] = last_run.effective_status if last_run else None
+        if status:
+            projects = [p for p in projects if last_status.get(p.name) == status]
 
+        options = _distinct_options(
+            session, Project.opp_env_name, Project.github_owner, Project.github_repo,
+        )
+        options["status"] = ["PASS", "FAIL", "ERROR", "SKIPPED"]
         return templates.TemplateResponse(request, "projects.html", {
             "projects": projects,
             "run_counts": run_counts,
             "last_status": last_status,
-            "filter_name": name or "",
+            "options": options,
+            "filters": {
+                "name": name or "", "opp_env_name": opp_env_name or "",
+                "github_owner": github_owner or "", "github_repo": github_repo or "",
+                "git_url": git_url or "", "dep": dep or "", "status": status or "",
+            },
             **_template_globals(request, current_user),
         })
     finally:
@@ -1212,54 +1350,48 @@ def matrices_list(
     current_user: User = Depends(require_user()),
     name: str = Query(default=None),
     project: str = Query(default=None),
+    opp_file: str = Query(default=None),
+    since: str = Query(default=None),
+    until: str = Query(default=None),
     include_anonymous: bool = Query(default=False),
     error: str = Query(default=None),
 ):
     session = SessionLocal()
     try:
-        # A matrix stores its coordinate axes inside the `config` JSON rather
-        # than as columns, so every axis is offered as a dropdown built from
-        # the values present across all matrices and filtered in Python. Each
-        # tuple is (filter param, config key, label).
-        axes = [
-            ("kind", "kinds", "Kind"),
-            ("mode", "modes", "Mode"),
-            ("version", "versions", "Version"),
-            ("os", "os", "OS"),
-            ("os_version", "os_version", "OS version"),
-            ("distro", "distro", "Distro"),
-            ("distro_version", "distro_version", "Distro version"),
-            ("flavor", "flavor", "Flavor"),
-            ("flavor_version", "flavor_version", "Flavor version"),
-            ("compiler", "compiler", "Compiler"),
-            ("compiler_version", "compiler_version", "Compiler version"),
-            ("arch", "arch", "Arch"),
-            ("isolation", "isolation", "Isolation"),
-            ("toolchain", "toolchain", "Toolchain"),
-        ]
-        axis_filters = {p: (request.query_params.get(p) or "") for p, _, _ in axes}
+        # Matrix axes live in `config` JSON, not columns, so they're offered
+        # as dropdowns/combos built from the values present across all
+        # matrices and filtered in Python (see _MATRIX_AXES).
+        axis_filters = {p: (request.query_params.get(p) or "")
+                        for p, _, _, _ in _MATRIX_AXES}
 
         all_matrices = session.execute(select(TestMatrix)).scalars().all()
-        options = {"project": sorted({m.project for m in all_matrices if m.project})}
-        for param, ckey, _ in axes:
-            options[param] = sorted({
-                v for m in all_matrices for v in (m.config.get(ckey) or [])
-            })
+        options = matrix_axis_options(all_matrices)
+        options["project"] = sorted({m.project for m in all_matrices if m.project})
+        options["opp_file"] = sorted({m.opp_file for m in all_matrices if m.opp_file})
 
         # Named matrices only by default; the anonymous ad-hoc matrices are
         # pulled in with ?include_anonymous=1 (mirrors the Tests catalog).
         query = select(TestMatrix).order_by(TestMatrix.name.is_(None), TestMatrix.id)
         if not include_anonymous:
             query = query.where(TestMatrix.name.isnot(None))
-        if name:
-            query = query.where(TestMatrix.name.ilike(f"%{name}%"))
-        if project:
-            query = query.where(TestMatrix.project == project)
+        query = apply_str_filter(query, TestMatrix.name, name, "contains")
+        query = apply_str_filter(query, TestMatrix.project, project, "contains")
+        query = apply_str_filter(query, TestMatrix.opp_file, opp_file, "contains")
+        if since:
+            try:
+                query = query.where(
+                    TestMatrix.created_at >= datetime.datetime.fromisoformat(since)
+                )
+            except ValueError:
+                pass
+        if until:
+            try:
+                end = datetime.datetime.fromisoformat(until) + datetime.timedelta(days=1)
+                query = query.where(TestMatrix.created_at < end)
+            except ValueError:
+                pass
+        query = matrix_axis_sql_filter(query, axis_filters, session.bind.dialect.name)
         matrices = session.execute(query).scalars().all()
-        for param, ckey, _ in axes:
-            val = axis_filters[param]
-            if val:
-                matrices = [m for m in matrices if val in (m.config.get(ckey) or [])]
 
         run_counts = {}
         for m in matrices:
@@ -1274,8 +1406,12 @@ def matrices_list(
             "matrices": matrices,
             "run_counts": run_counts,
             "options": options,
-            "axes": [(p, label) for p, _, label in axes],
-            "filters": {"name": name or "", "project": project or "", **axis_filters},
+            "axes": [(p, label, control) for p, _, label, control in _MATRIX_AXES],
+            "filters": {
+                "name": name or "", "project": project or "",
+                "opp_file": opp_file or "", "since": since or "", "until": until or "",
+                **axis_filters,
+            },
             "include_anonymous": include_anonymous,
             "error": error,
             **_template_globals(request, current_user),
@@ -1554,6 +1690,10 @@ def matrix_runs_list(
     matrix: str = Query(default=None),
     trigger: str = Query(default=None),
     ref: str = Query(default=None),
+    github_owner: str = Query(default=None),
+    github_repo: str = Query(default=None),
+    github_commit_sha: str = Query(default=None),
+    github_pr_number: str = Query(default=None),
     verdict: str = Query(default=None),
     actual: str = Query(default=None),
     state: str = Query(default=None),
@@ -1564,20 +1704,28 @@ def matrix_runs_list(
     """Index of recent TestMatrixRun rows with their rollup verdict."""
     session = SessionLocal()
     try:
+        # Matrix-axis filters apply to the joined matrix's `config` JSON, so
+        # they're collected here and applied in Python after the SQL query.
+        axis_filters = {p: (request.query_params.get(p) or "")
+                        for p, _, _, _ in _MATRIX_AXES}
+
         query = (
             select(TestMatrixRun, TestMatrix)
             .join(TestMatrix, TestMatrixRun.matrix_id == TestMatrix.id)
             .order_by(TestMatrixRun.id.desc())
             .limit(limit)
         )
-        if project:
-            query = query.where(TestMatrix.project == project)
+        query = apply_str_filter(query, TestMatrix.project, project, "contains")
         if matrix and matrix.isdigit():
             query = query.where(TestMatrixRun.matrix_id == int(matrix))
-        if trigger:
-            query = query.where(TestMatrixRun.trigger == trigger)
-        if ref:
-            query = query.where(TestMatrixRun.ref.ilike(f"%{ref}%"))
+        query = apply_str_filter(query, TestMatrixRun.trigger, trigger)
+        query = apply_str_filter(query, TestMatrixRun.ref, ref, "contains")
+        query = apply_str_filter(query, TestMatrixRun.github_owner, github_owner, "contains")
+        query = apply_str_filter(query, TestMatrixRun.github_repo, github_repo, "contains")
+        query = apply_str_filter(
+            query, TestMatrixRun.github_commit_sha, github_commit_sha, "contains")
+        query = apply_str_filter(
+            query, cast(TestMatrixRun.github_pr_number, String), github_pr_number, "contains")
         if verdict:
             try:
                 query = query.where(TestMatrixRun.verdict == TestVerdictKind(verdict))
@@ -1606,9 +1754,19 @@ def matrix_runs_list(
                 query = query.where(TestMatrixRun.created_at < end)
             except ValueError:
                 pass
+        # Matrix-axis filtering in SQL (EXISTS over the joined matrix's
+        # config JSON), so it composes correctly with the LIMIT above.
+        query = matrix_axis_sql_filter(query, axis_filters, session.bind.dialect.name)
 
         rows = session.execute(query).all()
-        options = _distinct_options(session, TestMatrix.project, TestMatrixRun.trigger)
+
+        all_matrices = session.execute(select(TestMatrix)).scalars().all()
+        options = matrix_axis_options(all_matrices)
+        options["project"] = sorted({m.project for m in all_matrices if m.project})
+        options.update(_distinct_options(
+            session, TestMatrixRun.trigger, TestMatrixRun.github_owner,
+            TestMatrixRun.github_repo,
+        ))
         options["verdict"] = ["EXPECTED", "UNEXPECTED", "UNKNOWN"]
         options["actual"] = ["PASS", "FAIL", "ERROR", "SKIPPED"]
         options["state"] = ["completed", "pending"]
@@ -1618,14 +1776,19 @@ def matrix_runs_list(
         return templates.TemplateResponse(request, "matrix_runs.html", {
             "rows": rows,
             "options": options,
+            "axes": [(p, label, control) for p, _, label, control in _MATRIX_AXES],
             "matrices_opt": [
                 {"id": mid, "name": mname or f"(anonymous #{mid})"}
                 for mid, mname in matrices_opt
             ],
             "filters": {
                 "project": project or "", "matrix": matrix or "", "trigger": trigger or "",
-                "ref": ref or "", "verdict": verdict or "", "actual": actual or "",
-                "state": state or "", "since": since or "", "until": until or "",
+                "ref": ref or "", "github_owner": github_owner or "",
+                "github_repo": github_repo or "", "github_commit_sha": github_commit_sha or "",
+                "github_pr_number": github_pr_number or "", "verdict": verdict or "",
+                "actual": actual or "", "state": state or "",
+                "since": since or "", "until": until or "",
+                **axis_filters,
             },
             **_template_globals(request, current_user),
         })
@@ -1838,19 +2001,18 @@ def os_list(
     session = SessionLocal()
     try:
         query = select(OS).order_by(OS.name, OS.version)
-        if name:
-            query = query.where(OS.name.ilike(f"%{name}%"))
-        if version:
-            query = query.where(OS.version.ilike(f"%{version}%"))
-        if arch:
-            query = query.where(OS.arch.ilike(f"%{arch}%"))
+        query = apply_str_filter(query, OS.name, name)
+        query = apply_str_filter(query, OS.version, version, "prefix")
+        query = apply_str_filter(query, OS.arch, arch)
         os_entries = session.execute(query).scalars().all()
 
+        options = _distinct_options(session, OS.name, OS.version, OS.arch)
         return templates.TemplateResponse(request, "os.html", {
             "os_entries": os_entries,
-            "filter_name": name or "",
-            "filter_version": version or "",
-            "filter_arch": arch or "",
+            "options": options,
+            "filters": {
+                "name": name or "", "version": version or "", "arch": arch or "",
+            },
             **_template_globals(request, current_user),
         })
     finally:
@@ -1913,16 +2075,15 @@ def compilers_list(
     session = SessionLocal()
     try:
         query = select(Compiler).order_by(Compiler.name, Compiler.version)
-        if name:
-            query = query.where(Compiler.name.ilike(f"%{name}%"))
-        if version:
-            query = query.where(Compiler.version.ilike(f"%{version}%"))
+        query = apply_str_filter(query, Compiler.name, name)
+        query = apply_str_filter(query, Compiler.version, version, "prefix")
         compilers = session.execute(query).scalars().all()
 
+        options = _distinct_options(session, Compiler.name, Compiler.version)
         return templates.TemplateResponse(request, "compilers.html", {
             "compilers": compilers,
-            "filter_name": name or "",
-            "filter_version": version or "",
+            "options": options,
+            "filters": {"name": name or "", "version": version or ""},
             **_template_globals(request, current_user),
         })
     finally:

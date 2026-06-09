@@ -16,20 +16,22 @@
 <form class="filters filters-stacked" method="get" action="/tests">
     <div class="filter-grid">
         {{ f.txt(filters, "name", "Name", "contains…") }}
-        {{ f.sel(filters, "project", "Project", options.project) }}
+        {{ f.combo(filters, "project", "Project", options.project) }}
         {{ f.sel(filters, "kind", "Kind", options.kind) }}
         {{ f.sel(filters, "mode", "Mode", options.mode) }}
         {{ f.sel(filters, "os", "OS", options.os) }}
-        {{ f.sel(filters, "os_version", "OS version", options.os_version) }}
+        {{ f.combo(filters, "os_version", "OS version", options.os_version) }}
         {{ f.sel(filters, "distro", "Distro", options.distro) }}
-        {{ f.sel(filters, "distro_version", "Distro version", options.distro_version) }}
+        {{ f.combo(filters, "distro_version", "Distro version", options.distro_version) }}
         {{ f.sel(filters, "flavor", "Flavor", options.flavor) }}
-        {{ f.sel(filters, "flavor_version", "Flavor version", options.flavor_version) }}
+        {{ f.combo(filters, "flavor_version", "Flavor version", options.flavor_version) }}
         {{ f.sel(filters, "arch", "Arch", options.arch) }}
         {{ f.sel(filters, "compiler", "Compiler", options.compiler) }}
-        {{ f.sel(filters, "compiler_version", "Compiler version", options.compiler_version) }}
+        {{ f.combo(filters, "compiler_version", "Compiler version", options.compiler_version) }}
         {{ f.sel(filters, "isolation", "Isolation", options.isolation) }}
         {{ f.sel(filters, "toolchain", "Toolchain", options.toolchain) }}
+        {{ f.combo(filters, "opp_file", "Opp file", options.opp_file) }}
+        {{ f.txt(filters, "dep", "Dependency", "e.g. omnetpp 6.4") }}
         {{ f.sel(filters, "status", "Last status", options.status) }}
         <label class="filter-field checkbox">
             <input type="checkbox" name="include_anonymous" value="true" {{ "checked" if include_anonymous }}>

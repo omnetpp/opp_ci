@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_filters.html" as f %}
 {% block title %}opp_ci — Projects{% endblock %}
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
@@ -6,10 +7,20 @@
     <a href="/projects/new" class="btn btn-success btn-sm">+ New Project</a>
 </div>
 
-<form method="get" action="/projects" class="filters">
-    <input type="text" name="name" value="{{ filter_name }}" placeholder="Name contains…">
-    <button type="submit">Filter</button>
-    {% if filter_name %}<a href="/projects" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+<form method="get" action="/projects" class="filters filters-stacked">
+    <div class="filter-grid">
+        {{ f.txt(filters, "name", "Name", "contains…") }}
+        {{ f.combo(filters, "opp_env_name", "opp_env name", options.opp_env_name) }}
+        {{ f.combo(filters, "github_owner", "GitHub owner", options.github_owner) }}
+        {{ f.combo(filters, "github_repo", "GitHub repo", options.github_repo) }}
+        {{ f.txt(filters, "git_url", "Git URL", "contains…") }}
+        {{ f.txt(filters, "dep", "Dependency", "contains…") }}
+        {{ f.sel(filters, "status", "Last status", options.status) }}
+    </div>
+    <div class="filter-actions">
+        <button type="submit">Filter</button>
+        {% if filters.values()|select|list %}<a href="/projects" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+    </div>
 </form>
 
 {% if projects %}

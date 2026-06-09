@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_filters.html" as f %}
 {% block title %}opp_ci — Compilers{% endblock %}
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
@@ -6,11 +7,15 @@
     <a href="/compilers/new" class="btn btn-success btn-sm">+ New Compiler</a>
 </div>
 
-<form method="get" action="/compilers" class="filters">
-    <input type="text" name="name" value="{{ filter_name }}" placeholder="Name contains…">
-    <input type="text" name="version" value="{{ filter_version }}" placeholder="Version contains…">
-    <button type="submit">Filter</button>
-    {% if filter_name or filter_version %}<a href="/compilers" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+<form method="get" action="/compilers" class="filters filters-stacked">
+    <div class="filter-grid">
+        {{ f.sel(filters, "name", "Name", options.name) }}
+        {{ f.combo(filters, "version", "Version", options.version) }}
+    </div>
+    <div class="filter-actions">
+        <button type="submit">Filter</button>
+        {% if filters.values()|select|list %}<a href="/compilers" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+    </div>
 </form>
 
 {% if compilers %}

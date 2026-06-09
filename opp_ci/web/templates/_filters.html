@@ -23,3 +23,15 @@
 {% for opt in options %}<option value="{{ opt }}" {{ "selected" if filters[name] == opt|string }}>{{ opt }}</option>{% endfor %}
 </select></label>
 {%- endmacro %}
+
+{# Typeable combo: free-text input with a datalist of the values present in
+   the data. The browser surfaces the suggestions; the backend does the real
+   (substring/prefix) match, since the user may type a value not in the list. #}
+{% macro combo(filters, name, label, options, placeholder="type or pick…") -%}
+<label class="filter-field"><span>{{ label }}</span>
+<input type="text" name="{{ name }}" value="{{ filters[name] }}"
+       list="dl-{{ name }}" placeholder="{{ placeholder }}" autocomplete="off">
+<datalist id="dl-{{ name }}">
+{% for opt in options %}<option value="{{ opt }}">{% endfor %}
+</datalist></label>
+{%- endmacro %}

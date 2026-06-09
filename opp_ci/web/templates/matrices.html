@@ -14,8 +14,11 @@
 <form method="get" action="/test-matrices" class="filters filters-stacked">
     <div class="filter-grid">
         {{ f.txt(filters, "name", "Name", "contains…") }}
-        {{ f.sel(filters, "project", "Project", options.project) }}
-        {% for param, label in axes %}{{ f.sel(filters, param, label, options[param]) }}{% endfor %}
+        {{ f.combo(filters, "project", "Project", options.project) }}
+        {% for param, label, control in axes %}{% if control == "combo" %}{{ f.combo(filters, param, label, options[param]) }}{% else %}{{ f.sel(filters, param, label, options[param]) }}{% endif %}{% endfor %}
+        {{ f.combo(filters, "opp_file", "Opp file", options.opp_file) }}
+        {{ f.date(filters, "since", "Since") }}
+        {{ f.date(filters, "until", "Until") }}
         <label class="filter-field checkbox">
             <input type="checkbox" name="include_anonymous" value="true" {{ "checked" if include_anonymous }}>
             include anonymous

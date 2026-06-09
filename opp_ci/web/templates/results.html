@@ -1,47 +1,49 @@
 {% extends "base.html" %}
+{% import "_filters.html" as f %}
 {% block title %}opp_ci — Results{% endblock %}
 {% block content %}
 <h2 style="margin-bottom: 1rem;">Results</h2>
 
-<form class="filters" method="get" action="/results" style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center;">
-    <input type="text" name="project" placeholder="Project" value="{{ filter_project }}">
-    <input type="text" name="kind" placeholder="Kind" value="{{ filter_kind }}">
-    <input type="text" name="mode" placeholder="Mode" value="{{ filter_mode }}">
-    <select name="status">
-        <option value="">All statuses</option>
-        <option value="PASS" {{ "selected" if filter_status == "PASS" }}>PASS</option>
-        <option value="FAIL" {{ "selected" if filter_status == "FAIL" }}>FAIL</option>
-        <option value="ERROR" {{ "selected" if filter_status == "ERROR" }}>ERROR</option>
-    </select>
-    <select name="view">
-        <option value="summary" {{ "selected" if view == "summary" }}>Summary</option>
-        <option value="detailed" {{ "selected" if view == "detailed" }}>Detailed</option>
-    </select>
-    <br style="flex-basis:100%; height:0;">
-    <input type="text" name="os" placeholder="OS (Linux/Windows/MacOS)" value="{{ filter_os }}">
-    <input type="text" name="distro" placeholder="Distro (e.g. ubuntu)" value="{{ filter_distro }}">
-    <input type="text" name="distro_version" placeholder="Distro ver." value="{{ filter_distro_version }}">
-    <input type="text" name="flavor" placeholder="Flavor (e.g. kubuntu)" value="{{ filter_flavor }}">
-    <input type="text" name="compiler" placeholder="Compiler" value="{{ filter_compiler }}">
-    <input type="text" name="compiler_version" placeholder="Compiler ver." value="{{ filter_compiler_version }}">
-    <br style="flex-basis:100%; height:0;">
-    <input type="text" name="os_version" placeholder="OS ver." value="{{ filter_os_version }}">
-    <input type="text" name="flavor_version" placeholder="Flavor ver." value="{{ filter_flavor_version }}">
-    <input type="text" name="arch" placeholder="Arch (e.g. x86_64)" value="{{ filter_arch }}">
-    <input type="text" name="isolation" placeholder="Isolation (none/podman)" value="{{ filter_isolation }}">
-    <input type="text" name="toolchain" placeholder="Toolchain (none/nix)" value="{{ filter_toolchain }}">
-    <input type="text" name="opp_file" placeholder="Opp file" value="{{ filter_opp_file }}">
-    <br style="flex-basis:100%; height:0;">
-    <button type="submit">Filter</button>
-    <label style="font-size:0.85rem;">Grouping:</label>
-    <select name="grouping" style="font-size:0.85rem;" onchange="this.form.submit()">
-        <option value="any" {{ "selected" if grouping == "any" }}>○</option>
-        <option value="cartesian" {{ "selected" if grouping == "cartesian" }}>●</option>
-        <option value="none" {{ "selected" if grouping == "none" }}>-</option>
-    </select>
-    <label style="font-size:0.85rem;" title="Include results overridden by a newer run at the same commit (hidden by default)">
-        <input type="checkbox" name="show_obsolete" value="1" {{ "checked" if show_obsolete }} onchange="this.form.submit()"> Show obsolete
-    </label>
+<form class="filters filters-stacked" method="get" action="/results">
+    <div class="filter-grid">
+        {{ f.combo(filters, "project", "Project", options.project) }}
+        {{ f.sel(filters, "kind", "Kind", options.kind) }}
+        {{ f.sel(filters, "mode", "Mode", options.mode) }}
+        {{ f.sel(filters, "os", "OS", options.os) }}
+        {{ f.combo(filters, "os_version", "OS version", options.os_version) }}
+        {{ f.sel(filters, "distro", "Distro", options.distro) }}
+        {{ f.combo(filters, "distro_version", "Distro version", options.distro_version) }}
+        {{ f.sel(filters, "flavor", "Flavor", options.flavor) }}
+        {{ f.combo(filters, "flavor_version", "Flavor version", options.flavor_version) }}
+        {{ f.sel(filters, "arch", "Arch", options.arch) }}
+        {{ f.sel(filters, "compiler", "Compiler", options.compiler) }}
+        {{ f.combo(filters, "compiler_version", "Compiler version", options.compiler_version) }}
+        {{ f.sel(filters, "isolation", "Isolation", options.isolation) }}
+        {{ f.sel(filters, "toolchain", "Toolchain", options.toolchain) }}
+        {{ f.combo(filters, "opp_file", "Opp file", options.opp_file) }}
+        {{ f.txt(filters, "dep", "Dependency", "e.g. omnetpp 6.4") }}
+        {{ f.sel(filters, "status", "Status", options.status, any_label="All statuses") }}
+        <label class="filter-field"><span>View</span>
+            <select name="view">
+                <option value="summary" {{ "selected" if view == "summary" }}>Summary</option>
+                <option value="detailed" {{ "selected" if view == "detailed" }}>Detailed</option>
+            </select>
+        </label>
+        <label class="filter-field"><span>Grouping</span>
+            <select name="grouping" onchange="this.form.submit()">
+                <option value="any" {{ "selected" if grouping == "any" }}>○ any</option>
+                <option value="cartesian" {{ "selected" if grouping == "cartesian" }}>● cartesian</option>
+                <option value="none" {{ "selected" if grouping == "none" }}>- none</option>
+            </select>
+        </label>
+        <label class="filter-field checkbox" title="Include results overridden by a newer run at the same commit (hidden by default)">
+            <input type="checkbox" name="show_obsolete" value="1" {{ "checked" if show_obsolete }} onchange="this.form.submit()"> show obsolete
+        </label>
+    </div>
+    <div class="filter-actions">
+        <button type="submit">Filter</button>
+        {% if filters.values()|select|list %}<a href="/results" class="btn btn-secondary btn-sm">Clear</a>{% endif %}
+    </div>
 </form>
 
 {% if view == "summary" %}
