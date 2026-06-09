@@ -261,6 +261,38 @@ class FilterPageTests(unittest.TestCase):
         self.assertIn('/test-matrices/1"', self._get("/test-matrices?opp_file=aloha"))
         self.assertIn("No matrices match", self._get("/test-matrices?opp_file=zzz"))
 
+    def test_matrices_last_status(self):
+        # Both matrices' latest runs have completed_at NULL -> "pending".
+        body = self._get("/test-matrices?status=pending")
+        self.assertIn('/test-matrices/1"', body)   # nightly
+        self.assertIn('/test-matrices/2"', body)   # stress
+        # No matrix run has finished with a PASS summary yet.
+        self.assertIn("No matrices match", self._get("/test-matrices?status=PASS"))
+
+    def test_runs_result_model(self):
+        # Actual (outcome): run #1 PASS, run #2 FAIL.
+        pass_body = self._get("/test-runs?actual=PASS")
+        self.assertIn('/test-runs/1"', pass_body)
+        self.assertNotIn('/test-runs/2"', pass_body)
+        fail_body = self._get("/test-runs?actual=FAIL")
+        self.assertIn('/test-runs/2"', fail_body)
+        self.assertNotIn('/test-runs/1"', fail_body)
+        # State (lifecycle): both runs are finished.
+        finished = self._get("/test-runs?state=finished")
+        self.assertIn('/test-runs/1"', finished)
+        self.assertIn('/test-runs/2"', finished)
+        self.assertNotIn('/test-runs/1"', self._get("/test-runs?state=queued"))
+        # Verdict filter is wired (no promoted verdicts seeded -> empty, not 500).
+        none = self._get("/test-runs?verdict=EXPECTED")
+        self.assertNotIn('/test-runs/1"', none)
+        self.assertNotIn('/test-runs/2"', none)
+
+    def test_runs_ref_and_commit(self):
+        # Split Git-ref control: ref->git_ref, commit->commit_sha (seeded NULL,
+        # so any value narrows to nothing) — exercises both code paths.
+        self.assertNotIn('/test-runs/1"', self._get("/test-runs?ref=master"))
+        self.assertNotIn('/test-runs/1"', self._get("/test-runs?commit=deadbeef"))
+
     def test_projects_filters(self):
         body = self._get("/projects?github_owner=inet-framework")
         self.assertIn('/projects/inet"', body)

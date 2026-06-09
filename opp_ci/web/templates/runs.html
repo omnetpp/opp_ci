@@ -8,8 +8,15 @@
 </div>
 
 <form class="filters filters-stacked" method="get" action="/test-runs">
-    <div class="filter-grid">
+    {{ f.group_open("Identity & scope") }}
         {{ f.combo(filters, "project", "Project", options.project) }}
+    {{ f.group_close() }}
+    {{ f.group_open("Result") }}
+        {{ f.sel(filters, "verdict", "Verdict", options.verdict) }}
+        {{ f.sel(filters, "actual", "Actual", options.actual) }}
+        {{ f.sel(filters, "state", "State", options.state) }}
+    {{ f.group_close() }}
+    {{ f.group_open("Environment / build") }}
         {{ f.sel(filters, "kind", "Kind", options.kind) }}
         {{ f.sel(filters, "mode", "Mode", options.mode) }}
         {{ f.sel(filters, "os", "OS", options.os) }}
@@ -25,22 +32,26 @@
         {{ f.sel(filters, "toolchain", "Toolchain", options.toolchain) }}
         {{ f.combo(filters, "opp_file", "Opp file", options.opp_file) }}
         {{ f.txt(filters, "dep", "Dependency", "e.g. omnetpp 6.4") }}
-        {{ f.txt(filters, "git_ref", "Git ref", "ref or commit") }}
         {{ f.combo(filters, "version", "Version", options.version) }}
+    {{ f.group_close() }}
+    {{ f.group_open("Source & trigger") }}
+        {{ f.txt(filters, "ref", "Ref", "contains…") }}
+        {{ f.txt(filters, "commit", "Commit", "contains…") }}
+        {{ f.sel(filters, "trigger", "Trigger", options.trigger) }}
+        {{ f.txt(filters, "github_owner", "GitHub owner", "contains…") }}
+        {{ f.txt(filters, "github_repo", "GitHub repo", "contains…") }}
+        {{ f.txt(filters, "github_pr_number", "PR #", "contains…") }}
         <label class="filter-field"><span>Worker</span>
             <select name="worker">
                 <option value="">Any</option>
                 {% for w in workers %}<option value="{{ w.id }}" {{ "selected" if filters.worker == w.id|string }}>{{ w.name }}</option>{% endfor %}
             </select>
         </label>
-        {{ f.sel(filters, "trigger", "Trigger", options.trigger) }}
-        {{ f.txt(filters, "github_owner", "GitHub owner", "contains…") }}
-        {{ f.txt(filters, "github_repo", "GitHub repo", "contains…") }}
-        {{ f.txt(filters, "github_pr_number", "PR #", "contains…") }}
-        {{ f.sel(filters, "status", "Status", options.status, any_label="All statuses") }}
+    {{ f.group_close() }}
+    {{ f.group_open("Time") }}
         {{ f.date(filters, "since", "Since") }}
         {{ f.date(filters, "until", "Until") }}
-    </div>
+    {{ f.group_close() }}
     <div class="filter-actions">
         <button type="submit">Filter</button>
         {% if filters.values()|select|list %}

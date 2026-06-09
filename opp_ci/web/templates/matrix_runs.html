@@ -10,7 +10,7 @@
 </div>
 
 <form method="get" action="/test-matrix-runs" class="filters filters-stacked">
-    <div class="filter-grid">
+    {{ f.group_open("Identity & scope") }}
         {{ f.combo(filters, "project", "Project", options.project) }}
         <label class="filter-field"><span>Matrix</span>
             <select name="matrix">
@@ -18,19 +18,27 @@
                 {% for m in matrices_opt %}<option value="{{ m.id }}" {{ "selected" if filters.matrix == m.id|string }}>{{ m.name }}</option>{% endfor %}
             </select>
         </label>
-        {{ f.sel(filters, "trigger", "Trigger", options.trigger) }}
-        {{ f.txt(filters, "ref", "Ref", "contains…") }}
-        {{ f.txt(filters, "github_owner", "GitHub owner", "contains…") }}
-        {{ f.txt(filters, "github_repo", "GitHub repo", "contains…") }}
-        {{ f.txt(filters, "github_commit_sha", "Commit", "contains…") }}
-        {{ f.txt(filters, "github_pr_number", "PR #", "contains…") }}
+    {{ f.group_close() }}
+    {{ f.group_open("Result") }}
         {{ f.sel(filters, "verdict", "Verdict", options.verdict) }}
         {{ f.sel(filters, "actual", "Actual", options.actual) }}
         {{ f.sel(filters, "state", "State", options.state) }}
+    {{ f.group_close() }}
+    {{ f.group_open("Environment / build") }}
         {% for param, label, control in axes %}{% if control == "combo" %}{{ f.combo(filters, param, label, options[param]) }}{% else %}{{ f.sel(filters, param, label, options[param]) }}{% endif %}{% endfor %}
+    {{ f.group_close() }}
+    {{ f.group_open("Source & trigger") }}
+        {{ f.txt(filters, "ref", "Ref", "contains…") }}
+        {{ f.txt(filters, "github_commit_sha", "Commit", "contains…") }}
+        {{ f.sel(filters, "trigger", "Trigger", options.trigger) }}
+        {{ f.txt(filters, "github_owner", "GitHub owner", "contains…") }}
+        {{ f.txt(filters, "github_repo", "GitHub repo", "contains…") }}
+        {{ f.txt(filters, "github_pr_number", "PR #", "contains…") }}
+    {{ f.group_close() }}
+    {{ f.group_open("Time") }}
         {{ f.date(filters, "since", "Since") }}
         {{ f.date(filters, "until", "Until") }}
-    </div>
+    {{ f.group_close() }}
     <div class="filter-actions">
         <button type="submit">Filter</button>
         {% if filters.values()|select|list %}<a href="/test-matrix-runs" class="btn btn-secondary btn-sm">Clear</a>{% endif %}

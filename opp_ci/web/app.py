@@ -326,13 +326,6 @@ def apply_dep_filter(query, col, value):
     return query.where(cast(col, String).ilike(f"%{value}%"))
 
 
-# Status vocabulary shared by the run filters (lifecycle + outcome values,
-# matching opp_ci.persistence.status_filter).
-_RUN_STATUS_OPTIONS = [
-    "PASS", "FAIL", "ERROR", "SKIPPED",
-    "queued", "running", "finished", "cancelled", "timed_out",
-]
-
 
 # Matrix coordinate axes. A matrix stores its axes inside the `config` JSON
 # (as lists) rather than as columns; they're filtered via a correlated
@@ -427,14 +420,17 @@ def runs_list(
     toolchain: str = Query(default=None),
     opp_file: str = Query(default=None),
     dep: str = Query(default=None),
-    git_ref: str = Query(default=None),
+    ref: str = Query(default=None),
+    commit: str = Query(default=None),
     version: str = Query(default=None),
     worker: str = Query(default=None),
     trigger: str = Query(default=None),
     github_owner: str = Query(default=None),
     github_repo: str = Query(default=None),
     github_pr_number: str = Query(default=None),
-    status: str = Query(default=None),
+    verdict: str = Query(default=None),
+    actual: str = Query(default=None),
+    state: str = Query(default=None),
     since: str = Query(default=None),
     until: str = Query(default=None),
     limit: int = Query(default=50),
@@ -472,20 +468,37 @@ def runs_list(
         query = apply_str_filter(query, TestMatrixRun.github_repo, github_repo, "contains")
         query = apply_str_filter(
             query, cast(TestMatrixRun.github_pr_number, String), github_pr_number, "contains")
-        if git_ref:
-            query = query.where(
-                (TestRun.git_ref == git_ref) | (TestRun.commit_sha.startswith(git_ref))
-            )
+        query = apply_str_filter(query, TestRun.git_ref, ref, "contains")
+        if commit:
+            query = query.where(TestRun.commit_sha.startswith(commit))
         query = apply_str_filter(query, TestRun.version, version, "prefix")
         if worker and worker.isdigit():
             query = query.where(TestRun.worker_id == int(worker))
-        if status:
+        # Result model mirrors the matrix-runs page: State (lifecycle), Actual
+        # (outcome) and Verdict (vs expectation) as three independent filters.
+        # Forgiving on URL params: a bad value just shows no rows.
+        if state:
             try:
-                query = status_filter(query, status)
+                query = query.where(TestRun.lifecycle == TestRunLifecycle(state))
             except ValueError:
-                # Forgiving on URL params: a bad ?status= just shows no rows
-                # and the user corrects the filter.
                 query = query.where(false())
+        if actual:
+            try:
+                query = query.where(TestRun.result_code == TestResultCode(actual))
+            except ValueError:
+                query = query.where(false())
+        if verdict:
+            try:
+                verdict_kind = TestVerdictKind(verdict)
+            except ValueError:
+                query = query.where(false())
+            else:
+                # `recorded_verdict` is computed from a run's promoted
+                # TestVerdict rows; match runs carrying a verdict of this kind.
+                query = query.where(exists().where(and_(
+                    TestVerdict.test_run_id == TestRun.id,
+                    TestVerdict.verdict == verdict_kind,
+                )))
         if since:
             try:
                 query = query.where(
@@ -509,7 +522,9 @@ def runs_list(
             Test.toolchain, Test.opp_file, TestRun.version,
             TestMatrixRun.trigger, TestMatrixRun.github_owner, TestMatrixRun.github_repo,
         )
-        options["status"] = _RUN_STATUS_OPTIONS
+        options["verdict"] = ["EXPECTED", "UNEXPECTED", "UNKNOWN"]
+        options["actual"] = ["PASS", "FAIL", "ERROR", "SKIPPED"]
+        options["state"] = ["queued", "running", "finished", "cancelled", "timed_out"]
         workers = session.execute(select(Worker).order_by(Worker.name)).scalars().all()
         return templates.TemplateResponse(request, "runs.html", {
             "runs": runs,
@@ -523,10 +538,12 @@ def runs_list(
                 "arch": arch or "", "compiler": compiler or "",
                 "compiler_version": compiler_version or "", "isolation": isolation or "",
                 "toolchain": toolchain or "", "opp_file": opp_file or "",
-                "dep": dep or "", "git_ref": git_ref or "", "version": version or "",
+                "dep": dep or "", "ref": ref or "", "commit": commit or "",
+                "version": version or "",
                 "worker": worker or "", "trigger": trigger or "",
                 "github_owner": github_owner or "", "github_repo": github_repo or "",
-                "github_pr_number": github_pr_number or "", "status": status or "",
+                "github_pr_number": github_pr_number or "",
+                "verdict": verdict or "", "actual": actual or "", "state": state or "",
                 "since": since or "", "until": until or "",
             },
             **_template_globals(request, current_user),
@@ -1351,8 +1368,7 @@ def matrices_list(
     name: str = Query(default=None),
     project: str = Query(default=None),
     opp_file: str = Query(default=None),
-    since: str = Query(default=None),
-    until: str = Query(default=None),
+    status: str = Query(default=None),
     include_anonymous: bool = Query(default=False),
     error: str = Query(default=None),
 ):
@@ -1377,39 +1393,44 @@ def matrices_list(
         query = apply_str_filter(query, TestMatrix.name, name, "contains")
         query = apply_str_filter(query, TestMatrix.project, project, "contains")
         query = apply_str_filter(query, TestMatrix.opp_file, opp_file, "contains")
-        if since:
-            try:
-                query = query.where(
-                    TestMatrix.created_at >= datetime.datetime.fromisoformat(since)
-                )
-            except ValueError:
-                pass
-        if until:
-            try:
-                end = datetime.datetime.fromisoformat(until) + datetime.timedelta(days=1)
-                query = query.where(TestMatrix.created_at < end)
-            except ValueError:
-                pass
         query = matrix_axis_sql_filter(query, axis_filters, session.bind.dialect.name)
         matrices = session.execute(query).scalars().all()
 
+        # Status / run-count of each matrix's most recent run (N+1, capped by
+        # the named-only default; mirrors the Tests catalog). The status filter
+        # is applied on this value.
+        last_status = {}
         run_counts = {}
         for m in matrices:
-            count = session.execute(
+            run_counts[m.id] = session.execute(
                 select(func.count(TestRun.id))
                 .join(TestMatrixRun, TestRun.matrix_run_id == TestMatrixRun.id)
                 .where(TestMatrixRun.matrix_id == m.id)
             ).scalar()
-            run_counts[m.id] = count
+            last = session.execute(
+                select(TestMatrixRun).where(TestMatrixRun.matrix_id == m.id)
+                .order_by(TestMatrixRun.id.desc()).limit(1)
+            ).scalar_one_or_none()
+            if last is None:
+                last_status[m.id] = None
+            elif last.completed_at is None:
+                last_status[m.id] = "pending"
+            else:
+                last_status[m.id] = last.actual_summary.value if last.actual_summary else None
+        if status:
+            matrices = [m for m in matrices if last_status.get(m.id) == status]
+
+        options["status"] = ["PASS", "FAIL", "ERROR", "SKIPPED", "pending"]
 
         return templates.TemplateResponse(request, "matrices.html", {
             "matrices": matrices,
+            "last_status": last_status,
             "run_counts": run_counts,
             "options": options,
             "axes": [(p, label, control) for p, _, label, control in _MATRIX_AXES],
             "filters": {
                 "name": name or "", "project": project or "",
-                "opp_file": opp_file or "", "since": since or "", "until": until or "",
+                "opp_file": opp_file or "", "status": status or "",
                 **axis_filters,
             },
             "include_anonymous": include_anonymous,
