@@ -1,56 +1,103 @@
 {% extends "base.html" %}
 {% block title %}opp_ci — Dashboard{% endblock %}
 {% block content %}
-<h2 style="margin-bottom: 1rem;">Dashboard</h2>
-
-<div class="stats">
-    <div class="stat">
-        <div class="value">{{ total_runs }}</div>
-        <div class="label">Total Runs</div>
-    </div>
-    <div class="stat">
-        <div class="value" style="color: var(--pass);">{{ passed }}</div>
-        <div class="label">Passed</div>
-    </div>
-    <div class="stat">
-        <div class="value" style="color: var(--warn);">{{ failed }}</div>
-        <div class="label">Failed</div>
-    </div>
-    <div class="stat">
-        <div class="value" style="color: var(--error);">{{ errored }}</div>
-        <div class="label">Errors</div>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:0.5rem;">
+    <h2>Dashboard</h2>
+    {# Window selector — plain links, active one highlighted. Scopes the
+       Lifecycle and Outcome counts; inventory and workers stay current. #}
+    <div class="window-selector">
+        {% for w in windows %}
+        <a href="/?window={{ w }}" class="{{ 'active' if w == window else '' }}">
+            {{ {'day': 'Day', 'week': 'Week', 'month': 'Month', 'all': 'All'}[w] }}
+        </a>
+        {% endfor %}
     </div>
 </div>
 
-<div class="card">
-    <h2>Recent Runs</h2>
-    {% if recent_runs %}
-    <table>
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Project</th>
-                <th>Kind</th>
-                <th>Status</th>
-                <th>Duration</th>
-                <th>Started</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for run in recent_runs %}
-            <tr data-href="/test-runs/{{ run.id }}">
-                <td><a href="/test-runs/{{ run.id }}">#{{ run.id }}</a></td>
-                <td>{{ run.project }}</td>
-                <td>{{ run.kind }}</td>
-                <td><span class="badge badge-{{ run.effective_status }}">{{ run.effective_status }}</span></td>
-                <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
-                <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <p class="empty">No test runs yet. Run <code>opp_ci run --project &lt;name&gt; --test smoke</code> to get started.</p>
-    {% endif %}
+<div class="stat-section">
+    <h3>Lifecycle
+        <span class="muted-note">
+            {{ "last day" if window == "day" else
+               "last 7 days" if window == "week" else
+               "last 30 days" if window == "month" else "all time" }}
+            &middot; {{ total_runs }} run{{ "" if total_runs == 1 else "s" }}
+        </span>
+    </h3>
+    <div class="stats">
+        {% for state, count in lifecycle %}
+        <a class="stat" href="/test-runs?state={{ state }}">
+            <div class="value">{{ count }}</div>
+            <div class="label"><span class="badge badge-{{ state }}">{{ state.replace("_", " ") }}</span></div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="stat-section">
+    <h3>Outcomes <span class="muted-note">finished runs</span></h3>
+    <div class="stats">
+        {% for code, count in outcomes %}
+        <a class="stat" href="/test-runs?actual={{ code }}">
+            <div class="value">{{ count }}</div>
+            <div class="label"><span class="badge badge-{{ code }}">{{ code }}</span></div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="stat-section">
+    <h3>Workers</h3>
+    <div class="stats">
+        <a class="stat" href="/workers">
+            <div class="value" style="color: var(--pass);">{{ workers.connected }}<span style="color: var(--muted); font-weight:400;"> / {{ workers.registered }}</span></div>
+            <div class="label">Connected</div>
+        </a>
+        <a class="stat" href="/workers">
+            <div class="value" style="color: var(--running);">{{ workers.busy }}</div>
+            <div class="label">Busy</div>
+        </a>
+        <a class="stat" href="/queue">
+            <div class="value">{{ workers.running_jobs }}</div>
+            <div class="label">Running jobs</div>
+        </a>
+        <a class="stat" href="/workers">
+            <div class="value">{{ workers.free_capacity }}</div>
+            <div class="label">Free capacity</div>
+        </a>
+    </div>
+</div>
+
+<div class="stat-section">
+    <h3>Inventory</h3>
+    <div class="stats">
+        <a class="stat" href="/tests">
+            <div class="value">{{ inventory.tests }}</div>
+            <div class="label">Tests</div>
+        </a>
+        <a class="stat" href="/test-matrices">
+            <div class="value">{{ inventory.matrices }}</div>
+            <div class="label">Test Matrices</div>
+        </a>
+        <a class="stat" href="/test-matrix-runs">
+            <div class="value">{{ inventory.matrix_runs }}</div>
+            <div class="label">Matrix Runs</div>
+        </a>
+        <a class="stat" href="/projects">
+            <div class="value">{{ inventory.projects }}</div>
+            <div class="label">Projects</div>
+        </a>
+        <a class="stat" href="/rules">
+            <div class="value">{{ inventory.rules }}</div>
+            <div class="label">Rules</div>
+        </a>
+        <a class="stat" href="/os">
+            <div class="value">{{ inventory.oses }}</div>
+            <div class="label">OSes</div>
+        </a>
+        <a class="stat" href="/compilers">
+            <div class="value">{{ inventory.compilers }}</div>
+            <div class="label">Compilers</div>
+        </a>
+    </div>
 </div>
 {% endblock %}

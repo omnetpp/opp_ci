@@ -31,10 +31,27 @@
         nav a { color: var(--muted); font-size: 0.9rem; font-weight: 500; }
         nav a:hover { color: var(--text); text-decoration: none; }
 
-        .stats { display: flex; gap: 1rem; margin-bottom: 1.5rem; }
-        .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 1rem 1.5rem; flex: 1; }
+        .stats { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
+        .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 1rem 1.5rem; flex: 1 1 8rem; }
         .stat .value { font-size: 1.5rem; font-weight: 700; }
         .stat .label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; }
+        /* Tiles double as navigation: an <a class="stat"> looks like a tile,
+           not a link, and lifts slightly on hover. */
+        a.stat { display: block; color: var(--text); }
+        a.stat:hover { text-decoration: none; border-color: var(--primary); }
+        a.stat .label { text-decoration: none; }
+
+        /* Grouped dashboard sections: a heading over a row of stat tiles. */
+        .stat-section { margin-bottom: 1.5rem; }
+        .stat-section h3 { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); margin-bottom: 0.6rem; }
+        .stat-section .muted-note { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--muted); margin-left: 0.4rem; }
+
+        /* Segmented Day/Week/Month/All selector. */
+        .window-selector { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+        .window-selector a { padding: 0.35rem 0.8rem; font-size: 0.85rem; color: var(--muted); background: var(--surface); border-right: 1px solid var(--border); }
+        .window-selector a:last-child { border-right: none; }
+        .window-selector a:hover { background: var(--bg); text-decoration: none; }
+        .window-selector a.active { background: var(--primary); color: #fff; }
 
         table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
         th, td { padding: 0.6rem 0.8rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
@@ -57,6 +74,8 @@
         .badge-running { background: #cfe2ff; color: var(--running); }
         .badge-queued, .badge-skipped, .badge-SKIPPED, .badge-UNKNOWN,
         .badge-cancelled, .badge-timed_out, .badge-pending { background: #e2e3e5; color: var(--muted); }
+        /* "finished" is the lifecycle state, not an outcome — neutral done. */
+        .badge-finished { background: #d1e7dd; color: var(--pass); }
         .badge-compatible { background: #cfe2ff; color: var(--primary); }
 
         .compat-matrix { width: auto; }
@@ -153,7 +172,7 @@
             <nav style="flex: 1;">
                 {% if current_user %}
                 <a href="/">Dashboard</a> &nbsp;
-                <a href="/queue">Queue</a> &nbsp;
+                <a href="/queue">Activity</a> &nbsp;
                 <a href="/tests">Tests</a> &nbsp;
                 <a href="/test-runs">Test Runs</a> &nbsp;
                 <a href="/test-matrices">Test Matrices</a> &nbsp;

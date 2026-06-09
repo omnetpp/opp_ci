@@ -227,30 +227,62 @@ web_router = APIRouter(dependencies=[Depends(require_user())])
 
 
 @web_router.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, current_user: User = Depends(require_user())):
+def dashboard(request: Request, current_user: User = Depends(require_user()),
+              window: str = Query(default="all")):
+    window = _normalise_window(window)
+    cutoff = _window_cutoff(window)
     session = SessionLocal()
     try:
-        recent_runs = session.execute(
-            select(TestRun).order_by(TestRun.id.desc()).limit(20)
-        ).scalars().all()
+        # Lifecycle + outcome counts are window-scoped (by created_at);
+        # computed with two group-by queries rather than one count per bucket.
+        def _scoped(q):
+            return q.where(TestRun.created_at >= cutoff) if cutoff is not None else q
 
-        total_runs = session.execute(select(func.count(TestRun.id))).scalar()
-        passed = session.execute(
-            select(func.count(TestRun.id)).where(TestRun.result_code == TestResultCode.PASS)
-        ).scalar()
-        failed = session.execute(
-            select(func.count(TestRun.id)).where(TestRun.result_code == TestResultCode.FAIL)
-        ).scalar()
-        errored = session.execute(
-            select(func.count(TestRun.id)).where(TestRun.result_code == TestResultCode.ERROR)
-        ).scalar()
+        lifecycle_rows = session.execute(_scoped(
+            select(TestRun.lifecycle, func.count(TestRun.id)).group_by(TestRun.lifecycle)
+        )).all()
+        lifecycle_counts = {lc.value if lc else None: n for lc, n in lifecycle_rows}
+        lifecycle = [
+            (state.value, lifecycle_counts.get(state.value, 0))
+            for state in TestRunLifecycle
+        ]
+        total_runs = sum(lifecycle_counts.values())
+
+        outcome_rows = session.execute(_scoped(
+            select(TestRun.result_code, func.count(TestRun.id))
+            .where(TestRun.lifecycle == TestRunLifecycle.finished)
+            .group_by(TestRun.result_code)
+        )).all()
+        outcome_counts = {rc.value if rc else None: n for rc, n in outcome_rows}
+        outcomes = [
+            (code.value, outcome_counts.get(code.value, 0))
+            for code in TestResultCode
+        ]
+
+        workers = worker_summary(session)
+
+        # Inventory counts are absolute (not time-bound).
+        def _count(model):
+            return session.execute(select(func.count(model.id))).scalar()
+
+        inventory = {
+            "tests": _count(Test),
+            "matrices": _count(TestMatrix),
+            "matrix_runs": _count(TestMatrixRun),
+            "projects": _count(Project),
+            "rules": _count(AutoTestRule),
+            "oses": _count(OS),
+            "compilers": _count(Compiler),
+        }
 
         return templates.TemplateResponse(request, "dashboard.html", {
-            "recent_runs": recent_runs,
+            "window": window,
+            "windows": _WINDOWS,
             "total_runs": total_runs,
-            "passed": passed,
-            "failed": failed,
-            "errored": errored,
+            "lifecycle": lifecycle,
+            "outcomes": outcomes,
+            "workers": workers,
+            "inventory": inventory,
             **_template_globals(request, current_user),
         })
     finally:
@@ -272,16 +304,82 @@ def queue_page(request: Request, current_user: User = Depends(require_user()),
             .where(TestRun.lifecycle == TestRunLifecycle.queued)
             .order_by(TestRun.id)
         ).scalars().all()
+        # Recently finished: the last 20 runs that left the active states
+        # (finished / cancelled / timed_out), newest first. Moved here from
+        # the dashboard so Queue is the full activity view.
+        recent = session.execute(
+            select(TestRun)
+            .where(TestRun.lifecycle.in_((
+                TestRunLifecycle.finished,
+                TestRunLifecycle.cancelled,
+                TestRunLifecycle.timed_out,
+            )))
+            .order_by(TestRun.finished_at.desc().nulls_last(), TestRun.id.desc())
+            .limit(20)
+        ).scalars().all()
 
         return templates.TemplateResponse(request, "queue.html", {
             "running": running,
             "queued": queued,
+            "recent": recent,
             "message": message,
             "message_type": message_type,
             **_template_globals(request, current_user),
         })
     finally:
         session.close()
+
+
+_WINDOWS = ("day", "week", "month", "all")
+
+
+def _normalise_window(window):
+    """Clamp an arbitrary `window` query param to one of `_WINDOWS`,
+    defaulting unknown/missing values to "all"."""
+    return window if window in _WINDOWS else "all"
+
+
+def _window_cutoff(window):
+    """UTC lower bound for a normalised window, or None for "all" (no
+    bound). Runs are scoped by `created_at >= cutoff`."""
+    now = datetime.datetime.utcnow()
+    return {
+        "day": now - datetime.timedelta(days=1),
+        "week": now - datetime.timedelta(days=7),
+        "month": now - datetime.timedelta(days=30),
+    }.get(window)
+
+
+def worker_summary(session):
+    """Current fleet health, independent of any time window. Shared by the
+    dashboard summary and the workers page header."""
+    from opp_ci.config import WORKER_HEARTBEAT_TIMEOUT
+
+    workers = session.execute(select(Worker)).scalars().all()
+    now = datetime.datetime.utcnow()
+    threshold = now - datetime.timedelta(seconds=WORKER_HEARTBEAT_TIMEOUT)
+
+    registered = len(workers)
+    connected = 0
+    busy = 0
+    running_jobs = 0
+    capacity = 0
+    for w in workers:
+        is_connected = w.last_heartbeat is not None and w.last_heartbeat > threshold
+        if is_connected:
+            connected += 1
+            capacity += (w.concurrency or 0)
+            running_jobs += (w.current_job_count or 0)
+            if (w.current_job_count or 0) > 0:
+                busy += 1
+    return {
+        "registered": registered,
+        "connected": connected,
+        "busy": busy,
+        "running_jobs": running_jobs,
+        # Free slots across connected workers (never negative).
+        "free_capacity": max(0, capacity - running_jobs),
+    }
 
 
 def _distinct_options(session, *columns):
