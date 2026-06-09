@@ -63,18 +63,12 @@
     {{ f.group_open("Display") }}
         <label class="filter-field"><span>View</span>
             <select name="view" onchange="this.form.submit()">
-                <option value="flat" {{ "selected" if view != "rollup" }}>Flat</option>
-                <option value="rollup" {{ "selected" if view == "rollup" }}>Rollup</option>
+                <option value="flat" {{ "selected" if view == "flat" }}>Flat (per run)</option>
+                <option value="merged" {{ "selected" if view == "merged" }}>Rollup — merged</option>
+                <option value="cartesian" {{ "selected" if view == "cartesian" }}>Rollup — cartesian</option>
             </select>
         </label>
-        <label class="filter-field"><span>Grouping</span>
-            <select name="grouping" onchange="this.form.submit()">
-                <option value="any" {{ "selected" if grouping == "any" }}>○ any</option>
-                <option value="cartesian" {{ "selected" if grouping == "cartesian" }}>● cartesian</option>
-                <option value="none" {{ "selected" if grouping == "none" }}>- none</option>
-            </select>
-        </label>
-        <label class="filter-field checkbox" title="Rollup view: include results overridden by a newer run at the same commit (hidden by default)">
+        <label class="filter-field checkbox" title="Rollup views: include results overridden by a newer run at the same commit (hidden by default)">
             <input type="checkbox" name="show_obsolete" value="1" {{ "checked" if show_obsolete }} onchange="this.form.submit()"> show obsolete
         </label>
     {{ f.group_close() }}
@@ -87,7 +81,7 @@
 </form>
 {% endif %}
 
-{% if view == "rollup" %}
+{% if view != "flat" %}
 <!-- Roll-up summary view -->
 {% if summaries %}
 {% set extra_labels = {"os_version": "OS ver.", "flavor_version": "Flavor ver.", "arch": "Arch", "isolation": "Isolation", "toolchain": "Toolchain", "opp_file": "Opp file", "commit_sha": "Commit", "version": "Version"} %}

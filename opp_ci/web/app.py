@@ -434,16 +434,20 @@ def runs_list(
     since: str = Query(default=None),
     until: str = Query(default=None),
     view: str = Query(default="flat"),
-    grouping: str = Query(default="any"),
     show_obsolete: bool = Query(default=False),
     run_ids: str = Query(default=None),
     limit: int = Query(default=None),
 ):
     from opp_ci.web.rollup import rollup_runs, visible_extra_dims
 
-    # "rollup" is the merged-in Results summary; anything else is the flat list.
-    is_rollup = view == "rollup"
-    view = "rollup" if is_rollup else "flat"
+    # A single View axis: "flat" is the ungrouped run list (an un-merged
+    # rollup); "merged"/"cartesian" are the roll-up with that grouping. Flat
+    # subsumes the old grouping="none" rollup — same one-row-per-run, but the
+    # richer run-list presentation (Ref/Status/Duration + Re-run/Cancel).
+    if view not in ("flat", "merged", "cartesian"):
+        view = "flat"
+    is_rollup = view != "flat"
+    grouping = "cartesian" if view == "cartesian" else "any"
     if limit is None:
         limit = 200 if is_rollup else 50
 
@@ -562,7 +566,6 @@ def runs_list(
             "summaries": summaries,
             "extra_dims": extra_dims,
             "view": view,
-            "grouping": grouping,
             "show_obsolete": show_obsolete,
             "run_ids": run_ids,
             "options": options,

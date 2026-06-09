@@ -201,7 +201,8 @@ class FilterPageTests(unittest.TestCase):
         return r.text
 
     def test_pages_render(self):
-        for url in ("/tests", "/test-runs", "/test-runs?view=rollup",
+        for url in ("/tests", "/test-runs", "/test-runs?view=merged",
+                    "/test-runs?view=cartesian",
                     "/test-matrices", "/test-matrix-runs", "/projects",
                     "/os", "/compilers"):
             self._get(url)
@@ -294,15 +295,16 @@ class FilterPageTests(unittest.TestCase):
         self.assertNotIn('/test-runs/1"', self._get("/test-runs?commit=deadbeef"))
 
     def test_runs_rollup_view(self):
-        # The former Results summary is now /test-runs?view=rollup. Its rows
-        # drill down to the flat list of their run_ids, and resolved_deps (where
-        # the omnetpp version lives) is its own column — run #1 pins omnetpp 6.4.0.
-        body = self._get("/test-runs?view=rollup")
+        # The former Results summary is now /test-runs?view=merged (the View
+        # axis is flat | merged | cartesian). Its rows drill down to the flat
+        # list of their run_ids, and resolved_deps (where the omnetpp version
+        # lives) is its own column — run #1 pins omnetpp 6.4.0.
+        body = self._get("/test-runs?view=merged")
         self.assertIn("omnetpp=6.4.0", body)
         self.assertIn("run_ids=", body)                 # drill-down link to flat list
         # Rollup honours the same filters (scoping the rolled-up input set).
-        self.assertIn("omnetpp=6.4.0", self._get("/test-runs?view=rollup&project=inet"))
-        self.assertNotIn("omnetpp=6.4.0", self._get("/test-runs?view=rollup&project=nope"))
+        self.assertIn("omnetpp=6.4.0", self._get("/test-runs?view=merged&project=inet"))
+        self.assertNotIn("omnetpp=6.4.0", self._get("/test-runs?view=merged&project=nope"))
 
     def test_runs_pinned_selection_hides_filters(self):
         # A run_ids link (compatibility cell / rollup drill-down) shows a fixed
