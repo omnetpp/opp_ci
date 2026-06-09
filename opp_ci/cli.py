@@ -645,6 +645,7 @@ def reset_db(yes, preserve_tokens):
             for row in saved_workers:
                 session.add(Worker(**row))
             session.commit()
+            _resync_sequences(engine)
             click.echo("Database reset.")
             token_names = ", ".join(r["name"] for r in saved_api_tokens) or "(none)"
             worker_names = ", ".join(r["name"] for r in saved_workers) or "(none)"
@@ -679,6 +680,35 @@ def _drop_everything(engine):
     existing = MetaData()
     existing.reflect(bind=engine)
     existing.drop_all(bind=engine)
+
+
+def _resync_sequences(engine):
+    """Advance Postgres identity sequences to MAX(id)+1.
+
+    `reset-db --preserve-tokens` restores api_tokens/workers rows with
+    their original primary keys, but `create_all` resets each table's
+    sequence to 1. Without this the next auto-generated id collides with a
+    preserved row (UniqueViolation on workers_pkey). No-op on backends
+    without sequences (e.g. SQLite, which tracks MAX automatically).
+    """
+    from sqlalchemy import text
+
+    if engine.url.get_backend_name() != "postgresql":
+        return
+    with engine.begin() as conn:
+        cols = conn.execute(text(
+            "SELECT table_name, column_name, "
+            "       pg_get_serial_sequence(table_name, column_name) AS seq "
+            "FROM information_schema.columns "
+            "WHERE table_schema = 'public' "
+            "  AND pg_get_serial_sequence(table_name, column_name) IS NOT NULL"
+        )).all()
+        for table, col, seq in cols:
+            conn.execute(
+                text(f'SELECT setval(:s, '
+                     f'COALESCE((SELECT MAX("{col}") FROM "{table}"), 0) + 1, false)'),
+                {"s": seq},
+            )
 
 
 @main.command("run")
