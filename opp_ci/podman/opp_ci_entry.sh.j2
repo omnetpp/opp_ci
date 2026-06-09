@@ -42,7 +42,11 @@ if [ -n "$OPP_CI_INSTALL_PROJECTS" ]; then
         # The workspace was created with --init --nixless-workspace at
         # image build time; subsequent installs into it are nixless by
         # inheritance and reject --nixless-workspace again.
-        opp_env -l ERROR install -w /opt/opp_env_workspace "$p"
+        # $OPP_CI_PIN_DEPS holds the run's pinned dependency versions (e.g.
+        # 'omnetpp-6.2.0') — passing them makes opp_env build those exact
+        # versions instead of resolving each dependency to its latest, which
+        # would ignore the omnetpp baked into this image and recompile a newer one.
+        opp_env -l ERROR install -w /opt/opp_env_workspace "$p" $OPP_CI_PIN_DEPS
         EXTRA_PROJECTS="$EXTRA_PROJECTS $p"
     done
     unset IFS
@@ -66,4 +70,9 @@ if [ -n "$OPP_CI_INSTALL_PROJECTS" ]; then
     fi
 fi
 
-exec opp_env -l ERROR run -w /opt/opp_env_workspace omnetpp-{{ omnetpp_version }}$EXTRA_PROJECTS -c "opp_ci $*"
+# The run command must name omnetpp (and any other pinned deps) so opp_env sets
+# up the matching environment. Prefer the run's authoritative pins
+# ($OPP_CI_PIN_DEPS, e.g. 'omnetpp-6.2.0 inet-4.5.0'); fall back to the omnetpp
+# baked into this image when the run carried no pins.
+PINNED_PROJECTS="${OPP_CI_PIN_DEPS:-omnetpp-{{ omnetpp_version }}}"
+exec opp_env -l ERROR run -w /opt/opp_env_workspace $PINNED_PROJECTS$EXTRA_PROJECTS -c "opp_ci $*"

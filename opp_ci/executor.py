@@ -689,6 +689,15 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
     compiler_version = kwargs.get("compiler_version")
     resolved_deps = kwargs.get("resolved_deps") or {}
     omnetpp_version = resolved_deps.get("omnetpp") if isinstance(resolved_deps, dict) else None
+    # Every pinned dependency becomes an opp_env '<name>-<version>' token. opp_env
+    # accepts these alongside the project on the command line (e.g. 'mm1k
+    # omnetpp-6.2.0') and treats them as authoritative — without them it resolves
+    # each dependency to its latest version, which would ignore the omnetpp baked
+    # into the image and recompile a different one. We pass them to every opp_env
+    # install/run below so the run's pins are honoured end to end.
+    dep_tokens = ([f"{name}-{ver}" for name, ver in resolved_deps.items()
+                   if isinstance(ver, str)]
+                  if isinstance(resolved_deps, dict) else [])
 
     image = _podman_image_tag(
         toolchain, os_name, os_version, compiler, compiler_version,
@@ -774,9 +783,21 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
         # venv's python (e.g. Ubuntu's 3.14) honours PYTHONPATH before its
         # own site-packages and ends up trying to load incompatible packages
         # — strip it so the venv's own pandas/numpy win.
-        container_args = ["run", "--install", "--no-isolated", effective_project,
-                          "-c", f"env -u PYTHONPATH {inner_cmd}"]
+        # Pin every resolved dependency (omnetpp etc.) so opp_env builds the
+        # exact versions the run requested rather than the latest available.
+        pinned_deps = [t for t in dep_tokens if not t.startswith(f"{bare_project}-")]
+        container_args = (["run", "--install", "--no-isolated", effective_project]
+                          + pinned_deps
+                          + ["-c", f"env -u PYTHONPATH {inner_cmd}"])
     else:
+        # Host toolchain: the entrypoint (opp_ci_entry.sh) reads OPP_CI_PIN_DEPS
+        # and appends these tokens to both its `opp_env install` (for catalog
+        # projects) and `opp_env run`, so the run's pinned dependency versions
+        # win over opp_env's latest-version resolution — matching the omnetpp
+        # baked into the image instead of recompiling a newer one.
+        pinned_deps = [t for t in dep_tokens if not t.startswith(f"{repl_project}-")]
+        if pinned_deps:
+            podman_cmd += ["-e", f"OPP_CI_PIN_DEPS={' '.join(pinned_deps)}"]
         container_args = ["internal", "run-direct",
                           "--project", repl_project, "--kind", kind]
         if mode:
