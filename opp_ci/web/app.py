@@ -228,7 +228,7 @@ web_router = APIRouter(dependencies=[Depends(require_user())])
 
 @web_router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, current_user: User = Depends(require_user()),
-              window: str = Query(default="day")):
+              window: str = Query(default="hour")):
     window = _normalise_window(window)
     cutoff = _window_cutoff(window)
     session = SessionLocal()
@@ -330,7 +330,7 @@ def queue_page(request: Request, current_user: User = Depends(require_user()),
         session.close()
 
 
-_WINDOWS = ("day", "week", "month", "all")
+_WINDOWS = ("hour", "day", "week", "month", "all")
 
 
 def _normalise_window(window):
@@ -344,6 +344,7 @@ def _window_cutoff(window):
     bound). Runs are scoped by `created_at >= cutoff`."""
     now = datetime.datetime.utcnow()
     return {
+        "hour": now - datetime.timedelta(hours=1),
         "day": now - datetime.timedelta(days=1),
         "week": now - datetime.timedelta(days=7),
         "month": now - datetime.timedelta(days=30),

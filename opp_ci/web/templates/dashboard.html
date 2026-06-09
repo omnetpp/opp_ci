@@ -8,7 +8,7 @@
     <div class="window-selector">
         {% for w in windows %}
         <a href="/?window={{ w }}" class="{{ 'active' if w == window else '' }}">
-            {{ {'day': 'Day', 'week': 'Week', 'month': 'Month', 'all': 'All'}[w] }}
+            {{ {'hour': 'Hour', 'day': 'Day', 'week': 'Week', 'month': 'Month', 'all': 'All'}[w] }}
         </a>
         {% endfor %}
     </div>
@@ -17,7 +17,8 @@
 <div class="stat-section">
     <h3>Lifecycle
         <span class="muted-note">
-            {{ "last day" if window == "day" else
+            {{ "last hour" if window == "hour" else
+               "last day" if window == "day" else
                "last 7 days" if window == "week" else
                "last 30 days" if window == "month" else "all time" }}
             &middot; {{ total_runs }} run{{ "" if total_runs == 1 else "s" }}
