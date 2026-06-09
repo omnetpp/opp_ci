@@ -172,7 +172,11 @@ on a cache miss, a pre-existing finished row on a [Cache hit](#cache)
 time. Carries the three-state [Verdict](#verdict) and `recorded_at`.
 The cell's lifecycle (queued / running / finished / cancelled) is
 derived from the underlying `TestRun.lifecycle` — not stored — so
-there is only ever one source of truth for "is it done yet".
+there is only ever one source of truth for "is it done yet". The
+grade lives here, not as a column on the `TestRun`, because one
+finished run can back many cells (cache hits), each graded against
+the expectation in force when *that* cell recorded — see
+[data_model.md → Why the verdict is not a column on TestRun](data_model.md#why-the-verdict-is-not-a-column-on-testrun).
 
 ### Verdict
 
