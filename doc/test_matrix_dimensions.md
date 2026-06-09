@@ -322,10 +322,14 @@ flavor:kubuntu-24.04,distro:ubuntu-24.04,os:linux`) or via
 (macOS), or `platform.release()` (Windows).
 
 Under `isolation == "podman"`, the platform instead selects the
-container image: `opp_ci image build` produces images tagged
-`opp-ci-runner:host-<platform-slug>-<compiler>-omnetpp-<ver>`, where
-`<platform-slug>` is `kubuntu-24.04` / `ubuntu-24.04` / `windows-11` /
-`macos-15` — the most-specific level.
+container image: `opp_ci image build` produces images tagged with a uniform,
+only-pinned-dimensions scheme
+`opp-ci-runner:<platform-slug>-<toolchain>[-<compiler>-<compver>]-omnetpp-<ver>`,
+where `<toolchain>` is `none` (compiler from the OS package manager) or `nix`
+(opp_env/Nix; the compiler segment is omitted, omnetpp baked via run+commit),
+and `<platform-slug>` is `kubuntu-24.04` / `ubuntu-24.04` / `windows-11` /
+`macos-15` — the most-specific level. The same dimensions are also attached as
+`org.opp_ci.*` image labels.
 
 ---
 

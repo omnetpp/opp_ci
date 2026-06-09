@@ -10,6 +10,18 @@
 #   /nix  — Nix store; mount the podman named volume 'opp-ci-nix-store' here
 #           so downloaded deps survive across container instances.
 #
+# This is the omnetpp-AGNOSTIC base image. The per-omnetpp runner image
+# (opp-ci-runner:<slug>-nix-omnetpp-<ver>) is produced by running
+# 'opp_env install omnetpp-<ver>' in a container of this base with the
+# 'opp-ci-nix-store' volume mounted, then 'podman commit' — which excludes the
+# volume, so the compiled workspace lands in the image while the Nix store
+# stays in the volume (see executor._build_nix_runner_image).
+#
+# WARNING: a baked runner image references /nix/store/<hash> paths that live
+# in the 'opp-ci-nix-store' volume, NOT in the image. Do NOT run
+# nix-collect-garbage on that volume — GC would remove paths not held by a
+# gcroot and silently break every baked image. Rebuild images after any GC.
+#
 # The entrypoint clones opp_ci/opp_repl on each start (same pattern as
 # Containerfile.host.j2) so a push to either repo does not invalidate this
 # image's layers; only changes to opp_env's pinned SHA do.

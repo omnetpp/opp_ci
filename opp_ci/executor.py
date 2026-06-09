@@ -2,6 +2,7 @@ import contextlib
 import io
 import logging
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -232,6 +233,33 @@ def resolve_git_project(project, git_ref, *, toolchain="none"):
     return project, git_ref
 
 
+# A name already carries an explicit version when it ends in a numeric version
+# (e.g. inet-4.5), or the pseudo-versions "latest" / "git".
+_VERSIONED_NAME_RE = re.compile(r"^(.*?)-(\d.*|latest|git)$")
+
+
+def resolve_opp_env_id(project, git_ref=None, *, toolchain="nix"):
+    """Resolve the *versioned* opp_env project identifier for install/run.
+
+    opp_env rejects a bare catalog name like 'mm1k' as ambiguous ("Which
+    version of 'mm1k' do you mean?"); it needs a versioned identifier. The
+    rules mirror the podman entrypoint's catalog-name split:
+
+      - a specific git_ref under nix → the '-git' variant (the caller pins the
+        commit via the OPP_ENV_GIT_REF env var)
+      - an already-versioned name (inet-4.5, mm1k-latest, foo-git) → kept as-is
+      - a bare name → the '-latest' alias
+
+    Returns (effective_project, effective_ref).
+    """
+    effective_project, effective_ref = resolve_git_project(project, git_ref, toolchain=toolchain)
+    if effective_ref:
+        return effective_project, effective_ref
+    if _VERSIONED_NAME_RE.match(effective_project):
+        return effective_project, None
+    return f"{effective_project}-latest", None
+
+
 def _remove_git_worktree(worktree_path):
     """Remove a git worktree directory."""
     try:
@@ -305,7 +333,7 @@ def install_project(project, git_ref=None, *, isolation="none", toolchain="none"
         _logger.info("Skipping install (isolation=%s, toolchain=%s)", isolation, toolchain)
         return
 
-    effective_project, _ = resolve_git_project(project, git_ref, toolchain="nix")
+    effective_project, _ = resolve_opp_env_id(project, git_ref, toolchain="nix")
     result = run_external(
         ["opp_env", "install", effective_project],
         label=f"opp_env install {effective_project}",
@@ -446,24 +474,81 @@ def _create_git_worktree(project_dir, git_ref):
     return target
 
 
-def _podman_image_tag(toolchain, os_name, os_version, compiler, compiler_version,
-                      *, distro=None, distro_version=None,
-                      flavor=None, flavor_version=None,
-                      omnetpp_version=None):
-    """Compute the runner image tag for a given combination.
+# Named volume holding the shared Nix store, mounted at /nix for every nix
+# run and during the nix image bake. Baked nix images reference /nix/store
+# paths that live in THIS volume, so it must not be garbage-collected — see
+# the warning in Containerfile.nix.j2.
+_NIX_STORE_VOLUME = "opp-ci-nix-store"
 
-    Naming convention:
-      toolchain=nix:  opp-ci-runner:nix-<platform-slug>
-      toolchain=none: opp-ci-runner:host-<platform-slug>-<compiler>-<compver>-omnetpp-<ompver>
 
-    ``<platform-slug>`` is the most-specific named level — ``kubuntu-24.04``,
-    ``ubuntu-24.04``, ``windows-11``, ``macos-15`` — built by
-    [`platforms.platform_slug()`](platforms.py).
+def _normalize_toolchain(toolchain):
+    """Canonical toolchain token for tags/labels: 'nix' or 'none'.
 
-    The host-toolchain image has a specific OMNeT++ version baked in (built
-    via opp_env install --nixless-workspace at image-build time), so a
-    different omnetpp version means a different image.
+    The codebase uses both 'host' (CLI) and 'none' (executor) for the
+    OS-package-manager compiler; both map to 'none' in the image identity.
     """
+    return "nix" if toolchain == "nix" else "none"
+
+
+def _runner_image_tag(slug, toolchain, compiler, compiler_version, omnetpp_version):
+    """Build the runner image tag from already-resolved dimensions (scheme B).
+
+    A single uniform template carrying only the *pinned & baked* dimensions:
+
+        opp-ci-runner:<slug>-<toolchain>[-<compiler>-<compiler_version>]-omnetpp-<omnetpp_version>
+
+    - ``<toolchain>`` is ``none`` (compiler from the OS package manager) or
+      ``nix`` (compiler/deps from opp_env+Nix).
+    - the ``<compiler>-<compiler_version>`` segment appears only for ``none``;
+      under nix opp_env selects the compiler, so it is not a pinned dimension.
+    - ``omnetpp`` is baked into both flavours (host via --nixless-workspace,
+      nix via run+commit), so it is always present.
+
+    The same dimensions are also attached as ``org.opp_ci.*`` labels
+    (see ``_runner_image_labels``).
+    """
+    tc = _normalize_toolchain(toolchain)
+    if not omnetpp_version:
+        raise ValueError("runner image tag requires an omnetpp version")
+    parts = [slug, tc]
+    if tc == "none":
+        if not compiler or not compiler_version:
+            raise ValueError(
+                "host (toolchain=none) runner image tag requires compiler and compiler_version"
+            )
+        parts += [compiler.lower(), str(compiler_version)]
+    parts += ["omnetpp", omnetpp_version]
+    return "opp-ci-runner:" + "-".join(parts)
+
+
+def _runner_image_labels(slug, toolchain, compiler, compiler_version, omnetpp_version):
+    """The key=value form of an image's dimensions, as org.opp_ci.* labels.
+
+    Mirrors ``_runner_image_tag`` but stored where ``=`` is legal, so the
+    full self-describing view is queryable via
+    ``podman images --filter label=org.opp_ci.omnetpp=6.4.0`` and inspectable.
+    """
+    tc = _normalize_toolchain(toolchain)
+    labels = {
+        "org.opp_ci.platform": slug,
+        "org.opp_ci.toolchain": tc,
+        "org.opp_ci.omnetpp": omnetpp_version or "",
+    }
+    if tc == "none" and compiler:
+        labels["org.opp_ci.compiler"] = compiler.lower()
+        labels["org.opp_ci.compiler-version"] = str(compiler_version or "")
+    return labels
+
+
+def _nix_base_image_tag(slug):
+    """Tag of the omnetpp-agnostic nix base image (nix + opp_env, empty
+    workspace). The per-omnetpp runner image is committed from a container of
+    this base after ``opp_env install omnetpp-<ver>``."""
+    return f"opp-ci-runner-base:{slug}-nix"
+
+
+def _resolve_platform_slug(os_name, os_version, *, distro, distro_version,
+                           flavor, flavor_version):
     from opp_ci import platforms
     slug = platforms.platform_slug(
         os=os_name, os_version=os_version,
@@ -475,18 +560,25 @@ def _podman_image_tag(toolchain, os_name, os_version, compiler, compiler_version
             "isolation=podman requires a fully-specified platform "
             "(os+os_version, or distro+distro_version, or flavor+version)"
         )
-    if toolchain == "nix":
-        return f"opp-ci-runner:nix-{slug}"
-    if not compiler or not compiler_version:
-        raise ValueError(
-            "isolation=podman with toolchain=none requires both 'compiler' and 'compiler_version'"
-        )
-    if not omnetpp_version:
-        raise ValueError(
-            "isolation=podman with toolchain=none requires an omnetpp version "
-            "(set resolved_deps['omnetpp'] on the run, or pick one in the New Run form)"
-        )
-    return f"opp-ci-runner:host-{slug}-{compiler.lower()}-{compiler_version}-omnetpp-{omnetpp_version}"
+    return slug
+
+
+def _podman_image_tag(toolchain, os_name, os_version, compiler, compiler_version,
+                      *, distro=None, distro_version=None,
+                      flavor=None, flavor_version=None,
+                      omnetpp_version=None):
+    """Compute the runner image tag for a given combination (scheme B).
+
+    See ``_runner_image_tag``. ``<platform-slug>`` is the most-specific named
+    level — ``kubuntu-24.04``, ``ubuntu-24.04``, ``windows-11`` — built by
+    [`platforms.platform_slug()`](platforms.py). A different omnetpp version
+    means a different image for both toolchains.
+    """
+    slug = _resolve_platform_slug(
+        os_name, os_version, distro=distro, distro_version=distro_version,
+        flavor=flavor, flavor_version=flavor_version,
+    )
+    return _runner_image_tag(slug, toolchain, compiler, compiler_version, omnetpp_version)
 
 
 def _resolve_remote_head(url, ref="HEAD"):
@@ -602,39 +694,172 @@ def _image_exists_locally(tag):
     return result.returncode == 0
 
 
+def _image_id(tag):
+    """The local image ID for *tag*, or None if it isn't present."""
+    result = subprocess.run(
+        ["podman", "image", "inspect", tag, "--format", "{{.Id}}"],
+        capture_output=True, text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _image_label(tag, key):
+    """The value of label *key* on image *tag*, or None if absent/unknown."""
+    result = subprocess.run(
+        ["podman", "image", "inspect", tag, "--format",
+         f'{{{{index .Config.Labels "{key}"}}}}'],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    # podman renders a missing map key as the Go zero value "<no value>".
+    return None if value in ("", "<no value>") else value
+
+
+def _push_image(tag):
+    result = run_external(["podman", "push", tag], label=f"podman push {tag}")
+    if result.returncode != 0:
+        raise RuntimeError(f"podman push {tag} failed (exit {result.returncode})")
+
+
+def _label_args(labels, flag):
+    """Flatten a {key: value} dict into repeated CLI args.
+
+    flag='--label' → ['--label', 'k=v', ...]   (podman build)
+    flag='--change' → ['--change', 'LABEL k=v', ...]  (podman commit)
+    """
+    args = []
+    for k, v in labels.items():
+        args += [flag, f"{k}={v}" if flag == "--label" else f"LABEL {k}={v}"]
+    return args
+
+
+def _build_nix_runner_image(final_tag, slug, os_name, os_version,
+                            compiler, compiler_version, *, distro, distro_version,
+                            flavor, flavor_version, omnetpp_version, push):
+    """Bake a per-omnetpp nix runner image via run+commit.
+
+    A Containerfile RUN cannot write into the *runtime* /nix named volume, so
+    the workspace (compiled omnetpp) is baked by running ``opp_env install
+    omnetpp-<ver>`` in a container with the shared /nix volume mounted, then
+    committing it. ``podman commit`` excludes mounted volumes, so the /nix
+    store stays in the volume (shared across all images) while only the
+    workspace lands in the image layer.
+
+    The omnetpp install is expensive, so it is skipped when *final_tag*
+    already exists and was committed from the current base image (tracked via
+    the ``org.opp_ci.base-id`` label) — a new opp_env SHA changes the base
+    image ID and triggers a rebake.
+    """
+    if not omnetpp_version:
+        raise ValueError("nix runner image requires an omnetpp version to bake")
+    base_tag = _nix_base_image_tag(slug)
+
+    # 1. Build/refresh the omnetpp-agnostic base (cheap when layer-cached).
+    files = render_containerfile(
+        "nix", os_name, os_version, compiler, compiler_version,
+        distro=distro, distro_version=distro_version,
+        flavor=flavor, flavor_version=flavor_version,
+        omnetpp_version=omnetpp_version,
+    )
+    base_labels = {"org.opp_ci.platform": slug, "org.opp_ci.toolchain": "nix"}
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, content in files.items():
+            with open(os.path.join(tmp, name), "w") as f:
+                f.write(content)
+        result = run_external(
+            ["podman", "build", "-t", base_tag, *_label_args(base_labels, "--label"),
+             "-f", os.path.join(tmp, "Containerfile"), tmp],
+            label=f"podman build {base_tag}", stream=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"podman build {base_tag} failed (exit {result.returncode})")
+    base_id = _image_id(base_tag)
+
+    # 2. Skip the omnetpp bake if the final image is already current.
+    if _image_exists_locally(final_tag) and _image_label(final_tag, "org.opp_ci.base-id") == base_id:
+        _logger.info("%s already baked from current base — skipping omnetpp install", final_tag)
+        if push:
+            _push_image(final_tag)
+        return
+
+    # 3. Provision omnetpp into the workspace against the shared /nix volume,
+    #    then commit. uuid (not Date/random) keeps the container name unique.
+    cname = f"opp-ci-bake-{uuid.uuid4().hex[:8]}"
+    subprocess.run(["podman", "rm", "-f", cname], capture_output=True, text=True)
+    try:
+        result = run_external(
+            ["podman", "run", "--name", cname,
+             "-v", f"{_NIX_STORE_VOLUME}:/nix",
+             base_tag, "install", f"omnetpp-{omnetpp_version}"],
+            label=f"bake omnetpp-{omnetpp_version} into {final_tag}", stream=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"omnetpp-{omnetpp_version} install for {final_tag} failed (exit {result.returncode})"
+            )
+        commit_labels = _runner_image_labels(slug, "nix", compiler, compiler_version, omnetpp_version)
+        commit_labels["org.opp_ci.base-id"] = base_id
+        result = run_external(
+            ["podman", "commit", *_label_args(commit_labels, "--change"), cname, final_tag],
+            label=f"podman commit {final_tag}",
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"podman commit {final_tag} failed (exit {result.returncode})")
+    finally:
+        subprocess.run(["podman", "rm", "-f", cname], capture_output=True, text=True)
+
+    if push:
+        _push_image(final_tag)
+
+
 def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version,
                        *, distro=None, distro_version=None,
                        flavor=None, flavor_version=None,
                        omnetpp_version=None, push=False):
     """Build (and optionally push) one opp-ci-runner image.
 
-    For host toolchain, *omnetpp_version* is required — the Containerfile uses
-    'opp_env install --nixless-workspace' at build time to bake that specific
-    OMNeT++ into the image so the container can run opp_repl tests without
-    needing OMNeT++ at run time.
+    *omnetpp_version* is required for both toolchains — it is baked in so the
+    container can run opp_repl tests without (re)building OMNeT++ per run:
+      - host: the Containerfile runs 'opp_env install --nixless-workspace'.
+      - nix:  run+commit bakes the workspace; see ``_build_nix_runner_image``.
     """
+    slug = _resolve_platform_slug(
+        os_name, os_version, distro=distro, distro_version=distro_version,
+        flavor=flavor, flavor_version=flavor_version,
+    )
+    if toolchain == "nix":
+        _build_nix_runner_image(
+            tag, slug, os_name, os_version, compiler, compiler_version,
+            distro=distro, distro_version=distro_version,
+            flavor=flavor, flavor_version=flavor_version,
+            omnetpp_version=omnetpp_version, push=push,
+        )
+        return
+
     files = render_containerfile(
         toolchain, os_name, os_version, compiler, compiler_version,
         distro=distro, distro_version=distro_version,
         flavor=flavor, flavor_version=flavor_version,
         omnetpp_version=omnetpp_version,
     )
+    labels = _runner_image_labels(slug, toolchain, compiler, compiler_version, omnetpp_version)
     with tempfile.TemporaryDirectory() as tmp:
         for name, content in files.items():
             with open(os.path.join(tmp, name), "w") as f:
                 f.write(content)
         containerfile_path = os.path.join(tmp, "Containerfile")
         result = run_external(
-            ["podman", "build", "-t", tag, "-f", containerfile_path, tmp],
+            ["podman", "build", "-t", tag, *_label_args(labels, "--label"),
+             "-f", containerfile_path, tmp],
             label=f"podman build {tag}",
             stream=True,
         )
         if result.returncode != 0:
             raise RuntimeError(f"podman build {tag} failed (exit {result.returncode})")
     if push:
-        result = run_external(["podman", "push", tag], label=f"podman push {tag}")
-        if result.returncode != 0:
-            raise RuntimeError(f"podman push {tag} failed (exit {result.returncode})")
+        _push_image(tag)
 
 
 def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version,
@@ -720,8 +945,7 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
     # opp_repl needs the *bare* project name (e.g. mm1k, inet) to match the
     # .opp definition opp_env clones. Split them back out: keep an
     # already-versioned name as-is, otherwise install the "-latest" alias.
-    import re
-    _ver_match = re.match(r"^(.*?)-(\d.*|latest|git)$", project)
+    _ver_match = _VERSIONED_NAME_RE.match(project)
     catalog_bare = _ver_match.group(1) if _ver_match else project
     catalog_install_id = project if _ver_match else f"{project}-latest"
     repl_project = catalog_bare if is_catalog else project
@@ -754,10 +978,10 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
     # only need to pass its arguments here — repeating the binary name would
     # produce `opp_ci opp_ci ...` and "No such command" from click.
     if toolchain == "nix":
-        podman_cmd += ["-v", "opp-ci-nix-store:/nix"]
+        podman_cmd += ["-v", f"{_NIX_STORE_VOLUME}:/nix"]
         if git_ref:
             podman_cmd += ["-e", f"OPP_ENV_GIT_REF={git_ref}"]
-        effective_project, _ = resolve_git_project(project, git_ref, toolchain="nix")
+        effective_project, _ = resolve_opp_env_id(project, git_ref, toolchain="nix")
         inner_cmd = COMMAND_MAP.get(kind)
         if inner_cmd is None:
             raise ValueError(f"Unknown test kind: {kind!r}. Supported: {list(COMMAND_MAP.keys())}")
@@ -770,8 +994,7 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
         #   -p <bare>    selects the project; opp_repl knows it as the bare
         #                name (e.g. "inet"), while opp_env's identifier is
         #                versioned (e.g. "inet-4.6.0").
-        import re as _re
-        bare_project = _re.sub(r"-[0-9].*$", "", project)
+        bare_project = re.sub(r"-[0-9].*$", "", project)
         inner_cmd += f" --load @opp -p {bare_project}"
         # --install: have opp_env download + build the project (and its deps,
         # including omnetpp) if not already present in the Nix store.
@@ -846,7 +1069,7 @@ def _run_test_via_opp_env(project, kind, **kwargs):
         cmd += f" --mode {mode}"
 
     env = os.environ.copy()
-    effective_project, effective_ref = resolve_git_project(project, git_ref, toolchain="nix")
+    effective_project, effective_ref = resolve_opp_env_id(project, git_ref, toolchain="nix")
     if effective_ref:
         env["OPP_ENV_GIT_REF"] = effective_ref
     args = ["opp_env", "run", effective_project, "-c", cmd]

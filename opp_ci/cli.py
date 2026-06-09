@@ -2864,7 +2864,7 @@ def image_group():
 @click.option("--compiler", default=None, help="Compiler name (required for --toolchain=host)")
 @click.option("--compiler-version", default=None, help="Compiler version (required for --toolchain=host)")
 @click.option("--omnetpp-version", default=None,
-              help="OMNeT++ version baked into the image (required for --toolchain=host)")
+              help="OMNeT++ version baked into the image (required for both toolchains)")
 @click.option("--toolchain", type=click.Choice(["host", "nix"]), required=True,
               help="Whether the compiler comes from the OS package manager (host) or opp_env/Nix")
 @click.option("--push", is_flag=True, help="Push the built image to the configured registry")
@@ -2890,14 +2890,14 @@ def _build_one_image(*, os_name, os_version, distro, distro_version,
     and `_build_matrix_images` share one build path. Building always runs
     against the local podman daemon.
     """
-    from opp_ci.executor import build_runner_image
+    from opp_ci.executor import build_runner_image, _runner_image_tag
     from opp_ci import platforms
 
     if toolchain == "host":
         if not compiler or not compiler_version:
             raise click.ClickException("--compiler and --compiler-version are required when --toolchain=host")
-        if not omnetpp_version:
-            raise click.ClickException("--omnetpp-version is required when --toolchain=host")
+    if not omnetpp_version:
+        raise click.ClickException("--omnetpp-version is required (baked into the image for both toolchains)")
 
     try:
         resolved_os, resolved_distro, resolved_flavor = platforms.resolve_platform(
@@ -2919,10 +2919,7 @@ def _build_one_image(*, os_name, os_version, distro, distro_version,
             "Need a fully-specified platform: pass --distro NAME --distro-version VER, "
             "or --flavor NAME --flavor-version VER, or --os Windows/MacOS --os-version VER."
         )
-    if toolchain == "nix":
-        tag = f"opp-ci-runner:nix-{slug}"
-    else:
-        tag = f"opp-ci-runner:host-{slug}-{compiler.lower()}-{compiler_version}-omnetpp-{omnetpp_version}"
+    tag = _runner_image_tag(slug, toolchain, compiler, compiler_version, omnetpp_version)
 
     try:
         build_runner_image(

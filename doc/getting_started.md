@@ -172,8 +172,8 @@ The four combinations:
 |---|---|---|
 | none | none | direct on worker, host packages (no Nix, no container) |
 | none | nix | `opp_env run …` on the worker (today's default behavior) |
-| podman | none | container with apt/dnf-installed compiler (`opp-ci-runner:host-…`) |
-| podman | nix | container with Nix + opp_env inside (`opp-ci-runner:nix-…`) |
+| podman | none | container with apt/dnf-installed compiler (`opp-ci-runner:<slug>-none-…`) |
+| podman | nix | container with Nix + opp_env, omnetpp baked in (`opp-ci-runner:<slug>-nix-omnetpp-…`) |
 
 If neither flag is given, both default to `none` — i.e. just run on the host.
 
