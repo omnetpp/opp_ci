@@ -29,8 +29,10 @@ from opp_ci.db.models import (                                   # noqa: E402
     TestVerdictKind,
 )
 from opp_ci.persistence import (                                 # noqa: E402
-    create_matrix_run, create_test_run, create_test_verdict,
-    finalize_verdict_for_run, get_or_create_test, insert_expectation,
+    USE_GLOBAL_DEFAULT, create_matrix_run, create_test_run, create_test_verdict,
+    finalize_verdict_for_run, get_current_expectation, get_or_create_test,
+    insert_expectation, parse_expectation_override,
+    read_default_expectation_code, set_default_expectation_code,
 )
 
 
@@ -54,7 +56,9 @@ class PerRunVerdictTests(unittest.TestCase):
         self.s.close()
 
     def _finished_standalone(self, code=TestResultCode.PASS, **coord):
-        test = get_or_create_test(self.s, _coord(**coord))
+        # default_expectation=None: these tests control the expectation
+        # explicitly, so suppress the auto-stamped creation default.
+        test = get_or_create_test(self.s, _coord(**coord), default_expectation=None)
         run = create_test_run(self.s, test_id=test.id, matrix_run_id=None)
         run.lifecycle = TestRunLifecycle.finished
         run.result_code = code
@@ -140,6 +144,88 @@ class PerRunVerdictTests(unittest.TestCase):
 
         self.assertEqual(self._verdicts_for(run.id), [])
         self.assertIsNone(run.recorded_verdict)
+
+
+class DefaultExpectationTests(unittest.TestCase):
+    """Auto-stamped default expectation on Test creation."""
+
+    def setUp(self):
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+        self.s = SessionLocal()
+
+    def tearDown(self):
+        self.s.close()
+
+    def _finish(self, test, code):
+        run = create_test_run(self.s, test_id=test.id, matrix_run_id=None)
+        run.lifecycle = TestRunLifecycle.finished
+        run.result_code = code
+        run.finished_at = datetime.datetime(2026, 1, 1)
+        self.s.flush()
+        finalize_verdict_for_run(self.s, run.id)
+        return run
+
+    def test_new_test_stamped_with_factory_default_pass(self):
+        # No AppSetting row -> factory default PASS, stamped on creation.
+        test = get_or_create_test(self.s, _coord())
+        exp = get_current_expectation(self.s, test.id)
+        self.assertIsNotNone(exp)
+        self.assertEqual(exp.expected_result_code, TestResultCode.PASS)
+        # First run already yields a verdict — no manual set + re-run needed.
+        run = self._finish(test, TestResultCode.PASS)
+        self.assertEqual(run.recorded_verdict, "EXPECTED")
+
+    def test_new_test_default_pass_then_failing_run_is_unexpected(self):
+        test = get_or_create_test(self.s, _coord())
+        run = self._finish(test, TestResultCode.FAIL)
+        self.assertEqual(run.recorded_verdict, "UNEXPECTED")
+
+    def test_existing_test_not_restamped(self):
+        test = get_or_create_test(self.s, _coord())
+        again = get_or_create_test(self.s, _coord())
+        self.assertEqual(test.id, again.id)
+        rows = test.expected_results
+        self.assertEqual(len(rows), 1)  # only the creation default
+
+    def test_override_stamps_given_code(self):
+        test = get_or_create_test(self.s, _coord(),
+                                  default_expectation=TestResultCode.FAIL)
+        exp = get_current_expectation(self.s, test.id)
+        self.assertEqual(exp.expected_result_code, TestResultCode.FAIL)
+
+    def test_none_suppresses_stamp(self):
+        test = get_or_create_test(self.s, _coord(), default_expectation=None)
+        self.assertIsNone(get_current_expectation(self.s, test.id))
+        run = self._finish(test, TestResultCode.PASS)
+        self.assertEqual(run.recorded_verdict, "UNKNOWN")
+
+    def test_setting_overrides_factory_default(self):
+        set_default_expectation_code(self.s, TestResultCode.ERROR)
+        self.s.commit()
+        self.assertEqual(read_default_expectation_code(self.s), TestResultCode.ERROR)
+        test = get_or_create_test(self.s, _coord())
+        self.assertEqual(
+            get_current_expectation(self.s, test.id).expected_result_code,
+            TestResultCode.ERROR,
+        )
+
+    def test_cleared_setting_means_no_default(self):
+        set_default_expectation_code(self.s, None)  # "no default"
+        self.s.commit()
+        self.assertIsNone(read_default_expectation_code(self.s))
+        test = get_or_create_test(self.s, _coord())
+        self.assertIsNone(get_current_expectation(self.s, test.id))
+
+    def test_read_default_unset_is_factory_pass(self):
+        self.assertEqual(read_default_expectation_code(self.s), TestResultCode.PASS)
+
+    def test_parse_expectation_override(self):
+        self.assertIs(parse_expectation_override(""), USE_GLOBAL_DEFAULT)
+        self.assertIs(parse_expectation_override(None), USE_GLOBAL_DEFAULT)
+        self.assertEqual(parse_expectation_override("PASS"), TestResultCode.PASS)
+        with self.assertRaises(ValueError):
+            parse_expectation_override("BOGUS")
 
 
 if __name__ == "__main__":

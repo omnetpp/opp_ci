@@ -619,3 +619,22 @@ class TestRun(Base):
             return None
         latest = max(promoted, key=lambda v: v.recorded_at or v.created_at)
         return latest.verdict.value
+
+
+class AppSetting(Base):
+    """Tiny key/value store for global, admin-editable settings.
+
+    One row per setting key. `value` is a string (NULL allowed); callers
+    interpret it. Currently holds the default expected result stamped on
+    newly-created Tests (key `default_expected_result`).
+    """
+    __tablename__ = "app_settings"
+
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow,
+                        onupdate=datetime.datetime.utcnow)
+    updated_by = Column(String, nullable=True)
+
+    def __repr__(self):
+        return f"<AppSetting(key={self.key!r}, value={self.value!r})>"

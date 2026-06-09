@@ -14,6 +14,7 @@ from sqlalchemy import func, or_, select
 
 from opp_ci.db.models import (
     TEST_COORD_FIELDS,
+    AppSetting,
     ExpectedTestResult,
     Test,
     TestMatrix,
@@ -28,6 +29,11 @@ from opp_ci.db.models import (
 )
 
 _logger = logging.getLogger(__name__)
+
+# Sentinel for "no per-call override given — use the global default". Distinct
+# from None, which means "explicitly: create with no expectation".
+USE_GLOBAL_DEFAULT = object()
+_UNSET = USE_GLOBAL_DEFAULT  # short internal alias
 
 
 def status_filter(query, status_str):
@@ -77,12 +83,24 @@ def job_to_coord(job, *, project=None, opp_file=None):
     return coord
 
 
-def get_or_create_test(session, coord):
+def get_or_create_test(session, coord, *, default_expectation=_UNSET,
+                       expectation_set_by="system"):
     """Return the Test row matching `coord`, creating it if missing.
 
     `coord` is a dict over `TEST_COORD_FIELDS` plus `resolved_deps`
     (unknown keys ignored, missing keys treated as None). Caller is
     responsible for commit/flush.
+
+    On *creation only*, an initial `ExpectedTestResult` is stamped so the
+    Test's first run already yields a meaningful verdict instead of
+    UNKNOWN. `default_expectation` controls the stamped code:
+      * `_UNSET` (default) — use the global default from app settings.
+      * a `TestResultCode` — stamp that code (per-submission override).
+      * `None` — stamp nothing (create with no expectation; first run is
+        UNKNOWN, the pre-feature behaviour).
+    An existing Test is returned untouched — never re-stamped.
+    `expectation_set_by` attributes the auto-row (submitting user when
+    known, else "system").
     """
     h = compute_test_coord_hash(coord)
     existing = session.execute(
@@ -94,6 +112,16 @@ def get_or_create_test(session, coord):
     test = Test(coord_hash=h, resolved_deps=coord.get("resolved_deps"), **fields)
     session.add(test)
     session.flush()
+
+    code = (read_default_expectation_code(session)
+            if default_expectation is _UNSET else default_expectation)
+    if code is not None:
+        insert_expectation(
+            session, test_id=test.id,
+            expected_result_code=code,
+            reason="default expectation on creation",
+            set_by=expectation_set_by,
+        )
     return test
 
 
@@ -205,6 +233,50 @@ def create_matrix_from_axes(session, *, project, config, name=None, opp_file=Non
 
 
 # ── Expectations ──────────────────────────────────────────────────────
+
+# Global default expected result, stamped on newly-created Tests. Stored in
+# the AppSetting key/value table; factory value is PASS. An empty stored value
+# means "no default" (new Tests start with no expectation → UNKNOWN verdict).
+DEFAULT_EXPECTATION_KEY = "default_expected_result"
+FACTORY_DEFAULT_EXPECTATION = TestResultCode.PASS
+
+
+def read_default_expectation_code(session):
+    """Return the configured default `TestResultCode`, or the factory
+    default (PASS) when unset. Returns None only when the setting has been
+    explicitly cleared (admin chose "no default")."""
+    row = session.get(AppSetting, DEFAULT_EXPECTATION_KEY)
+    if row is None:
+        return FACTORY_DEFAULT_EXPECTATION
+    if not row.value:
+        return None
+    return TestResultCode(row.value)
+
+
+def set_default_expectation_code(session, code, *, set_by=None):
+    """Set the global default expected result. `code` is a `TestResultCode`,
+    or None for "no default". Caller commits."""
+    row = session.get(AppSetting, DEFAULT_EXPECTATION_KEY)
+    if row is None:
+        row = AppSetting(key=DEFAULT_EXPECTATION_KEY)
+        session.add(row)
+    row.value = code.value if code is not None else ""
+    row.updated_by = set_by
+    session.flush()
+    return row
+
+
+def parse_expectation_override(raw):
+    """Map a submission-form/CLI value to a `get_or_create_test`
+    `default_expectation` argument.
+
+    `""`/`None` → `_UNSET` (fall back to the global default); a code string
+    ("PASS"/"FAIL"/"ERROR"/"SKIPPED") → the matching `TestResultCode`.
+    Raises `ValueError` on an unknown code string.
+    """
+    if not raw:
+        return _UNSET
+    return TestResultCode(raw)
 
 
 def get_current_expectation(session, test_id):
@@ -540,7 +612,8 @@ def mark_stale_workers_offline(session, now, timeout_seconds, max_reclaims):
 
 
 def enqueue_job(session, job, *, project, opp_file=None, matrix_run_id=None,
-                use_cache=False, cache_fingerprint=None):
+                use_cache=False, cache_fingerprint=None,
+                default_expectation=_UNSET, expectation_set_by="system"):
     """End-to-end: turn one expand_matrix job dict into a queued TestRun
     plus (when `matrix_run_id` is given) a corresponding TestVerdict cell.
 
@@ -553,11 +626,17 @@ def enqueue_job(session, job, *, project, opp_file=None, matrix_run_id=None,
         verdict cell is created with `verdict=None`; it promotes when
         the run finishes.
 
+    `default_expectation` / `expectation_set_by` are forwarded to
+    `get_or_create_test` so a fresh Test is stamped with the global
+    default (or a per-submission override) on creation.
+
     Returns a (TestRun, TestVerdict|None) tuple. The TestVerdict is None
     only when no `matrix_run_id` was given.
     """
     coord = job_to_coord(job, project=project, opp_file=opp_file)
-    test = get_or_create_test(session, coord)
+    test = get_or_create_test(session, coord,
+                              default_expectation=default_expectation,
+                              expectation_set_by=expectation_set_by)
 
     cached_run = None
     if use_cache and cache_fingerprint:
