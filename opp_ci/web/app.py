@@ -29,7 +29,7 @@ from opp_ci.persistence import (
     get_test_by_name, insert_expectation, mark_stale_workers_offline,
     parse_expectation_override, read_default_expectation_code,
     set_default_expectation_code, set_matrix_name, set_test_name,
-    status_filter, USE_GLOBAL_DEFAULT,
+    USE_GLOBAL_DEFAULT,
 )
 
 _logger = logging.getLogger(__name__)
@@ -572,7 +572,19 @@ def results_page(
     toolchain: str = Query(default=None),
     opp_file: str = Query(default=None),
     dep: str = Query(default=None),
-    status: str = Query(default=None),
+    ref: str = Query(default=None),
+    commit: str = Query(default=None),
+    version: str = Query(default=None),
+    worker: str = Query(default=None),
+    trigger: str = Query(default=None),
+    github_owner: str = Query(default=None),
+    github_repo: str = Query(default=None),
+    github_pr_number: str = Query(default=None),
+    verdict: str = Query(default=None),
+    actual: str = Query(default=None),
+    state: str = Query(default=None),
+    since: str = Query(default=None),
+    until: str = Query(default=None),
     run_ids: str = Query(default=None),
     view: str = Query(default="summary"),
     grouping: str = Query(default="any"),
@@ -583,9 +595,13 @@ def results_page(
 
     session = SessionLocal()
     try:
+        # Outer-join the parent matrix run so its trigger / GitHub context can
+        # be filtered (mirrors the Test Runs page); outer so standalone runs
+        # still appear when no matrix-run filter is active.
         query = (
             select(TestRun)
             .join(Test, TestRun.test_id == Test.id)
+            .outerjoin(TestMatrixRun, TestRun.matrix_run_id == TestMatrixRun.id)
             .options(selectinload(TestRun.verdicts))
             .order_by(TestRun.id.desc())
             .limit(limit)
@@ -609,13 +625,53 @@ def results_page(
         query = apply_str_filter(query, Test.toolchain, toolchain)
         query = apply_str_filter(query, Test.opp_file, opp_file, "contains")
         query = apply_dep_filter(query, Test.resolved_deps, dep)
-        if status:
+        query = apply_str_filter(query, TestRun.git_ref, ref, "contains")
+        if commit:
+            query = query.where(TestRun.commit_sha.startswith(commit))
+        query = apply_str_filter(query, TestRun.version, version, "prefix")
+        if worker and worker.isdigit():
+            query = query.where(TestRun.worker_id == int(worker))
+        query = apply_str_filter(query, TestMatrixRun.trigger, trigger)
+        query = apply_str_filter(query, TestMatrixRun.github_owner, github_owner, "contains")
+        query = apply_str_filter(query, TestMatrixRun.github_repo, github_repo, "contains")
+        query = apply_str_filter(
+            query, cast(TestMatrixRun.github_pr_number, String), github_pr_number, "contains")
+        # Result model mirrors the run pages: State (lifecycle), Actual
+        # (outcome) and Verdict (vs expectation). Forgiving on URL params.
+        if state:
             try:
-                query = status_filter(query, status)
+                query = query.where(TestRun.lifecycle == TestRunLifecycle(state))
             except ValueError:
-                # Forgiving on URL params: a bad ?status= just shows no rows
-                # and the user corrects the filter.
                 query = query.where(false())
+        if actual:
+            try:
+                query = query.where(TestRun.result_code == TestResultCode(actual))
+            except ValueError:
+                query = query.where(false())
+        if verdict:
+            try:
+                verdict_kind = TestVerdictKind(verdict)
+            except ValueError:
+                query = query.where(false())
+            else:
+                query = query.where(exists().where(and_(
+                    TestVerdict.test_run_id == TestRun.id,
+                    TestVerdict.verdict == verdict_kind,
+                )))
+        if since:
+            try:
+                query = query.where(
+                    TestRun.created_at >= datetime.datetime.fromisoformat(since)
+                )
+            except ValueError:
+                pass
+        if until:
+            try:
+                # Inclusive upper bound: a bare date covers the whole day.
+                end = datetime.datetime.fromisoformat(until) + datetime.timedelta(days=1)
+                query = query.where(TestRun.created_at < end)
+            except ValueError:
+                pass
         if not show_obsolete:
             # By default, drop runs overridden by a newer finished run at
             # the same (test_id, commit_sha). is_not_distinct_from makes
@@ -637,9 +693,13 @@ def results_page(
             session, Test.project, Test.kind, Test.mode, Test.os, Test.os_version,
             Test.distro, Test.distro_version, Test.flavor, Test.flavor_version,
             Test.arch, Test.compiler, Test.compiler_version, Test.isolation,
-            Test.toolchain, Test.opp_file,
+            Test.toolchain, Test.opp_file, TestRun.version,
+            TestMatrixRun.trigger, TestMatrixRun.github_owner, TestMatrixRun.github_repo,
         )
-        options["status"] = ["PASS", "FAIL", "ERROR", "SKIPPED"]
+        options["verdict"] = ["EXPECTED", "UNEXPECTED", "UNKNOWN"]
+        options["actual"] = ["PASS", "FAIL", "ERROR", "SKIPPED"]
+        options["state"] = ["queued", "running", "finished", "cancelled", "timed_out"]
+        workers = session.execute(select(Worker).order_by(Worker.name)).scalars().all()
         return templates.TemplateResponse(request, "results.html", {
             "runs": runs,
             "summaries": summaries,
@@ -648,6 +708,7 @@ def results_page(
             "grouping": grouping,
             "show_obsolete": show_obsolete,
             "options": options,
+            "workers": workers,
             "filters": {
                 "project": project or "", "kind": kind or "", "mode": mode or "",
                 "os": os or "", "os_version": os_version or "",
@@ -656,7 +717,12 @@ def results_page(
                 "compiler": compiler or "", "compiler_version": compiler_version or "",
                 "arch": arch or "", "isolation": isolation or "",
                 "toolchain": toolchain or "", "opp_file": opp_file or "",
-                "dep": dep or "", "status": status or "",
+                "dep": dep or "", "ref": ref or "", "commit": commit or "",
+                "version": version or "", "worker": worker or "", "trigger": trigger or "",
+                "github_owner": github_owner or "", "github_repo": github_repo or "",
+                "github_pr_number": github_pr_number or "",
+                "verdict": verdict or "", "actual": actual or "", "state": state or "",
+                "since": since or "", "until": until or "",
             },
             **_template_globals(request, current_user),
         })

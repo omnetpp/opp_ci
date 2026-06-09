@@ -293,6 +293,26 @@ class FilterPageTests(unittest.TestCase):
         self.assertNotIn('/test-runs/1"', self._get("/test-runs?ref=master"))
         self.assertNotIn('/test-runs/1"', self._get("/test-runs?commit=deadbeef"))
 
+    def test_results_run_context_filters(self):
+        # Results now carries the run-context filters too (detailed view links
+        # rows to /test-runs/<id>). Run #1 PASS (matrix run, trigger=web),
+        # run #2 FAIL (standalone).
+        pass_body = self._get("/results?view=detailed&actual=PASS")
+        self.assertIn('/test-runs/1"', pass_body)
+        self.assertNotIn('/test-runs/2"', pass_body)
+        # State (lifecycle) + Verdict wired without erroring.
+        finished = self._get("/results?view=detailed&state=finished")
+        self.assertIn('/test-runs/1"', finished)
+        self.assertIn('/test-runs/2"', finished)
+        self.assertNotIn('/test-runs/1"', self._get("/results?view=detailed&verdict=EXPECTED"))
+        # Trigger / GitHub context via the matrix-run outerjoin (only run #1).
+        trig = self._get("/results?view=detailed&trigger=web")
+        self.assertIn('/test-runs/1"', trig)
+        self.assertNotIn('/test-runs/2"', trig)
+        self.assertIn('/test-runs/1"', self._get("/results?view=detailed&github_owner=inet"))
+        # Ref/Commit code paths (seeded NULL -> narrows to nothing).
+        self.assertNotIn('/test-runs/1"', self._get("/results?view=detailed&commit=deadbeef"))
+
     def test_projects_filters(self):
         body = self._get("/projects?github_owner=inet-framework")
         self.assertIn('/projects/inet"', body)
