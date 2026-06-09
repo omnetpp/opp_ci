@@ -29,7 +29,7 @@
     </span>
     {%- endset -%}
     {%- if cell.runs -%}
-    <a class="cm2-link" href="/results?run_ids={{ cell.runs | map(attribute='run_id') | join(',') }}&amp;view=detailed&amp;show_obsolete=1">{{ disc }}</a>
+    <a class="cm2-link" href="/test-runs?run_ids={{ cell.runs | map(attribute='run_id') | join(',') }}">{{ disc }}</a>
     {%- else -%}
     {{ disc }}
     {%- endif -%}

@@ -433,20 +433,38 @@ def runs_list(
     state: str = Query(default=None),
     since: str = Query(default=None),
     until: str = Query(default=None),
-    limit: int = Query(default=50),
+    view: str = Query(default="flat"),
+    grouping: str = Query(default="any"),
+    show_obsolete: bool = Query(default=False),
+    run_ids: str = Query(default=None),
+    limit: int = Query(default=None),
 ):
+    from opp_ci.web.rollup import rollup_runs, visible_extra_dims
+
+    # "Rollup" is the former Results summary; "flat" is the run list. Accept
+    # the legacy Results view names so old /results links keep working.
+    is_rollup = view in ("rollup", "summary")
+    view = "rollup" if is_rollup else "flat"
+    if limit is None:
+        limit = 200 if is_rollup else 50
+
     session = SessionLocal()
     try:
         # Left-join the parent matrix run so its trigger / GitHub context can
         # be filtered; outer so standalone runs (matrix_run_id NULL) still
-        # appear when no matrix-run filter is active.
+        # appear when no matrix-run filter is active. Eager-load verdicts so the
+        # rollup's recorded_verdict doesn't N+1.
         query = (
             select(TestRun)
             .join(Test, TestRun.test_id == Test.id)
             .outerjoin(TestMatrixRun, TestRun.matrix_run_id == TestMatrixRun.id)
+            .options(selectinload(TestRun.verdicts))
             .order_by(TestRun.id.desc())
             .limit(limit)
         )
+        if run_ids:
+            ids = [int(x) for x in run_ids.split(",") if x.strip().isdigit()]
+            query = query.where(TestRun.id.in_(ids))
         query = apply_str_filter(query, Test.project, project, "contains")
         query = apply_str_filter(query, Test.kind, kind)
         query = apply_str_filter(query, Test.mode, mode)
@@ -513,8 +531,22 @@ def runs_list(
                 query = query.where(TestRun.created_at < end)
             except ValueError:
                 pass
+        if is_rollup and not show_obsolete:
+            # Rollup is a current-state view: drop runs overridden by a newer
+            # finished run at the same (test_id, commit_sha). is_not_distinct_from
+            # makes NULL commit_shas (legacy rows) compare equal to each other.
+            # The flat view intentionally keeps showing every attempt.
+            newer = aliased(TestRun)
+            query = query.where(~exists().where(and_(
+                newer.test_id == TestRun.test_id,
+                newer.commit_sha.is_not_distinct_from(TestRun.commit_sha),
+                newer.lifecycle == TestRunLifecycle.finished,
+                newer.id > TestRun.id,
+            )))
 
         runs = session.execute(query).scalars().all()
+        summaries = rollup_runs(runs, grouping=grouping) if is_rollup else None
+        extra_dims = visible_extra_dims(summaries) if summaries else []
         options = _distinct_options(
             session, Test.project, Test.kind, Test.mode, Test.os, Test.os_version,
             Test.distro, Test.distro_version, Test.flavor, Test.flavor_version,
@@ -528,6 +560,11 @@ def runs_list(
         workers = session.execute(select(Worker).order_by(Worker.name)).scalars().all()
         return templates.TemplateResponse(request, "runs.html", {
             "runs": runs,
+            "summaries": summaries,
+            "extra_dims": extra_dims,
+            "view": view,
+            "grouping": grouping,
+            "show_obsolete": show_obsolete,
             "options": options,
             "workers": workers,
             "filters": {
@@ -552,182 +589,15 @@ def runs_list(
         session.close()
 
 
-@web_router.get("/results", response_class=HTMLResponse)
-def results_page(
-    request: Request,
-    current_user: User = Depends(require_user()),
-    project: str = Query(default=None),
-    kind: str = Query(default=None),
-    mode: str = Query(default=None),
-    os: str = Query(default=None, alias="os"),
-    os_version: str = Query(default=None),
-    distro: str = Query(default=None),
-    distro_version: str = Query(default=None),
-    flavor: str = Query(default=None),
-    flavor_version: str = Query(default=None),
-    compiler: str = Query(default=None),
-    compiler_version: str = Query(default=None),
-    arch: str = Query(default=None),
-    isolation: str = Query(default=None),
-    toolchain: str = Query(default=None),
-    opp_file: str = Query(default=None),
-    dep: str = Query(default=None),
-    ref: str = Query(default=None),
-    commit: str = Query(default=None),
-    version: str = Query(default=None),
-    worker: str = Query(default=None),
-    trigger: str = Query(default=None),
-    github_owner: str = Query(default=None),
-    github_repo: str = Query(default=None),
-    github_pr_number: str = Query(default=None),
-    verdict: str = Query(default=None),
-    actual: str = Query(default=None),
-    state: str = Query(default=None),
-    since: str = Query(default=None),
-    until: str = Query(default=None),
-    run_ids: str = Query(default=None),
-    view: str = Query(default="summary"),
-    grouping: str = Query(default="any"),
-    show_obsolete: bool = Query(default=False),
-    limit: int = Query(default=200),
-):
-    from opp_ci.web.rollup import rollup_runs, visible_extra_dims
-
-    session = SessionLocal()
-    try:
-        # Outer-join the parent matrix run so its trigger / GitHub context can
-        # be filtered (mirrors the Test Runs page); outer so standalone runs
-        # still appear when no matrix-run filter is active.
-        query = (
-            select(TestRun)
-            .join(Test, TestRun.test_id == Test.id)
-            .outerjoin(TestMatrixRun, TestRun.matrix_run_id == TestMatrixRun.id)
-            .options(selectinload(TestRun.verdicts))
-            .order_by(TestRun.id.desc())
-            .limit(limit)
-        )
-        if run_ids:
-            ids = [int(x) for x in run_ids.split(",") if x.strip().isdigit()]
-            query = query.where(TestRun.id.in_(ids))
-        query = apply_str_filter(query, Test.project, project, "contains")
-        query = apply_str_filter(query, Test.kind, kind)
-        query = apply_str_filter(query, Test.mode, mode)
-        query = apply_str_filter(query, Test.os, os)
-        query = apply_str_filter(query, Test.os_version, os_version, "prefix")
-        query = apply_str_filter(query, Test.distro, distro)
-        query = apply_str_filter(query, Test.distro_version, distro_version, "prefix")
-        query = apply_str_filter(query, Test.flavor, flavor)
-        query = apply_str_filter(query, Test.flavor_version, flavor_version, "prefix")
-        query = apply_str_filter(query, Test.compiler, compiler)
-        query = apply_str_filter(query, Test.compiler_version, compiler_version, "prefix")
-        query = apply_str_filter(query, Test.arch, arch)
-        query = apply_str_filter(query, Test.isolation, isolation)
-        query = apply_str_filter(query, Test.toolchain, toolchain)
-        query = apply_str_filter(query, Test.opp_file, opp_file, "contains")
-        query = apply_dep_filter(query, Test.resolved_deps, dep)
-        query = apply_str_filter(query, TestRun.git_ref, ref, "contains")
-        if commit:
-            query = query.where(TestRun.commit_sha.startswith(commit))
-        query = apply_str_filter(query, TestRun.version, version, "prefix")
-        if worker and worker.isdigit():
-            query = query.where(TestRun.worker_id == int(worker))
-        query = apply_str_filter(query, TestMatrixRun.trigger, trigger)
-        query = apply_str_filter(query, TestMatrixRun.github_owner, github_owner, "contains")
-        query = apply_str_filter(query, TestMatrixRun.github_repo, github_repo, "contains")
-        query = apply_str_filter(
-            query, cast(TestMatrixRun.github_pr_number, String), github_pr_number, "contains")
-        # Result model mirrors the run pages: State (lifecycle), Actual
-        # (outcome) and Verdict (vs expectation). Forgiving on URL params.
-        if state:
-            try:
-                query = query.where(TestRun.lifecycle == TestRunLifecycle(state))
-            except ValueError:
-                query = query.where(false())
-        if actual:
-            try:
-                query = query.where(TestRun.result_code == TestResultCode(actual))
-            except ValueError:
-                query = query.where(false())
-        if verdict:
-            try:
-                verdict_kind = TestVerdictKind(verdict)
-            except ValueError:
-                query = query.where(false())
-            else:
-                query = query.where(exists().where(and_(
-                    TestVerdict.test_run_id == TestRun.id,
-                    TestVerdict.verdict == verdict_kind,
-                )))
-        if since:
-            try:
-                query = query.where(
-                    TestRun.created_at >= datetime.datetime.fromisoformat(since)
-                )
-            except ValueError:
-                pass
-        if until:
-            try:
-                # Inclusive upper bound: a bare date covers the whole day.
-                end = datetime.datetime.fromisoformat(until) + datetime.timedelta(days=1)
-                query = query.where(TestRun.created_at < end)
-            except ValueError:
-                pass
-        if not show_obsolete:
-            # By default, drop runs overridden by a newer finished run at
-            # the same (test_id, commit_sha). is_not_distinct_from makes
-            # NULL commit_shas (legacy rows) compare equal to each other.
-            newer = aliased(TestRun)
-            query = query.where(~exists().where(and_(
-                newer.test_id == TestRun.test_id,
-                newer.commit_sha.is_not_distinct_from(TestRun.commit_sha),
-                newer.lifecycle == TestRunLifecycle.finished,
-                newer.id > TestRun.id,
-            )))
-
-        runs = session.execute(query).scalars().all()
-
-        summaries = rollup_runs(runs, grouping=grouping) if view == "summary" else None
-        extra_dims = visible_extra_dims(summaries) if summaries else []
-
-        options = _distinct_options(
-            session, Test.project, Test.kind, Test.mode, Test.os, Test.os_version,
-            Test.distro, Test.distro_version, Test.flavor, Test.flavor_version,
-            Test.arch, Test.compiler, Test.compiler_version, Test.isolation,
-            Test.toolchain, Test.opp_file, TestRun.version,
-            TestMatrixRun.trigger, TestMatrixRun.github_owner, TestMatrixRun.github_repo,
-        )
-        options["verdict"] = ["EXPECTED", "UNEXPECTED", "UNKNOWN"]
-        options["actual"] = ["PASS", "FAIL", "ERROR", "SKIPPED"]
-        options["state"] = ["queued", "running", "finished", "cancelled", "timed_out"]
-        workers = session.execute(select(Worker).order_by(Worker.name)).scalars().all()
-        return templates.TemplateResponse(request, "results.html", {
-            "runs": runs,
-            "summaries": summaries,
-            "extra_dims": extra_dims,
-            "view": view,
-            "grouping": grouping,
-            "show_obsolete": show_obsolete,
-            "options": options,
-            "workers": workers,
-            "filters": {
-                "project": project or "", "kind": kind or "", "mode": mode or "",
-                "os": os or "", "os_version": os_version or "",
-                "distro": distro or "", "distro_version": distro_version or "",
-                "flavor": flavor or "", "flavor_version": flavor_version or "",
-                "compiler": compiler or "", "compiler_version": compiler_version or "",
-                "arch": arch or "", "isolation": isolation or "",
-                "toolchain": toolchain or "", "opp_file": opp_file or "",
-                "dep": dep or "", "ref": ref or "", "commit": commit or "",
-                "version": version or "", "worker": worker or "", "trigger": trigger or "",
-                "github_owner": github_owner or "", "github_repo": github_repo or "",
-                "github_pr_number": github_pr_number or "",
-                "verdict": verdict or "", "actual": actual or "", "state": state or "",
-                "since": since or "", "until": until or "",
-            },
-            **_template_globals(request, current_user),
-        })
-    finally:
-        session.close()
+@web_router.get("/results")
+def results_redirect(request: Request):
+    """The Results page is merged into /test-runs as the "rollup" view. Keep
+    old links working: a bare /results was the rollup, and runs_list still
+    understands the legacy view names (summary -> rollup, detailed -> flat)."""
+    from urllib.parse import urlencode
+    params = dict(request.query_params)
+    params.setdefault("view", "summary")  # bare /results was the rollup
+    return RedirectResponse(f"/test-runs?{urlencode(params)}", status_code=307)
 
 
 def _test_form_context(session):

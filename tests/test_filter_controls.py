@@ -201,7 +201,7 @@ class FilterPageTests(unittest.TestCase):
         return r.text
 
     def test_pages_render(self):
-        for url in ("/tests", "/test-runs", "/results", "/results?view=detailed",
+        for url in ("/tests", "/test-runs", "/test-runs?view=rollup",
                     "/test-matrices", "/test-matrix-runs", "/projects",
                     "/os", "/compilers"):
             self._get(url)
@@ -293,31 +293,27 @@ class FilterPageTests(unittest.TestCase):
         self.assertNotIn('/test-runs/1"', self._get("/test-runs?ref=master"))
         self.assertNotIn('/test-runs/1"', self._get("/test-runs?commit=deadbeef"))
 
-    def test_results_run_context_filters(self):
-        # Results now carries the run-context filters too (detailed view links
-        # rows to /test-runs/<id>). Run #1 PASS (matrix run, trigger=web),
-        # run #2 FAIL (standalone).
-        pass_body = self._get("/results?view=detailed&actual=PASS")
-        self.assertIn('/test-runs/1"', pass_body)
-        self.assertNotIn('/test-runs/2"', pass_body)
-        # State (lifecycle) + Verdict wired without erroring.
-        finished = self._get("/results?view=detailed&state=finished")
-        self.assertIn('/test-runs/1"', finished)
-        self.assertIn('/test-runs/2"', finished)
-        self.assertNotIn('/test-runs/1"', self._get("/results?view=detailed&verdict=EXPECTED"))
-        # Trigger / GitHub context via the matrix-run outerjoin (only run #1).
-        trig = self._get("/results?view=detailed&trigger=web")
-        self.assertIn('/test-runs/1"', trig)
-        self.assertNotIn('/test-runs/2"', trig)
-        self.assertIn('/test-runs/1"', self._get("/results?view=detailed&github_owner=inet"))
-        # Ref/Commit code paths (seeded NULL -> narrows to nothing).
-        self.assertNotIn('/test-runs/1"', self._get("/results?view=detailed&commit=deadbeef"))
+    def test_runs_rollup_view(self):
+        # The former Results summary is now /test-runs?view=rollup. Its rows
+        # drill down to the flat list of their run_ids, and resolved_deps (where
+        # the omnetpp version lives) is its own column — run #1 pins omnetpp 6.4.0.
+        body = self._get("/test-runs?view=rollup")
+        self.assertIn("omnetpp=6.4.0", body)
+        self.assertIn("run_ids=", body)                 # drill-down link to flat list
+        # Rollup honours the same filters (scoping the rolled-up input set).
+        self.assertIn("omnetpp=6.4.0", self._get("/test-runs?view=rollup&project=inet"))
+        self.assertNotIn("omnetpp=6.4.0", self._get("/test-runs?view=rollup&project=nope"))
 
-    def test_results_deps_column(self):
-        # resolved_deps (where the omnetpp version lives) is its own column in
-        # both views; run #1's test pins omnetpp 6.4.0.
-        self.assertIn("omnetpp=6.4.0", self._get("/results"))                  # summary
-        self.assertIn("omnetpp=6.4.0", self._get("/results?view=detailed"))   # detailed
+    def test_results_redirects_to_runs(self):
+        # /results is retired: it redirects to the merged page, defaulting to
+        # the rollup view, and keeps the legacy view names working.
+        r = self.client.get("/results", follow_redirects=False)
+        self.assertEqual(r.status_code, 307)
+        self.assertIn("/test-runs", r.headers["location"])
+        self.assertIn("view=summary", r.headers["location"])
+        r2 = self.client.get("/results?run_ids=1&view=detailed", follow_redirects=False)
+        self.assertIn("run_ids=1", r2.headers["location"])
+        self.assertIn("view=detailed", r2.headers["location"])  # runs_list maps -> flat
 
     def test_projects_filters(self):
         body = self._get("/projects?github_owner=inet-framework")
