@@ -12,9 +12,10 @@ has k>1.
 Primary dimensions: project, kind, mode, os, distro, distro_version,
 flavor, compiler, compiler_version, git_ref.
 
-Extra dimensions (os_version, flavor_version, isolation, toolchain,
-commit_sha, version) participate in classification and the Cartesian
-check but only appear as columns when they actually vary on the page.
+Extra dimensions (os_version, flavor_version, arch, isolation, toolchain,
+opp_file, commit_sha, version) participate in classification and the
+Cartesian check but only appear as columns when they actually vary on the
+page.
 """
 
 from collections import Counter, defaultdict
@@ -27,8 +28,8 @@ PRIMARY_DIMENSIONS = [
 ]
 
 EXTRA_DIMENSIONS = [
-    "os_version", "flavor_version", "isolation", "toolchain",
-    "commit_sha", "version",
+    "os_version", "flavor_version", "arch", "isolation", "toolchain",
+    "opp_file", "commit_sha", "version",
 ]
 
 ALL_DIMENSIONS = PRIMARY_DIMENSIONS + EXTRA_DIMENSIONS

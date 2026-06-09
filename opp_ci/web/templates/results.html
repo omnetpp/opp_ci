@@ -25,6 +25,13 @@
     <input type="text" name="compiler" placeholder="Compiler" value="{{ filter_compiler }}">
     <input type="text" name="compiler_version" placeholder="Compiler ver." value="{{ filter_compiler_version }}">
     <br style="flex-basis:100%; height:0;">
+    <input type="text" name="os_version" placeholder="OS ver." value="{{ filter_os_version }}">
+    <input type="text" name="flavor_version" placeholder="Flavor ver." value="{{ filter_flavor_version }}">
+    <input type="text" name="arch" placeholder="Arch (e.g. x86_64)" value="{{ filter_arch }}">
+    <input type="text" name="isolation" placeholder="Isolation (none/podman)" value="{{ filter_isolation }}">
+    <input type="text" name="toolchain" placeholder="Toolchain (none/nix)" value="{{ filter_toolchain }}">
+    <input type="text" name="opp_file" placeholder="Opp file" value="{{ filter_opp_file }}">
+    <br style="flex-basis:100%; height:0;">
     <button type="submit">Filter</button>
     <label style="font-size:0.85rem;">Grouping:</label>
     <select name="grouping" style="font-size:0.85rem;" onchange="this.form.submit()">
@@ -40,7 +47,7 @@
 {% if view == "summary" %}
 <!-- Summary roll-up view -->
 {% if summaries %}
-{% set extra_labels = {"os_version": "OS ver.", "flavor_version": "Flavor ver.", "isolation": "Isolation", "toolchain": "Toolchain", "commit_sha": "Commit", "version": "Version"} %}
+{% set extra_labels = {"os_version": "OS ver.", "flavor_version": "Flavor ver.", "arch": "Arch", "isolation": "Isolation", "toolchain": "Toolchain", "opp_file": "Opp file", "commit_sha": "Commit", "version": "Version"} %}
 {% set primary_dims = ["project", "kind", "mode", "os", "distro", "distro_version", "flavor", "compiler", "compiler_version", "git_ref"] %}
 {% set sha_dims = ["git_ref", "commit_sha"] %}
 {% set show_reps = summaries | selectattr("repetitions", "gt", 1) | list | length > 0 %}
@@ -118,6 +125,10 @@
             <th>Flavor</th>
             <th>Compiler</th>
             <th>Comp. ver.</th>
+            <th>Arch</th>
+            <th>Isolation</th>
+            <th>Toolchain</th>
+            <th>Opp file</th>
             <th>Status</th>
             <th>Verdict</th>
             <th>Duration</th>
@@ -136,6 +147,10 @@
             <td>{% if run.flavor %}{{ run.flavor|title }}{% if run.flavor_version or run.distro_version %} {{ run.flavor_version or run.distro_version }}{% endif %}{% else %}-{% endif %}</td>
             <td>{{ run.compiler or "-" }}</td>
             <td>{{ run.compiler_version or "-" }}</td>
+            <td>{{ run.arch or "-" }}</td>
+            <td>{{ run.isolation or "-" }}</td>
+            <td>{{ run.toolchain or "-" }}</td>
+            <td>{{ run.opp_file or "-" }}</td>
             <td><span class="badge badge-{{ run.effective_status }}">{{ run.effective_status }}</span></td>
             <td>{% if run.recorded_verdict %}<span class="badge badge-{{ run.recorded_verdict }}">{{ run.recorded_verdict }}</span>{% else %}-{% endif %}</td>
             <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
