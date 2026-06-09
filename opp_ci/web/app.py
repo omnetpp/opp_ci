@@ -1223,23 +1223,6 @@ def commit_detail(request: Request, project: str, sha: str,
         session.close()
 
 
-@web_router.get("/compatibility", response_class=HTMLResponse)
-def compatibility_index(request: Request, current_user: User = Depends(require_user())):
-    session = SessionLocal()
-    try:
-        projects = session.execute(
-            select(Project).where(Project.dependency_names.isnot(None)).order_by(Project.name)
-        ).scalars().all()
-        # Filter to only those with non-empty dependency lists
-        projects = [p for p in projects if p.dependency_names]
-        return templates.TemplateResponse(request, "compatibility_index.html", {
-            "projects": projects,
-            **_template_globals(request, current_user),
-        })
-    finally:
-        session.close()
-
-
 @web_router.get("/compatibility/{project_name}", response_class=HTMLResponse)
 def compatibility_page(request: Request, project_name: str,
                        current_user: User = Depends(require_user()),

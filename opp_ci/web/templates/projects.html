@@ -50,6 +50,9 @@
             <td>{% if last_status.get(p.name) %}<span class="badge badge-{{ last_status[p.name] }}">{{ last_status[p.name] }}</span>{% else %}-{% endif %}</td>
             <td>{{ run_counts.get(p.name, 0) }}</td>
             <td onclick="event.stopPropagation()">
+                {% if p.dependency_names %}
+                <a href="/compatibility/{{ p.name }}" class="btn btn-sm btn-primary">Compatibility</a>
+                {% endif %}
                 <form method="post" action="/projects/{{ p.name }}/delete" class="inline-form">
 
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
