@@ -208,13 +208,13 @@ class WorkerAgent:
         self._report_result(
             run_id,
             outcome["result_code"],
-            duration_seconds=outcome["duration_seconds"],
+            test_exec_seconds=outcome["test_exec_seconds"],
             commit_sha=outcome.get("commit_sha"),
             stdout=outcome["stdout"],
             stderr=outcome["stderr"],
             details=outcome.get("details"),
         )
-        _logger.info("Run #%d completed: %s (%.1fs)", run_id, outcome["result_code"], outcome["duration_seconds"])
+        _logger.info("Run #%d completed: %s (%.1fs)", run_id, outcome["result_code"], outcome["test_exec_seconds"])
 
     def _report_snapshot(self, run_id, snapshot):
         try:
@@ -229,15 +229,15 @@ class WorkerAgent:
         except requests.RequestException as e:
             _logger.warning("Snapshot report error for run #%d: %s", run_id, e)
 
-    def _report_result(self, run_id, result_code, duration_seconds=None,
+    def _report_result(self, run_id, result_code, test_exec_seconds=None,
                        commit_sha=None, stdout=None, stderr=None, details=None):
         """Report a job result back to the coordinator."""
         payload = {
             "run_id": run_id,
             "result_code": result_code,
         }
-        if duration_seconds is not None:
-            payload["duration_seconds"] = duration_seconds
+        if test_exec_seconds is not None:
+            payload["test_exec_seconds"] = test_exec_seconds
         if commit_sha:
             payload["commit_sha"] = commit_sha
         if stdout:

@@ -93,7 +93,7 @@ class WorkerSnapshotRequest(BaseModel):
 class WorkerResultRequest(BaseModel):
     run_id: int
     result_code: str
-    duration_seconds: float | None = None
+    test_exec_seconds: float | None = None
     commit_sha: str | None = None
     stdout: str | None = None
     stderr: str | None = None
@@ -649,7 +649,7 @@ async def worker_report_result(
         if run.lifecycle != TestRunLifecycle.cancelled:
             run.lifecycle = TestRunLifecycle.finished
         run.finished_at = datetime.datetime.utcnow()
-        run.duration_seconds = req.duration_seconds
+        run.test_exec_seconds = req.test_exec_seconds
         run.result_code = result_code
         run.stdout = req.stdout
         run.stderr = req.stderr
@@ -1890,6 +1890,7 @@ def _run_to_dict(run):
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "duration_seconds": run.duration_seconds,
+        "test_exec_seconds": run.test_exec_seconds,
         "worker_id": run.worker_id,
         "matrix_run_id": run.matrix_run_id,
         "matrix_id": matrix_run.matrix_id if matrix_run else None,

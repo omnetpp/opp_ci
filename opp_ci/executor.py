@@ -326,7 +326,7 @@ def run_test(project, kind, *, isolation=None, toolchain=None, **kwargs):
     Extra kwargs (git_ref, opp_file, mode, os, os_version, compiler,
     compiler_version) are passed through; helpers extract what they need.
 
-    Returns a dict with keys: result_code, duration_seconds, stdout, stderr,
+    Returns a dict with keys: result_code, test_exec_seconds, stdout, stderr,
     details, commit_sha.
     """
     isolation = isolation or "none"
@@ -825,7 +825,7 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
     result_code = "PASS" if result.returncode == 0 else "FAIL"
     return {
         "result_code": result_code,
-        "duration_seconds": duration,
+        "test_exec_seconds": duration,
         "stdout": result.stdout,
         "stderr": result.stderr,
         "details": None,
@@ -858,7 +858,7 @@ def _run_test_via_opp_env(project, kind, **kwargs):
     result_code = "PASS" if result.returncode == 0 else "FAIL"
     return {
         "result_code": result_code,
-        "duration_seconds": duration,
+        "test_exec_seconds": duration,
         "stdout": result.stdout,
         "stderr": result.stderr,
         "details": None,
@@ -927,7 +927,7 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None, *
         _logger.error("Test %s raised exception: %s", kind, e)
         return {
             "result_code": "ERROR",
-            "duration_seconds": duration,
+            "test_exec_seconds": duration,
             "stdout": stdout_buf.getvalue(),
             "stderr": stderr_buf.getvalue() + "\n" + repr(e),
             "details": None,
@@ -941,7 +941,7 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None, *
     _logger.info("Test finished: %s (%.1fs)", result_code, duration)
     return {
         "result_code": result_code,
-        "duration_seconds": duration,
+        "test_exec_seconds": duration,
         "stdout": stdout_buf.getvalue(),
         "stderr": stderr_buf.getvalue(),
         "details": details,

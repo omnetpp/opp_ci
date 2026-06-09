@@ -58,7 +58,8 @@
         <tr><th>Lifecycle</th><td>{{ run.lifecycle.value }}</td></tr>
         <tr><th>Result</th><td>{{ run.result_code.value if run.result_code else "-" }}</td></tr>
         <tr><th>Verdict <span class="derived-tag" title="derived: latest promoted TestVerdict for this run (by recorded_at, then created_at)">derived</span></th><td>{% if run.recorded_verdict %}<span class="badge badge-{{ run.recorded_verdict }}">{{ run.recorded_verdict }}</span>{% else %}-{% endif %}</td></tr>
-        <tr><th>Duration</th><td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td></tr>
+        <tr><th>Duration <span class="derived-tag" title="derived: finished_at - started_at (full worked-on wall-clock)">derived</span></th><td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td></tr>
+        <tr><th>Test time</th><td>{{ "%.1f"|format(run.test_exec_seconds) ~ "s" if run.test_exec_seconds else "-" }}</td></tr>
         <tr><th>Created</th><td>{{ run.created_at.strftime("%Y-%m-%d %H:%M:%S") if run.created_at else "-" }}</td></tr>
         <tr><th>Started</th><td>{{ run.started_at.strftime("%Y-%m-%d %H:%M:%S") if run.started_at else "-" }}</td></tr>
         <tr><th>Finished</th><td>{{ run.finished_at.strftime("%Y-%m-%d %H:%M:%S") if run.finished_at else "-" }}</td></tr>

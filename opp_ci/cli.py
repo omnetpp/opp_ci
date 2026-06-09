@@ -150,6 +150,7 @@ def _format_run_detail(r):
     click.echo(f"  Lifecycle:{r.get('lifecycle') or '-'}")
     click.echo(f"  Result:   {r.get('result_code') or '-'}")
     click.echo(f"  Duration: {_fmt_duration(r.get('duration_seconds'))}")
+    click.echo(f"  Test time:{_fmt_duration(r.get('test_exec_seconds'))}")
     click.echo(f"  Started:  {r.get('started_at') or '-'}")
     click.echo(f"  Finished: {r.get('finished_at') or '-'}")
     stdout = r.get("stdout")
@@ -888,7 +889,7 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
             test_run.lifecycle = TestRunLifecycle.finished
             test_run.result_code = TestResultCode(outcome["result_code"])
             test_run.finished_at = datetime.datetime.utcnow()
-            test_run.duration_seconds = outcome["duration_seconds"]
+            test_run.test_exec_seconds = outcome["test_exec_seconds"]
             test_run.commit_sha = outcome.get("commit_sha")
             test_run.stdout = outcome["stdout"]
             test_run.stderr = outcome["stderr"]
@@ -896,7 +897,7 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
             finalize_verdict_for_run(session, test_run.id)
             session.commit()
             update_ci_note(project, test_run.commit_sha, session)
-            click.echo(f"  Result: {outcome['result_code']} ({outcome['duration_seconds']:.1f}s)")
+            click.echo(f"  Result: {outcome['result_code']} ({outcome['test_exec_seconds']:.1f}s)")
     finally:
         session.close()
 
@@ -1819,7 +1820,7 @@ def run_matrix(matrix_name, new_name, spec_file, project, kinds, modes, refs, si
             test_run.lifecycle = TestRunLifecycle.finished
             test_run.result_code = TestResultCode(outcome["result_code"])
             test_run.finished_at = datetime.datetime.utcnow()
-            test_run.duration_seconds = outcome["duration_seconds"]
+            test_run.test_exec_seconds = outcome["test_exec_seconds"]
             test_run.commit_sha = outcome.get("commit_sha")
             test_run.stdout = outcome["stdout"]
             test_run.stderr = outcome["stderr"]
@@ -1831,10 +1832,10 @@ def run_matrix(matrix_name, new_name, spec_file, project, kinds, modes, refs, si
 
             if outcome["result_code"] == "PASS":
                 passed += 1
-                click.echo(f" → PASS ({outcome['duration_seconds']:.1f}s)")
+                click.echo(f" → PASS ({outcome['test_exec_seconds']:.1f}s)")
             else:
                 failed += 1
-                click.echo(f" → FAIL ({outcome['duration_seconds']:.1f}s)")
+                click.echo(f" → FAIL ({outcome['test_exec_seconds']:.1f}s)")
 
         click.echo(f"\nMatrix complete: {passed} passed, {failed} failed, "
                    f"{errors} errors ({cache_hits} cache hit(s))")

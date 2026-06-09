@@ -454,7 +454,7 @@ class TestRun(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
-    duration_seconds = Column(Float, nullable=True)
+    test_exec_seconds = Column(Float, nullable=True)
 
     # Outcome (populated iff lifecycle == finished)
     result_code = Column(Enum(TestResultCode), nullable=True)
@@ -490,6 +490,21 @@ class TestRun(Base):
     # (`run.project`, `run.kind`, `run.mode`, …). Note `run.test` is
     # the SQLAlchemy relationship returning the Test row, not the test
     # kind — use `run.kind` (or `run.test.kind`) for the kind string.
+
+    @property
+    def duration_seconds(self):
+        """Total wall-clock the run was worked on: worker-claim (started_at)
+        to finish (finished_at). Always available once a run has started —
+        including ERROR/timed-out runs that never reached the test command.
+        This is the "Duration" shown across the UI.
+
+        Distinct from the stored ``test_exec_seconds`` column, which is the
+        test-execution stopwatch (excludes install/setup) and is NULL when
+        the run died before the test ran. See run_detail's "Test time".
+        """
+        if self.started_at and self.finished_at:
+            return (self.finished_at - self.started_at).total_seconds()
+        return None
 
     @property
     def project(self):
