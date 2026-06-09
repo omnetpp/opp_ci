@@ -56,7 +56,7 @@
         .badge-error, .badge-ERROR, .badge-UNEXPECTED { background: #f8d7da; color: var(--error); }
         .badge-running { background: #cfe2ff; color: var(--running); }
         .badge-queued, .badge-skipped, .badge-SKIPPED, .badge-UNKNOWN,
-        .badge-cancelled, .badge-timed_out { background: #e2e3e5; color: var(--muted); }
+        .badge-cancelled, .badge-timed_out, .badge-pending { background: #e2e3e5; color: var(--muted); }
         .badge-compatible { background: #cfe2ff; color: var(--primary); }
 
         .compat-matrix { width: auto; }
@@ -116,6 +116,11 @@
         .filter-field.checkbox { flex-direction: row; align-items: center; gap: 0.35rem; align-self: flex-end; padding-bottom: 0.45rem; font-size: 0.85rem; color: var(--muted); }
         .filter-actions { display: flex; gap: 0.5rem; align-items: center; }
         .filter-actions button { padding: 0.4rem 0.9rem; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+
+        /* Visual filter sections: group fields under a light-bordered block with
+           a heading. Purely layout — nothing collapses. */
+        .filter-group { border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.75rem 0.75rem; margin: 0; min-width: 0; }
+        .filter-group > legend { font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 0 0.35rem; }
 
         .empty { text-align: center; padding: 2rem; color: var(--muted); }
 

@@ -24,6 +24,21 @@
 </select></label>
 {%- endmacro %}
 
+{# Visual filter section: a labelled, bordered block wrapping a .filter-grid.
+   Always shown — grouping is layout only, nothing collapses. Use as:
+       {{ f.group_open("Environment") }}
+         ...field macros...
+       {{ f.group_close() }} #}
+{% macro group_open(title) -%}
+<fieldset class="filter-group">
+<legend>{{ title }}</legend>
+<div class="filter-grid">
+{%- endmacro %}
+
+{% macro group_close() -%}
+</div></fieldset>
+{%- endmacro %}
+
 {# Typeable combo: free-text input with a datalist of the values present in
    the data. The browser surfaces the suggestions; the backend does the real
    (substring/prefix) match, since the user may type a value not in the list. #}
