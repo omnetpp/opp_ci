@@ -190,8 +190,10 @@
                 <a href="/os">OSes</a> &nbsp;
                 <a href="/compilers">Compilers</a> &nbsp;
                 <a href="/workers">Workers</a>
-                {% if current_user.role == "admin" %}
+                {% if current_user.role in ["submitter", "admin"] %}
                 &nbsp; <a href="/logs">Logs</a>
+                {% endif %}
+                {% if current_user.role == "admin" %}
                 &nbsp; <a href="/admin">Admin</a>
                 {% endif %}
                 {% endif %}

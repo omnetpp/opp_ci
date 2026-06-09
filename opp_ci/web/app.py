@@ -2222,9 +2222,11 @@ def workers_list(request: Request, current_user: User = Depends(require_user()))
 
 # ── Logs ───────────────────────────────────────────────────────────────
 #
-# Admin-only viewers for the serve and worker process logs, read from
-# systemd-journald (see opp_ci/journal.py). The pages poll a `…/tail`
-# endpoint with the journal's opaque cursor for incremental updates.
+# Viewers for the serve and worker process logs, read from systemd-journald
+# (see opp_ci/journal.py). Gated at `submitter` (so readonly users can't
+# see logs that may contain tokens/paths, but operators below admin can).
+# The pages poll a `…/tail` endpoint with the journal's opaque cursor for
+# incremental updates.
 
 
 def _render_log_entries(entries):
@@ -2261,7 +2263,7 @@ def _worker_or_404(session, worker_id):
 
 
 @web_router.get("/logs", response_class=HTMLResponse)
-def logs_hub(request: Request, current_user: User = Depends(require_user("admin"))):
+def logs_hub(request: Request, current_user: User = Depends(require_user("submitter"))):
     """Hub listing every log source: serve plus each registered worker."""
     from opp_ci.config import WORKER_HEARTBEAT_TIMEOUT
     session = SessionLocal()
@@ -2283,7 +2285,7 @@ def logs_hub(request: Request, current_user: User = Depends(require_user("admin"
 
 
 @web_router.get("/logs/serve", response_class=HTMLResponse)
-def serve_log(request: Request, current_user: User = Depends(require_user("admin"))):
+def serve_log(request: Request, current_user: User = Depends(require_user("submitter"))):
     return templates.TemplateResponse(request, "log_view.html", {
         "log_title": "Serve log",
         "log_subtitle": cfg.SERVE_UNIT,
@@ -2295,13 +2297,13 @@ def serve_log(request: Request, current_user: User = Depends(require_user("admin
 
 @web_router.get("/logs/serve/tail")
 def serve_log_tail(request: Request, cursor: str = Query(default=None),
-                   current_user: User = Depends(require_user("admin"))):
+                   current_user: User = Depends(require_user("submitter"))):
     return _tail_response(cfg.SERVE_UNIT, cursor)
 
 
 @web_router.get("/logs/worker/{worker_id}", response_class=HTMLResponse)
 def worker_log(request: Request, worker_id: int,
-               current_user: User = Depends(require_user("admin"))):
+               current_user: User = Depends(require_user("submitter"))):
     from opp_ci.journal import worker_unit_name, JournalUnavailable
     session = SessionLocal()
     try:
@@ -2323,7 +2325,7 @@ def worker_log(request: Request, worker_id: int,
 
 @web_router.get("/logs/worker/{worker_id}/tail")
 def worker_log_tail(request: Request, worker_id: int, cursor: str = Query(default=None),
-                    current_user: User = Depends(require_user("admin"))):
+                    current_user: User = Depends(require_user("submitter"))):
     from opp_ci.journal import worker_unit_name, JournalUnavailable
     session = SessionLocal()
     try:

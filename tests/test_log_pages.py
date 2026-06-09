@@ -118,17 +118,19 @@ class LogRouteTests(unittest.TestCase):
         try:
             s.add(User(id=8001, username="logs-admin", role="admin", enabled=True))
             s.add(User(id=8002, username="logs-ro", role="readonly", enabled=True))
+            s.add(User(id=8003, username="logs-sub", role="submitter", enabled=True))
             s.add(Worker(id=8005, name="local", token="tok-logs-local"))
             s.commit()
         finally:
             s.close()
 
         cls.role = "admin"
+        cls._uid_for = {"admin": 8001, "readonly": 8002, "submitter": 8003}
 
         def _load(_uid):
             s = SessionLocal()
             try:
-                uid = 8001 if cls.role == "admin" else 8002
+                uid = cls._uid_for[cls.role]
                 return s.execute(select(User).where(User.id == uid)).scalar_one_or_none()
             finally:
                 s.close()
@@ -195,11 +197,18 @@ class LogRouteTests(unittest.TestCase):
         self.assertEqual(captured["unit"], "opp_ci-worker@local.service")
 
     # ── auth ───────────────────────────────────────────────────────────
-    def test_non_admin_forbidden(self):
+    def test_readonly_forbidden(self):
         type(self).role = "readonly"
         self.assertEqual(self.client.get("/logs").status_code, 403)
         self.assertEqual(self.client.get("/logs/serve").status_code, 403)
         self.assertEqual(self.client.get("/logs/serve/tail").status_code, 403)
+
+    def test_submitter_allowed(self):
+        type(self).role = "submitter"
+        self.assertEqual(self.client.get("/logs").status_code, 200)
+        self.assertEqual(self.client.get("/logs/serve").status_code, 200)
+        with mock.patch("opp_ci.journal.read_unit", return_value=([], None)):
+            self.assertEqual(self.client.get("/logs/serve/tail").status_code, 200)
 
 
 if __name__ == "__main__":

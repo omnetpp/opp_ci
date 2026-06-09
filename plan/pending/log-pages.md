@@ -67,11 +67,12 @@ non-systemd environments — see "Fallbacks" below.)
 4. **Live update by polling, not streaming.** No SSE/websocket infra
    exists; polling the cursor endpoint every ~2 s is proportionate and
    matches existing conventions.
-5. **Session-cookie auth, admin-only.** The viewers are browser pages
+5. **Session-cookie auth, submitter+.** The viewers are browser pages
    polling with the session cookie, so the tail endpoints live on the
-   **web router** (cookie auth via `require_user("admin")`), *not* the
-   `/api` bearer router. Process logs leak tokens, paths, and internal
-   errors, so both pages and their tail endpoints are admin-gated.
+   **web router** (cookie auth via `require_user("submitter")`), *not* the
+   `/api` bearer router. Process logs can leak tokens/paths, so `readonly`
+   users are excluded — but operators at `submitter` and above (not just
+   `admin`) can read them.
 
 ## Plan
 
@@ -127,8 +128,8 @@ at differently-named units.
 ### 3. Tail endpoints (web router, cookie auth — in [`app.py`](../../opp_ci/web/app.py))
 
 ```
-GET /logs/serve/tail?cursor=<str>            → require_user("admin")
-GET /logs/worker/{worker_id}/tail?cursor=<str>  → require_user("admin")
+GET /logs/serve/tail?cursor=<str>            → require_user("submitter")
+GET /logs/worker/{worker_id}/tail?cursor=<str>  → require_user("submitter")
 ```
 
 These return `JSONResponse` (not the bearer `/api` router — the browser
@@ -150,7 +151,7 @@ polls with the session cookie). Each returns:
 
 ### 4. Web pages
 
-All on `web_router`, gated with `require_user("admin")`:
+All on `web_router`, gated with `require_user("submitter")`:
 
 - `GET /logs` → **hub** (`logs.html`): a table/list of sources — *Serve*
   (→ `/logs/serve`) and each `Worker` (→ `/logs/worker/{id}`, showing
@@ -172,10 +173,10 @@ line by `priority` using the existing `--warn`/`--error` colours from
 
 ### 5. Navigation
 
-Add an admin-only **Logs** entry in
+Add a **Logs** entry in
 [`base.html`](../../opp_ci/web/templates/base.html) → `/logs` (render
-conditionally on `current_user.role == "admin"`, next to the existing
-`Admin` link). Each row in `workers.html` also links to
+conditionally on `current_user.role in ["submitter", "admin"]`, before the
+admin-only `Admin` link). Each row in `workers.html` also links to
 `/logs/worker/{id}`, so worker logs are reachable from both the hub and
 the Workers list.
 
@@ -208,7 +209,7 @@ the other `OPP_CI_SERVE_*` vars. No worker-side change.
   by mocking `subprocess`.
 - `worker_unit_name`: verbatim mapping for normal names; charset guard
   rejects `/`, spaces, control chars.
-- Endpoints: admin auth enforced (403 for non-admin), unknown worker →
+- Endpoints: auth enforced (submitter+ ok, readonly → 403), unknown worker →
   404, cursor round-trips, `available/reason` shape.
 - HTML safety: a `MESSAGE` containing `<script>` and ANSI codes is
   escaped *and* colourised (no raw markup in output).

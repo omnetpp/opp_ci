@@ -30,7 +30,7 @@
         <tr style="{{ 'opacity:0.55;' if not row.connected else '' }}">
             <td>
                 <strong>{{ w.name }}</strong>
-                {% if current_user and current_user.role == "admin" %}
+                {% if current_user and current_user.role in ["submitter", "admin"] %}
                 <a href="/logs/worker/{{ w.id }}" class="btn btn-sm btn-secondary"
                    style="margin-left:0.4rem;">log</a>
                 {% endif %}
