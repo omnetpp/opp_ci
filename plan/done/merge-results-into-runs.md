@@ -36,9 +36,8 @@ Fold `results_page`'s rollup logic into `runs_list`:
   `/test-runs?run_ids=...` (flat view of exactly those runs).
 
 ## Retire `/results`
-- Replace `results_page` with a redirect: `/results?…` → `/test-runs?…`,
-  defaulting `view=summary` when absent (bare /results was the rollup). Keeps
-  old bookmarks, the compatibility drill-down, and admin link working.
+- Remove the `/results` route and `results_page` entirely — old links are not
+  needed, so no redirect. `view` accepts only `flat`/`rollup`.
 - Delete `results.html` after porting its summary block into runs.html.
 - Move the `from opp_ci.web.rollup import …` into `runs_list`.
 

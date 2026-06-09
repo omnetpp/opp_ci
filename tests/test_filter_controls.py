@@ -5,7 +5,7 @@ Covers:
   * the filter helpers — apply_str_filter (eq/contains/prefix), apply_dep_filter,
     matrix_axis_options, matrix_axis_sql_filter (incl. survives-LIMIT correctness)
   * every list page renders, and the new/changed filters narrow results:
-    /tests, /test-runs, /results, /test-matrices, /test-matrix-runs, /projects,
+    /tests, /test-runs (flat + rollup), /test-matrices, /test-matrix-runs, /projects,
     /os, /compilers
 
 Run with: python -m unittest tests.test_filter_controls   (no pytest needed)
@@ -304,16 +304,6 @@ class FilterPageTests(unittest.TestCase):
         self.assertIn("omnetpp=6.4.0", self._get("/test-runs?view=rollup&project=inet"))
         self.assertNotIn("omnetpp=6.4.0", self._get("/test-runs?view=rollup&project=nope"))
 
-    def test_results_redirects_to_runs(self):
-        # /results is retired: it redirects to the merged page, defaulting to
-        # the rollup view, and keeps the legacy view names working.
-        r = self.client.get("/results", follow_redirects=False)
-        self.assertEqual(r.status_code, 307)
-        self.assertIn("/test-runs", r.headers["location"])
-        self.assertIn("view=summary", r.headers["location"])
-        r2 = self.client.get("/results?run_ids=1&view=detailed", follow_redirects=False)
-        self.assertIn("run_ids=1", r2.headers["location"])
-        self.assertIn("view=detailed", r2.headers["location"])  # runs_list maps -> flat
 
     def test_projects_filters(self):
         body = self._get("/projects?github_owner=inet-framework")

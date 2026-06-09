@@ -441,9 +441,8 @@ def runs_list(
 ):
     from opp_ci.web.rollup import rollup_runs, visible_extra_dims
 
-    # "Rollup" is the former Results summary; "flat" is the run list. Accept
-    # the legacy Results view names so old /results links keep working.
-    is_rollup = view in ("rollup", "summary")
+    # "rollup" is the merged-in Results summary; anything else is the flat list.
+    is_rollup = view == "rollup"
     view = "rollup" if is_rollup else "flat"
     if limit is None:
         limit = 200 if is_rollup else 50
@@ -587,17 +586,6 @@ def runs_list(
         })
     finally:
         session.close()
-
-
-@web_router.get("/results")
-def results_redirect(request: Request):
-    """The Results page is merged into /test-runs as the "rollup" view. Keep
-    old links working: a bare /results was the rollup, and runs_list still
-    understands the legacy view names (summary -> rollup, detailed -> flat)."""
-    from urllib.parse import urlencode
-    params = dict(request.query_params)
-    params.setdefault("view", "summary")  # bare /results was the rollup
-    return RedirectResponse(f"/test-runs?{urlencode(params)}", status_code=307)
 
 
 def _test_form_context(session):
