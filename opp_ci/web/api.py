@@ -43,7 +43,7 @@ from opp_ci.persistence import (
     create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
     finalize_verdict_for_run, get_current_expectation, get_matrix_by_name,
     get_or_create_test, get_test_by_name, insert_expectation, job_to_coord,
-    set_test_name, status_filter,
+    parse_expectation_override, set_test_name, status_filter,
 )
 
 _logger = logging.getLogger(__name__)
@@ -73,9 +73,13 @@ class SubmitRunRequest(BaseModel):
     isolation: str | None = None    # "none" | "podman"
     toolchain: str | None = None    # "none" | "nix"
     pins: list[str] | None = None   # ["omnetpp=6.4.0", ...] → sets the run's resolved_deps
+    # Inline expected-result override for a freshly-created Test: PASS/FAIL/
+    # ERROR, or null/"" to use the global default.
+    expected_result_code: str | None = None
 
 class SubmitMatrixRequest(BaseModel):
     matrix_name: str
+    expected_result_code: str | None = None
 
 class WorkerRegisterRequest(BaseModel):
     name: str
@@ -114,6 +118,13 @@ async def submit_run(
     """
     session = SessionLocal()
     try:
+        try:
+            default_expectation = parse_expectation_override(req.expected_result_code)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid expected_result_code: {req.expected_result_code!r}",
+            )
         resolved_deps = None
         if req.test_name:
             # Run an existing named test by name.
@@ -175,7 +186,11 @@ async def submit_run(
                 "opp_file": None,
                 "resolved_deps": resolved_deps,
             }
-            test = get_or_create_test(session, coord)
+            test = get_or_create_test(
+                session, coord,
+                default_expectation=default_expectation,
+                expectation_set_by=identity.get("name"),
+            )
             if req.name:
                 try:
                     set_test_name(session, test, req.name)
@@ -205,6 +220,13 @@ async def submit_matrix_run(
 
     session = SessionLocal()
     try:
+        try:
+            default_expectation = parse_expectation_override(req.expected_result_code)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid expected_result_code: {req.expected_result_code!r}",
+            )
         matrix = session.execute(
             select(TestMatrix).where(TestMatrix.name == req.matrix_name)
         ).scalar_one_or_none()
@@ -238,6 +260,8 @@ async def submit_matrix_run(
                 matrix_run_id=matrix_run.id,
                 use_cache=True,
                 cache_fingerprint=fp,
+                default_expectation=default_expectation,
+                expectation_set_by=identity.get("name"),
             )
             run_ids.append(run.id)
         session.commit()
@@ -1007,6 +1031,9 @@ class InlineMatrixRunRequest(BaseModel):
     toolchain: list[str] | None = None
     deps: dict | None = None
     no_cache: bool = False
+    # Inline expected-result override for Tests the matrix freshly creates:
+    # PASS/FAIL/ERROR, or null/"" to use the global default.
+    expected_result_code: str | None = None
 
 
 def _spec_to_config(req: "InlineMatrixRunRequest"):
@@ -1039,6 +1066,13 @@ async def submit_matrix_run(
 
     session = SessionLocal()
     try:
+        try:
+            default_expectation = parse_expectation_override(req.expected_result_code)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid expected_result_code: {req.expected_result_code!r}",
+            )
         if req.matrix_name:
             matrix = session.execute(
                 select(TestMatrix).where(TestMatrix.name == req.matrix_name)
@@ -1090,6 +1124,8 @@ async def submit_matrix_run(
                 matrix_run_id=matrix_run.id,
                 use_cache=not req.no_cache,
                 cache_fingerprint=fp,
+                default_expectation=default_expectation,
+                expectation_set_by=identity.get("name"),
             )
             run_ids.append(run.id)
         session.commit()

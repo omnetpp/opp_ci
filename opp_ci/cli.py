@@ -700,11 +700,14 @@ def _drop_everything(engine):
 @click.option("--compiler", default=None, help="Compiler name (e.g. 'clang'); required for isolation=podman + toolchain=none")
 @click.option("--compiler-version", default=None, help="Compiler version (e.g. '22')")
 @click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
+@click.option("--expect", "expected_result_code", default=None,
+              type=click.Choice(["PASS", "FAIL", "ERROR"], case_sensitive=False),
+              help="Expected result stamped on a newly-created test; omit to use the global default.")
 @click.option("--skip-install", is_flag=True, help="Skip opp_env install step")
 @click.pass_context
 def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, toolchain,
             os_name, os_version, distro, distro_version, flavor, flavor_version,
-            arch, compiler, compiler_version, pins, skip_install):
+            arch, compiler, compiler_version, pins, expected_result_code, skip_install):
     """Run test(s) for a project and store the results.
 
     Either give a coordinate (--project/--kind …) or run a previously
@@ -780,11 +783,16 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
             flavor=flavor, flavor_version=flavor_version,
             arch=arch,
             compiler=compiler, compiler_version=compiler_version,
-            pins=pins,
+            pins=pins, expected_result_code=expected_result_code,
         )
         return
 
     from opp_ci.dependency import resolve_dependencies, parse_pins, format_resolved_deps
+    from opp_ci.persistence import parse_expectation_override
+    try:
+        default_expectation = parse_expectation_override(expected_result_code)
+    except ValueError:
+        raise click.ClickException(f"Invalid --expect value: {expected_result_code!r}")
 
     Base.metadata.create_all(engine)
     session = SessionLocal()
@@ -831,7 +839,9 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
                 "opp_file": None,
                 "resolved_deps": resolved_deps,
             }
-            test = get_or_create_test(session, coord)
+            test = get_or_create_test(
+                session, coord, default_expectation=default_expectation,
+            )
             if name:
                 from opp_ci.persistence import set_test_name
                 try:
@@ -896,7 +906,7 @@ def _run_remote(project, kinds, git_ref, *, mode=None,
                 distro=None, distro_version=None,
                 flavor=None, flavor_version=None,
                 arch=None, compiler=None, compiler_version=None,
-                pins=None):
+                pins=None, expected_result_code=None):
     """Submit test run(s) to the remote coordinator."""
     from opp_ci.config import COORDINATOR_URL, API_TOKEN
     from opp_ci.client import OppCiClient
@@ -923,6 +933,7 @@ def _run_remote(project, kinds, git_ref, *, mode=None,
                 arch=arch,
                 compiler=compiler, compiler_version=compiler_version,
                 pins=list(pins) if pins else None,
+                expected_result_code=expected_result_code,
             )
             click.echo(f"Submitted run #{result['id']}: {project} / {kind} → {result['lifecycle']}")
         except Exception as e:

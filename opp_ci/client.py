@@ -88,12 +88,15 @@ class OppCiClient:
                    flavor=None, flavor_version=None,
                    arch=None,
                    compiler=None, compiler_version=None,
-                   isolation=None, toolchain=None, pins=None):
+                   isolation=None, toolchain=None, pins=None,
+                   expected_result_code=None):
         """Submit a single test run. Returns {"id": ..., "lifecycle": "queued"}.
 
         ``pins`` is a list of ``"dep=version"`` strings (e.g.
         ``["omnetpp=6.4.0"]``); the coordinator resolves them into the run's
         ``resolved_deps`` (required for ``isolation=podman`` image selection).
+        ``expected_result_code`` (PASS/FAIL/ERROR) overrides the global default
+        expectation stamped on a freshly-created Test.
         """
         payload = {"project": project, "kind": kind}
         for key, value in (
@@ -104,6 +107,7 @@ class OppCiClient:
             ("arch", arch),
             ("compiler", compiler), ("compiler_version", compiler_version),
             ("isolation", isolation), ("toolchain", toolchain),
+            ("expected_result_code", expected_result_code),
         ):
             if value:
                 payload[key] = value
