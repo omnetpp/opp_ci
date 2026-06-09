@@ -313,6 +313,12 @@ class FilterPageTests(unittest.TestCase):
         # Ref/Commit code paths (seeded NULL -> narrows to nothing).
         self.assertNotIn('/test-runs/1"', self._get("/results?view=detailed&commit=deadbeef"))
 
+    def test_results_deps_column(self):
+        # resolved_deps (where the omnetpp version lives) is its own column in
+        # both views; run #1's test pins omnetpp 6.4.0.
+        self.assertIn("omnetpp=6.4.0", self._get("/results"))                  # summary
+        self.assertIn("omnetpp=6.4.0", self._get("/results?view=detailed"))   # detailed
+
     def test_projects_filters(self):
         body = self._get("/projects?github_owner=inet-framework")
         self.assertIn('/projects/inet"', body)

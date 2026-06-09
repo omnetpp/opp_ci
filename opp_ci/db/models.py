@@ -635,6 +635,18 @@ class TestRun(Base):
         latest = max(promoted, key=lambda v: v.recorded_at or v.created_at)
         return latest.verdict.value
 
+    @property
+    def deps_label(self):
+        """Resolved dependencies as a stable "name=version, …" string
+        (sorted by name) for display and roll-up grouping; None when the run
+        pins no dependencies. Matches the run/test detail rendering, and is
+        where the omnetpp version lives — distinct from `version`, which is
+        the project's own version."""
+        deps = self.resolved_deps or {}
+        if not deps:
+            return None
+        return ", ".join(f"{k}={v}" for k, v in sorted(deps.items()))
+
 
 class AppSetting(Base):
     """Tiny key/value store for global, admin-editable settings.

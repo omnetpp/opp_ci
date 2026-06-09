@@ -77,7 +77,7 @@
 <!-- Summary roll-up view -->
 {% if summaries %}
 {% set extra_labels = {"os_version": "OS ver.", "flavor_version": "Flavor ver.", "arch": "Arch", "isolation": "Isolation", "toolchain": "Toolchain", "opp_file": "Opp file", "commit_sha": "Commit", "version": "Version"} %}
-{% set primary_dims = ["project", "kind", "mode", "os", "distro", "distro_version", "flavor", "compiler", "compiler_version", "git_ref"] %}
+{% set primary_dims = ["project", "kind", "mode", "os", "distro", "distro_version", "flavor", "compiler", "compiler_version", "git_ref", "deps_label"] %}
 {% set sha_dims = ["git_ref", "commit_sha"] %}
 {% set show_reps = summaries | selectattr("repetitions", "gt", 1) | list | length > 0 %}
 <table>
@@ -93,6 +93,7 @@
             <th>Compiler</th>
             <th>Comp. ver.</th>
             <th>Ref</th>
+            <th>Deps</th>
             {% for dim in extra_dims %}<th>{{ extra_labels[dim] }}</th>{% endfor %}
             <th>×</th>
             {% if show_reps %}<th title="Each cell repeated k times">Reps</th>{% endif %}
@@ -158,6 +159,7 @@
             <th>Isolation</th>
             <th>Toolchain</th>
             <th>Opp file</th>
+            <th>Deps</th>
             <th>State</th>
             <th>Result</th>
             <th>Verdict</th>
@@ -181,6 +183,7 @@
             <td>{{ run.isolation or "-" }}</td>
             <td>{{ run.toolchain or "-" }}</td>
             <td>{{ run.opp_file or "-" }}</td>
+            <td>{{ run.deps_label or "-" }}</td>
             <td>{% if run.lifecycle and run.lifecycle.value != "finished" %}<span class="badge badge-{{ run.lifecycle.value }}">{{ run.lifecycle.value }}</span>{% endif %}</td>
             <td>{% if run.result_code %}<span class="badge badge-{{ run.result_code.value }}">{{ run.result_code.value }}</span>{% else %}—{% endif %}</td>
             <td>{% if run.recorded_verdict %}<span class="badge badge-{{ run.recorded_verdict }}">{{ run.recorded_verdict }}</span>{% else %}-{% endif %}</td>

@@ -10,7 +10,9 @@ is filled exactly k times; the UI shows a Reps column only when some row
 has k>1.
 
 Primary dimensions: project, kind, mode, os, distro, distro_version,
-flavor, compiler, compiler_version, git_ref.
+flavor, compiler, compiler_version, git_ref, deps_label. (`deps_label` is
+the resolved dependency map, e.g. "omnetpp=6.4.0" — where the omnetpp
+version lives, distinct from `version`, the project's own version.)
 
 Extra dimensions (os_version, flavor_version, arch, isolation, toolchain,
 opp_file, commit_sha, version) participate in classification and the
@@ -24,7 +26,7 @@ from operator import mul
 
 PRIMARY_DIMENSIONS = [
     "project", "kind", "mode", "os", "distro", "distro_version",
-    "flavor", "compiler", "compiler_version", "git_ref",
+    "flavor", "compiler", "compiler_version", "git_ref", "deps_label",
 ]
 
 EXTRA_DIMENSIONS = [
