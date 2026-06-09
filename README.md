@@ -53,6 +53,7 @@ tests with hardware perf counters). See the [full comparison](doc/concepts.md#wh
 Start here:
 
 - [Concepts](doc/concepts.md) — opp_env / opp_repl / opp_ci roles, vocabulary, matrices
+- [Operational Questions](doc/operational_questions.md) — is a release ready? do dependents work? do we support a new OS/compiler? what's the state of every project?
 - [Getting Started](doc/getting_started.md) — installation and first run
 - [CLI Reference](doc/cli_reference.md) — command-line interface
 - [Configuration](doc/configuration.md) — environment variables
