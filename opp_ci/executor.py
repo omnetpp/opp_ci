@@ -995,7 +995,16 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
         #                name (e.g. "inet"), while opp_env's identifier is
         #                versioned (e.g. "inet-4.6.0").
         bare_project = re.sub(r"-[0-9].*$", "", project)
-        inner_cmd += f" --load @opp -p {bare_project}"
+        # opp_repl resolves the project by name from loaded .opp descriptors.
+        # @opp is opp_repl's *bundled* registry (omnetpp, inet, …) and does NOT
+        # include external catalog projects like mm1k, whose .opp ships in the
+        # project repo. opp_env exports <NAME>_ROOT for each installed project,
+        # so also load that install dir (its .opp registers the project). It is
+        # a no-op for projects already in @opp (install dir has no extra .opp,
+        # or an equivalent one). The var is expanded by the container shell,
+        # where opp_env has set it — keep it literal in the command string.
+        root_var = bare_project.upper().replace("-", "_") + "_ROOT"
+        inner_cmd += f' --load @opp --load "${root_var}" -p {bare_project}'
         # --install: have opp_env download + build the project (and its deps,
         # including omnetpp) if not already present in the Nix store.
         # --no-isolated: keep the host PATH visible so opp_build_project and
