@@ -564,6 +564,7 @@ def runs_list(
             "view": view,
             "grouping": grouping,
             "show_obsolete": show_obsolete,
+            "run_ids": run_ids,
             "options": options,
             "workers": workers,
             "filters": {

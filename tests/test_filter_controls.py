@@ -304,6 +304,16 @@ class FilterPageTests(unittest.TestCase):
         self.assertIn("omnetpp=6.4.0", self._get("/test-runs?view=rollup&project=inet"))
         self.assertNotIn("omnetpp=6.4.0", self._get("/test-runs?view=rollup&project=nope"))
 
+    def test_runs_pinned_selection_hides_filters(self):
+        # A run_ids link (compatibility cell / rollup drill-down) shows a fixed
+        # selection: no filter form, a "show all" escape, and just those runs.
+        full = self._get("/test-runs")
+        self.assertIn('name="project"', full)            # filter form present normally
+        pinned = self._get("/test-runs?run_ids=2")
+        self.assertNotIn('name="project"', pinned)       # filter form hidden
+        self.assertIn("fixed selection", pinned)
+        self.assertIn('/test-runs/2"', pinned)           # the selected run
+        self.assertNotIn('/test-runs/1"', pinned)        # not the unselected one
 
     def test_projects_filters(self):
         body = self._get("/projects?github_owner=inet-framework")

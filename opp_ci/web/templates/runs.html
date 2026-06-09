@@ -7,6 +7,14 @@
     <a href="/tests" class="btn btn-success">Run a test →</a>
 </div>
 
+{% if run_ids %}
+{# Arrived via a run_ids link (compatibility cell, rollup drill-down): a fixed
+   selection of runs, so the filter controls don't apply — show a banner. #}
+<div style="margin-bottom:1rem; padding:0.6rem 0.8rem; background:var(--surface); border:1px solid var(--border); border-radius:6px; font-size:0.9rem;">
+    Showing a fixed selection of {{ runs|length }} run(s).
+    <a href="/test-runs">Show all runs &rarr;</a>
+</div>
+{% else %}
 <form class="filters filters-stacked" method="get" action="/test-runs">
     {{ f.group_open("Identity & scope") }}
         {{ f.combo(filters, "project", "Project", options.project) }}
@@ -77,6 +85,7 @@
         {% endif %}
     </div>
 </form>
+{% endif %}
 
 {% if view == "rollup" %}
 <!-- Roll-up summary view -->
