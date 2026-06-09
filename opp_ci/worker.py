@@ -14,6 +14,7 @@ the coordinator is the single source of truth.
 
 import logging
 import signal
+import threading
 import time
 
 import requests
@@ -29,16 +30,25 @@ class WorkerAgent:
     """
 
     def __init__(self, coordinator_url, token):
-        from opp_ci.http import configure_session
         self.coordinator_url = coordinator_url.rstrip("/")
         self.token = token
         self.name = None
         self.tags = []
         self.concurrency = 1
         self._running = True
-        self._session = requests.Session()
-        self._session.headers["Authorization"] = f"Bearer {token}"
-        configure_session(self._session)
+        self._session = self._make_session()
+        # Set when shutting down; also used by the heartbeat thread to sleep
+        # interruptibly so a stop request is honored promptly.
+        self._stop_event = threading.Event()
+        self._heartbeat_thread = None
+
+    def _make_session(self):
+        """Build an authenticated, configured requests session."""
+        from opp_ci.http import configure_session
+        session = requests.Session()
+        session.headers["Authorization"] = f"Bearer {self.token}"
+        configure_session(session)
+        return session
 
     def fetch_config(self):
         """Fetch this worker's registered name/tags/concurrency from the coordinator."""
@@ -58,7 +68,12 @@ class WorkerAgent:
 
     def start(self, poll_interval=10, heartbeat_interval=30):
         """
-        Main loop: send heartbeats and poll for jobs.
+        Main loop: poll for jobs and execute them.
+
+        Heartbeats run on a dedicated daemon thread so they keep flowing even
+        while a job blocks this thread for minutes (e.g. a long compile);
+        otherwise the coordinator would mark a busy worker offline and reclaim
+        the run it is still executing.
         """
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -68,15 +83,15 @@ class WorkerAgent:
             self.name, self.coordinator_url, self.tags, self.concurrency,
         )
 
-        last_heartbeat = 0
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(heartbeat_interval,),
+            name="opp_ci-heartbeat",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+
         while self._running:
-            now = time.time()
-
-            # Heartbeat
-            if now - last_heartbeat >= heartbeat_interval:
-                self._heartbeat()
-                last_heartbeat = now
-
             # Poll for a job
             job = self._poll()
             if job:
@@ -84,11 +99,28 @@ class WorkerAgent:
             else:
                 time.sleep(poll_interval)
 
+        # Stop the heartbeat thread and wait briefly for it to exit.
+        self._stop_event.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout=5)
+
         _logger.info("Worker stopped.")
 
-    def _heartbeat(self):
+    def _heartbeat_loop(self, heartbeat_interval):
+        """Send a heartbeat immediately, then every heartbeat_interval seconds
+        until shutdown. Uses its own session to avoid contending with the main
+        loop's poll/report requests."""
+        session = self._make_session()
+        # Beat once up front so a freshly-started worker comes online without
+        # waiting a full interval.
+        self._heartbeat(session)
+        while not self._stop_event.wait(heartbeat_interval):
+            self._heartbeat(session)
+
+    def _heartbeat(self, session=None):
+        session = session or self._session
         try:
-            resp = self._session.post(
+            resp = session.post(
                 f"{self.coordinator_url}/api/workers/heartbeat",
                 timeout=10,
             )
@@ -229,3 +261,4 @@ class WorkerAgent:
     def _handle_signal(self, signum, frame):
         _logger.info("Received signal %d, shutting down...", signum)
         self._running = False
+        self._stop_event.set()
