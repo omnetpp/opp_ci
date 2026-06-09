@@ -108,7 +108,7 @@
         <tr data-href="/results?run_ids={{ s.run_ids | join(',') }}&amp;view=detailed">
             {% for dim in primary_dims + extra_dims %}
             <td>
-                {% set val = s.columns[dim] %}
+                {% set val = s.columns.get(dim) %}
                 {% if val is none %}
                 {% elif val is string %}
                     {% if dim in sha_dims and val|length > 12 %}<code title="{{ val }}">{{ val[:8] }}</code>{% else %}{{ val }}{% endif %}
