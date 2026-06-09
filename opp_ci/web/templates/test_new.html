@@ -157,6 +157,15 @@
                     <option value="nix">nix (via opp_env)</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label for="expected_result_code">Expected result</label>
+                <select name="expected_result_code" id="expected_result_code">
+                    <option value="">(use default{% if current_default_expectation %} — {{ current_default_expectation }}{% endif %})</option>
+                    <option value="PASS">PASS</option>
+                    <option value="FAIL">FAIL</option>
+                    <option value="ERROR">ERROR</option>
+                </select>
+            </div>
         </div>
         <div class="actions">
             <button type="submit" name="action" value="save" class="btn btn-primary">Save</button>

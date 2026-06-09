@@ -3,9 +3,35 @@
 {% block content %}
 <h2 style="margin-bottom: 1rem;">Admin</h2>
 
+{% if message %}<div class="flash flash-success">{{ message }}</div>{% endif %}
+{% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+
 <p style="margin-bottom: 1rem;">
     <a class="btn btn-primary btn-sm" href="/admin/users">Manage users</a>
 </p>
+
+<div class="card">
+    <h2>Default expected result</h2>
+    <p style="color:var(--muted); margin-bottom:0.75rem;">
+        Stamped on every newly-created Test so its first run already yields a
+        verdict instead of UNKNOWN. Submitters can override this per submission.
+    </p>
+    <form method="post" action="/admin/settings/default-expectation">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Default expected result</label>
+                <select name="expected_result_code">
+                    <option value="PASS" {{ "selected" if default_expectation == "PASS" else "" }}>PASS</option>
+                    <option value="FAIL" {{ "selected" if default_expectation == "FAIL" else "" }}>FAIL</option>
+                    <option value="ERROR" {{ "selected" if default_expectation == "ERROR" else "" }}>ERROR</option>
+                    <option value="" {{ "selected" if default_expectation == "" else "" }}>(no default — start UNKNOWN)</option>
+                </select>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Save default</button>
+    </form>
+</div>
 
 <div class="stats">
     <div class="stat"><div class="value">{{ stats.projects }}</div><div class="label">Projects</div></div>

@@ -6,6 +6,12 @@
     {% if current_user and current_user.role in ("submitter", "admin") %}
     <form method="post" action="/test-matrices/{{ matrix.id }}/run" class="inline-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <select name="expected_result_code" title="Expected result stamped on newly-created tests">
+            <option value="">expect: default{% if current_default_expectation %} ({{ current_default_expectation }}){% endif %}</option>
+            <option value="PASS">expect: PASS</option>
+            <option value="FAIL">expect: FAIL</option>
+            <option value="ERROR">expect: ERROR</option>
+        </select>
         <button type="submit" class="btn btn-success btn-sm">Run this matrix</button>
     </form>
     {% endif %}
@@ -147,6 +153,12 @@
 <div class="actions">
     <form method="post" action="/test-matrices/{{ matrix.id }}/run" class="inline-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <select name="expected_result_code" title="Expected result stamped on newly-created tests">
+            <option value="">expect: default{% if current_default_expectation %} ({{ current_default_expectation }}){% endif %}</option>
+            <option value="PASS">expect: PASS</option>
+            <option value="FAIL">expect: FAIL</option>
+            <option value="ERROR">expect: ERROR</option>
+        </select>
         <button type="submit" class="btn btn-success btn-sm">Run this matrix</button>
     </form>
     <a href="/test-matrices" class="btn btn-secondary btn-sm">&larr; Back to matrices</a>

@@ -27,7 +27,9 @@ from opp_ci.persistence import (
     create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
     get_current_expectation, get_matrix_by_name, get_or_create_test,
     get_test_by_name, insert_expectation, mark_stale_workers_offline,
-    set_matrix_name, set_test_name, status_filter,
+    parse_expectation_override, read_default_expectation_code,
+    set_default_expectation_code, set_matrix_name, set_test_name,
+    status_filter, USE_GLOBAL_DEFAULT,
 )
 
 _logger = logging.getLogger(__name__)
@@ -410,6 +412,10 @@ def results_page(
     flavor_version: str = Query(default=None),
     compiler: str = Query(default=None),
     compiler_version: str = Query(default=None),
+    arch: str = Query(default=None),
+    isolation: str = Query(default=None),
+    toolchain: str = Query(default=None),
+    opp_file: str = Query(default=None),
     status: str = Query(default=None),
     run_ids: str = Query(default=None),
     view: str = Query(default="summary"),
@@ -453,6 +459,14 @@ def results_page(
             query = query.where(Test.compiler == compiler)
         if compiler_version:
             query = query.where(Test.compiler_version == compiler_version)
+        if arch:
+            query = query.where(Test.arch == arch)
+        if isolation:
+            query = query.where(Test.isolation == isolation)
+        if toolchain:
+            query = query.where(Test.toolchain == toolchain)
+        if opp_file:
+            query = query.where(Test.opp_file == opp_file)
         if status:
             try:
                 query = status_filter(query, status)
@@ -495,6 +509,10 @@ def results_page(
             "filter_flavor_version": flavor_version or "",
             "filter_compiler": compiler or "",
             "filter_compiler_version": compiler_version or "",
+            "filter_arch": arch or "",
+            "filter_isolation": isolation or "",
+            "filter_toolchain": toolchain or "",
+            "filter_opp_file": opp_file or "",
             "filter_status": status or "",
             **_template_globals(request, current_user),
         })
@@ -538,6 +556,7 @@ def _test_form_context(session):
         v["opp_env_version"] for v in versions_by_project.get("omnetpp", []) if v["opp_env_version"]
     })
 
+    default_expectation = read_default_expectation_code(session)
     return {
         "projects": projects,
         "os_entries": os_entries,
@@ -551,6 +570,7 @@ def _test_form_context(session):
         "compiler_version_suggestions": sorted({c.version for c in compilers if c.version}),
         "versions_by_project": versions_by_project,
         "omnetpp_versions": omnetpp_versions,
+        "current_default_expectation": default_expectation.value if default_expectation else "",
     }
 
 
@@ -703,14 +723,26 @@ def test_new_submit(
     compiler_version: str = Form(default=""),
     isolation: str = Form(default="none"),
     toolchain: str = Form(default="none"),
+    expected_result_code: str = Form(default=""),
 ):
     """Save a Test definition (get-or-create + optional name). With
     action=run, also queue a TestRun and land on the run; otherwise land
-    on the Test detail page."""
+    on the Test detail page.
+
+    `expected_result_code` is the inline expected-result override for a
+    newly-created Test: empty means "use the global default"; PASS/FAIL/
+    ERROR stamps that code so the first run already yields a verdict."""
     from opp_ci import platforms
 
     session = SessionLocal()
     try:
+        try:
+            default_expectation = parse_expectation_override(expected_result_code)
+        except ValueError:
+            return RedirectResponse(
+                url="/tests/new?message=Invalid+expected+result&message_type=error",
+                status_code=303,
+            )
         resolved_deps = None
         if omnetpp_version and project != "omnetpp":
             resolved_deps = {"omnetpp": omnetpp_version}
@@ -745,7 +777,11 @@ def test_new_submit(
             "opp_file": None,
             "resolved_deps": resolved_deps,
         }
-        test = get_or_create_test(session, coord)
+        test = get_or_create_test(
+            session, coord,
+            default_expectation=default_expectation,
+            expectation_set_by=current_user.display_name,
+        )
         if name.strip():
             try:
                 set_test_name(session, test, name)
@@ -1274,6 +1310,7 @@ def _matrix_form_context(session):
         v["opp_env_version"] for v in versions_by_project.get("omnetpp", []) if v["opp_env_version"]
     })
 
+    default_expectation = read_default_expectation_code(session)
     return {
         "projects": projects,
         "os_suggestions": list(platforms.OS_NAMES),
@@ -1285,6 +1322,7 @@ def _matrix_form_context(session):
         "compiler_version_suggestions": sorted({c.version for c in compilers if c.version}),
         "versions_by_project": versions_by_project,
         "omnetpp_versions": omnetpp_versions,
+        "current_default_expectation": default_expectation.value if default_expectation else "",
     }
 
 
@@ -1326,11 +1364,13 @@ def matrix_detail(request: Request, matrix_id: int,
             .order_by(TestRun.id.desc()).limit(50)
         ).scalars().all()
 
+        default_expectation = read_default_expectation_code(session)
         return templates.TemplateResponse(request, "matrix_detail.html", {
             "matrix": matrix,
             "jobs": jobs,
             "recent_runs": recent_runs,
             "error": error,
+            "current_default_expectation": default_expectation.value if default_expectation else "",
             **_template_globals(request, current_user),
         })
     finally:
@@ -1410,9 +1450,17 @@ def matrix_create(
     toolchain: str = Form(default=""),
     ref_range_base: str = Form(default=""),
     ref_range_head: str = Form(default=""),
+    expected_result_code: str = Form(default=""),
 ):
     session = SessionLocal()
     try:
+        try:
+            default_expectation = parse_expectation_override(expected_result_code)
+        except ValueError:
+            return RedirectResponse(
+                url="/test-matrices/new?error=Invalid+expected+result",
+                status_code=303,
+            )
         config = _build_matrix_config_from_form(
             project=project, kinds=kinds, modes=modes, versions=versions,
             omnetpp_versions=omnetpp_versions, refs=refs, os=os,
@@ -1432,7 +1480,11 @@ def matrix_create(
                 status_code=303,
             )
         if action == "run":
-            matrix_run = _queue_matrix_run(session, matrix, trigger="web")
+            matrix_run = _queue_matrix_run(
+                session, matrix, trigger="web",
+                default_expectation=default_expectation,
+                expectation_set_by=current_user.display_name,
+            )
             session.commit()
             return RedirectResponse(url=f"/test-matrix-runs/{matrix_run.id}", status_code=303)
         session.commit()
@@ -1466,15 +1518,28 @@ def matrix_rename(matrix_id: int,
 
 @web_router.post("/test-matrices/{matrix_id}/run", dependencies=[Depends(require_csrf)])
 def matrix_run(matrix_id: int,
-               current_user: User = Depends(require_user("submitter"))):
+               current_user: User = Depends(require_user("submitter")),
+               expected_result_code: str = Form(default="")):
     """Queue a TestMatrixRun for a saved matrix (from the Test Matrices
-    list or the matrix detail page)."""
+    list or the matrix detail page). `expected_result_code` overrides the
+    default expectation stamped on any Test the matrix freshly creates."""
     session = SessionLocal()
     try:
+        try:
+            default_expectation = parse_expectation_override(expected_result_code)
+        except ValueError:
+            return RedirectResponse(
+                url=f"/test-matrices/{matrix_id}?error=Invalid+expected+result",
+                status_code=303,
+            )
         matrix = session.get(TestMatrix, matrix_id)
         if matrix is None:
             return RedirectResponse(url="/test-matrices", status_code=303)
-        matrix_run = _queue_matrix_run(session, matrix, trigger="web")
+        matrix_run = _queue_matrix_run(
+            session, matrix, trigger="web",
+            default_expectation=default_expectation,
+            expectation_set_by=current_user.display_name,
+        )
         session.commit()
         return RedirectResponse(url=f"/test-matrix-runs/{matrix_run.id}", status_code=303)
     finally:
@@ -1568,10 +1633,16 @@ def matrix_runs_list(
         session.close()
 
 
-def _queue_matrix_run(session, matrix, *, trigger):
+def _queue_matrix_run(session, matrix, *, trigger,
+                      default_expectation=USE_GLOBAL_DEFAULT,
+                      expectation_set_by="system"):
     """Create a TestMatrixRun for `matrix`, expand it, and enqueue every
     cell. Returns the TestMatrixRun. Caller commits. Shared by the
-    save-and-run, run-saved-matrix, and rerun handlers."""
+    save-and-run, run-saved-matrix, and rerun handlers.
+
+    `default_expectation` / `expectation_set_by` are forwarded to every
+    `enqueue_job` so any Test the matrix freshly creates is stamped with
+    the global default (or the per-submission override)."""
     from opp_ci.scheduler import expand_matrix
     from opp_ci.fingerprint import compute_cache_fingerprint
 
@@ -1596,6 +1667,8 @@ def _queue_matrix_run(session, matrix, *, trigger):
             matrix_run_id=matrix_run.id,
             use_cache=True,
             cache_fingerprint=fp,
+            default_expectation=default_expectation,
+            expectation_set_by=expectation_set_by,
         )
     return matrix_run
 
@@ -2120,7 +2193,8 @@ def rule_delete_web(rule_id: int, current_user: User = Depends(require_user("sub
 
 
 @web_router.get("/admin", response_class=HTMLResponse)
-def admin_page(request: Request, current_user: User = Depends(require_user("admin"))):
+def admin_page(request: Request, current_user: User = Depends(require_user("admin")),
+               message: str = Query(default=None), error: str = Query(default=None)):
     session = SessionLocal()
     try:
         stats = {
@@ -2160,14 +2234,41 @@ def admin_page(request: Request, current_user: User = Depends(require_user("admi
             select(AutoTestRule).order_by(AutoTestRule.id)
         ).scalars().all()
 
+        default_expectation = read_default_expectation_code(session)
+
         return templates.TemplateResponse(request, "admin.html", {
             "stats": stats,
             "workers": workers,
             "tokens": tokens,
             "rules": rules,
             "recent_errors": recent_errors,
+            "default_expectation": default_expectation.value if default_expectation else "",
+            "message": message,
+            "error": error,
             **_template_globals(request, current_user),
         })
+    finally:
+        session.close()
+
+
+@web_router.post("/admin/settings/default-expectation", dependencies=[Depends(require_csrf)])
+def admin_set_default_expectation(
+    current_user: User = Depends(require_user("admin")),
+    expected_result_code: str = Form(default=""),
+):
+    """Set the global default expected result stamped on newly-created
+    Tests. Empty value = "no default" (new Tests start UNKNOWN)."""
+    session = SessionLocal()
+    try:
+        try:
+            code = TestResultCode(expected_result_code) if expected_result_code else None
+        except ValueError:
+            return RedirectResponse(
+                url="/admin?error=Invalid+expected+result", status_code=303,
+            )
+        set_default_expectation_code(session, code, set_by=current_user.display_name)
+        session.commit()
+        return RedirectResponse(url="/admin?message=Default+expectation+updated", status_code=303)
     finally:
         session.close()
 
