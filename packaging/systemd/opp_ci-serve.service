@@ -9,6 +9,10 @@ PartOf=opp_ci.target
 Type=simple
 User=opp_ci
 Group=opp_ci
+# Read access to the system journal so the web UI's Logs pages can tail
+# the serve and worker units (`journalctl -u …`). Scoped to this process —
+# no change to the opp_ci account's global groups.
+SupplementaryGroups=systemd-journal
 WorkingDirectory=/var/lib/opp_ci
 EnvironmentFile=/etc/opp_ci/opp_ci.env
 EnvironmentFile=-/etc/opp_ci/serve.env

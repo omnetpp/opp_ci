@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — {{ log_title }}{% endblock %}
+{% block content %}
+<style>
+    .log-pane {
+        background: #1e1e1e; color: #d4d4d4; border-radius: 6px;
+        padding: 0.75rem 1rem; font-family: monospace; font-size: 0.8rem;
+        line-height: 1.45; height: 70vh; overflow-y: auto; white-space: pre-wrap;
+        word-break: break-word;
+    }
+    .log-line { display: block; }
+    .log-line .ts { color: #6c757d; margin-right: 0.6rem; user-select: none; }
+    .log-line.prio-warn { background: rgba(242, 192, 55, 0.12); }
+    .log-line.prio-err  { background: rgba(220, 53, 69, 0.16); }
+    .log-toolbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.6rem;
+                   font-size: 0.85rem; color: var(--muted); flex-wrap: wrap; }
+    .log-toolbar label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+    .log-status { margin-left: auto; }
+</style>
+
+<div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:0.75rem;">
+    <h2>{{ log_title }}</h2>
+    <a href="{{ back_url }}" class="btn btn-sm btn-secondary">← All logs</a>
+</div>
+<p style="color:var(--muted); font-size:0.85rem; margin-bottom:0.75rem;">
+    <code>{{ log_subtitle }}</code>
+</p>
+
+<div id="log-banner" class="flash flash-error" style="display:none;"></div>
+
+<div class="log-toolbar">
+    <label><input type="checkbox" id="follow" checked> Follow tail</label>
+    <button id="pause" class="btn btn-sm btn-secondary">Pause</button>
+    <span class="log-status" id="status">connecting…</span>
+</div>
+
+<div class="log-pane" id="pane"></div>
+
+<script>
+(function () {
+    const TAIL_URL = {{ tail_url | tojson }};
+    const POLL_MS = 2000;
+    const pane = document.getElementById("pane");
+    const banner = document.getElementById("banner") || document.getElementById("log-banner");
+    const followBox = document.getElementById("follow");
+    const pauseBtn = document.getElementById("pause");
+    const statusEl = document.getElementById("status");
+
+    let cursor = null;
+    let paused = false;
+    let timer = null;
+
+    function atBottom() {
+        return pane.scrollHeight - pane.scrollTop - pane.clientHeight < 24;
+    }
+
+    function append(entries) {
+        if (!entries.length) return;
+        const stick = followBox.checked;
+        const frag = document.createDocumentFragment();
+        for (const e of entries) {
+            const line = document.createElement("span");
+            line.className = "log-line";
+            if (e.priority <= 3) line.className += " prio-err";
+            else if (e.priority === 4) line.className += " prio-warn";
+            if (e.ts) {
+                const ts = document.createElement("span");
+                ts.className = "ts";
+                ts.textContent = e.ts;
+                line.appendChild(ts);
+            }
+            const msg = document.createElement("span");
+            msg.innerHTML = e.html;           // server-escaped + ANSI-rendered
+            line.appendChild(msg);
+            line.appendChild(document.createTextNode("\n"));
+            frag.appendChild(line);
+        }
+        pane.appendChild(frag);
+        if (stick) pane.scrollTop = pane.scrollHeight;
+    }
+
+    function setStatus(text) { statusEl.textContent = text; }
+
+    async function poll() {
+        try {
+            const url = cursor ? TAIL_URL + "?cursor=" + encodeURIComponent(cursor) : TAIL_URL;
+            const resp = await fetch(url, { headers: { "Accept": "application/json" } });
+            if (!resp.ok) throw new Error("HTTP " + resp.status);
+            const data = await resp.json();
+            if (!data.available) {
+                banner.textContent = "Log unavailable: " + (data.reason || "unknown reason");
+                banner.style.display = "";
+                setStatus("unavailable");
+            } else {
+                banner.style.display = "none";
+                append(data.entries);
+                if (data.cursor) cursor = data.cursor;
+                setStatus("live · " + new Date().toLocaleTimeString());
+            }
+        } catch (err) {
+            setStatus("error: " + err.message);
+        } finally {
+            if (!paused) timer = setTimeout(poll, POLL_MS);
+        }
+    }
+
+    pauseBtn.addEventListener("click", function () {
+        paused = !paused;
+        pauseBtn.textContent = paused ? "Resume" : "Pause";
+        if (paused) { clearTimeout(timer); setStatus("paused"); }
+        else { setStatus("resuming…"); poll(); }
+    });
+
+    // Manual scroll up stops following; scrolling back to the bottom resumes.
+    pane.addEventListener("scroll", function () {
+        if (!atBottom() && followBox.checked) followBox.checked = false;
+        else if (atBottom() && !followBox.checked) followBox.checked = true;
+    });
+    followBox.addEventListener("change", function () {
+        if (followBox.checked) pane.scrollTop = pane.scrollHeight;
+    });
+
+    poll();
+})();
+</script>
+{% endblock %}

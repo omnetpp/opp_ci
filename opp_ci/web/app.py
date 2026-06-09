@@ -7,8 +7,8 @@ from contextlib import asynccontextmanager
 from html import escape as html_escape
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, Form, Request, Query
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request, Query
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 from sqlalchemy import and_, cast, exists, false, func, select, String, text
@@ -2218,6 +2218,124 @@ def workers_list(request: Request, current_user: User = Depends(require_user()))
         })
     finally:
         session.close()
+
+
+# ── Logs ───────────────────────────────────────────────────────────────
+#
+# Admin-only viewers for the serve and worker process logs, read from
+# systemd-journald (see opp_ci/journal.py). The pages poll a `…/tail`
+# endpoint with the journal's opaque cursor for incremental updates.
+
+
+def _render_log_entries(entries):
+    """journald entries → JSON-able rows with pre-rendered, escaped HTML."""
+    rows = []
+    for e in entries:
+        rows.append({
+            "ts": e["ts"].strftime("%H:%M:%S") if e["ts"] else "",
+            "priority": e["priority"],
+            "html": str(_ansi_to_html(e["message"])),
+        })
+    return rows
+
+
+def _tail_response(unit, cursor):
+    """Read a unit's journal from `cursor` on and return the tail JSON."""
+    from opp_ci.journal import read_unit, JournalUnavailable
+    try:
+        entries, last_cursor = read_unit(unit, cursor=cursor or None)
+    except JournalUnavailable as e:
+        return JSONResponse({"available": False, "reason": e.reason,
+                             "entries": [], "cursor": cursor})
+    return JSONResponse({"available": True, "reason": None,
+                         "entries": _render_log_entries(entries),
+                         "cursor": last_cursor})
+
+
+def _worker_or_404(session, worker_id):
+    w = session.execute(
+        select(Worker).where(Worker.id == worker_id)).scalar_one_or_none()
+    if w is None:
+        raise HTTPException(status_code=404, detail=f"Worker #{worker_id} not found")
+    return w
+
+
+@web_router.get("/logs", response_class=HTMLResponse)
+def logs_hub(request: Request, current_user: User = Depends(require_user("admin"))):
+    """Hub listing every log source: serve plus each registered worker."""
+    from opp_ci.config import WORKER_HEARTBEAT_TIMEOUT
+    session = SessionLocal()
+    try:
+        workers = session.execute(select(Worker).order_by(Worker.name)).scalars().all()
+        now = datetime.datetime.utcnow()
+        threshold = now - datetime.timedelta(seconds=WORKER_HEARTBEAT_TIMEOUT)
+        worker_rows = [{
+            "worker": w,
+            "connected": w.last_heartbeat is not None and w.last_heartbeat > threshold,
+        } for w in workers]
+        return templates.TemplateResponse(request, "logs.html", {
+            "serve_unit": cfg.SERVE_UNIT,
+            "worker_rows": worker_rows,
+            **_template_globals(request, current_user),
+        })
+    finally:
+        session.close()
+
+
+@web_router.get("/logs/serve", response_class=HTMLResponse)
+def serve_log(request: Request, current_user: User = Depends(require_user("admin"))):
+    return templates.TemplateResponse(request, "log_view.html", {
+        "log_title": "Serve log",
+        "log_subtitle": cfg.SERVE_UNIT,
+        "tail_url": "/logs/serve/tail",
+        "back_url": "/logs",
+        **_template_globals(request, current_user),
+    })
+
+
+@web_router.get("/logs/serve/tail")
+def serve_log_tail(request: Request, cursor: str = Query(default=None),
+                   current_user: User = Depends(require_user("admin"))):
+    return _tail_response(cfg.SERVE_UNIT, cursor)
+
+
+@web_router.get("/logs/worker/{worker_id}", response_class=HTMLResponse)
+def worker_log(request: Request, worker_id: int,
+               current_user: User = Depends(require_user("admin"))):
+    from opp_ci.journal import worker_unit_name, JournalUnavailable
+    session = SessionLocal()
+    try:
+        w = _worker_or_404(session, worker_id)
+        try:
+            subtitle = worker_unit_name(w.name)
+        except JournalUnavailable as e:
+            subtitle = e.reason
+        return templates.TemplateResponse(request, "log_view.html", {
+            "log_title": f"Worker log — {w.name}",
+            "log_subtitle": subtitle,
+            "tail_url": f"/logs/worker/{w.id}/tail",
+            "back_url": "/logs",
+            **_template_globals(request, current_user),
+        })
+    finally:
+        session.close()
+
+
+@web_router.get("/logs/worker/{worker_id}/tail")
+def worker_log_tail(request: Request, worker_id: int, cursor: str = Query(default=None),
+                    current_user: User = Depends(require_user("admin"))):
+    from opp_ci.journal import worker_unit_name, JournalUnavailable
+    session = SessionLocal()
+    try:
+        name = _worker_or_404(session, worker_id).name
+    finally:
+        session.close()
+    try:
+        unit = worker_unit_name(name)
+    except JournalUnavailable as e:
+        return JSONResponse({"available": False, "reason": e.reason,
+                             "entries": [], "cursor": cursor})
+    return _tail_response(unit, cursor)
 
 
 @web_router.get("/rules", response_class=HTMLResponse)

@@ -28,7 +28,13 @@
         {% for row in rows %}
         {% set w = row.worker %}
         <tr style="{{ 'opacity:0.55;' if not row.connected else '' }}">
-            <td><strong>{{ w.name }}</strong></td>
+            <td>
+                <strong>{{ w.name }}</strong>
+                {% if current_user and current_user.role == "admin" %}
+                <a href="/logs/worker/{{ w.id }}" class="btn btn-sm btn-secondary"
+                   style="margin-left:0.4rem;">log</a>
+                {% endif %}
+            </td>
             <td>
                 {% if row.connected %}
                 <span class="badge badge-passed">● online</span>

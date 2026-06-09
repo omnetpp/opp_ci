@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Logs{% endblock %}
+{% block content %}
+<h2 style="margin-bottom:1rem;">Logs</h2>
+
+<p style="color:var(--muted); font-size:0.9rem; margin-bottom:1rem;">
+    Process logs read live from systemd-journald. Pick a source to tail it.
+</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Source</th>
+            <th>Unit</th>
+            <th>Status</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr data-href="/logs/serve">
+            <td><strong><a href="/logs/serve">Serve</a></strong></td>
+            <td><code>{{ serve_unit }}</code></td>
+            <td><span class="badge badge-passed">● this process</span></td>
+        </tr>
+        {% for row in worker_rows %}
+        {% set w = row.worker %}
+        <tr data-href="/logs/worker/{{ w.id }}">
+            <td><strong><a href="/logs/worker/{{ w.id }}">Worker — {{ w.name }}</a></strong></td>
+            <td><code>opp_ci-worker@{{ w.name }}.service</code></td>
+            <td>
+                {% if row.connected %}
+                <span class="badge badge-passed">● online</span>
+                {% else %}
+                <span class="badge badge-queued">○ offline</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if not worker_rows %}
+<p style="color:var(--muted); font-size:0.85rem; margin-top:1rem;">
+    No workers registered yet — only the serve log is available.
+</p>
+{% endif %}
+{% endblock %}

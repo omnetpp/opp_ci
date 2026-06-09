@@ -63,6 +63,18 @@ REFERENCE_PLATFORM = os.environ.get("OPP_CI_REFERENCE_PLATFORM", "Ubuntu 24.04/g
 SERVE_HOST = os.environ.get("OPP_CI_SERVE_HOST", "127.0.0.1")
 SERVE_PORT = int(os.environ.get("OPP_CI_SERVE_PORT", "8080"))
 
+# ── Log viewer ────────────────────────────────────────────────────────
+#
+# The web UI's Logs pages read process logs straight from systemd-journald
+# (the serve and worker units). These name the units to query; override
+# only for a non-standard install. `{instance}` in the worker template is
+# the worker's registered name (used verbatim as the systemd instance).
+SERVE_UNIT = os.environ.get("OPP_CI_SERVE_UNIT", "opp_ci-serve.service")
+WORKER_UNIT_TEMPLATE = os.environ.get(
+    "OPP_CI_WORKER_UNIT_TEMPLATE", "opp_ci-worker@{instance}.service")
+# Lines to fetch on the initial (cursor-less) tail load.
+LOG_TAIL_LINES = int(os.environ.get("OPP_CI_LOG_TAIL_LINES", "1000"))
+
 # ── TLS ───────────────────────────────────────────────────────────────
 #
 # Native TLS termination in `opp_ci serve`. Empty pair → plain HTTP, the
