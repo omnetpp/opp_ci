@@ -158,7 +158,8 @@
             <th>Isolation</th>
             <th>Toolchain</th>
             <th>Opp file</th>
-            <th>Status</th>
+            <th>State</th>
+            <th>Result</th>
             <th>Verdict</th>
             <th>Duration</th>
             <th>Started</th>
@@ -180,7 +181,8 @@
             <td>{{ run.isolation or "-" }}</td>
             <td>{{ run.toolchain or "-" }}</td>
             <td>{{ run.opp_file or "-" }}</td>
-            <td><span class="badge badge-{{ run.effective_status }}">{{ run.effective_status }}</span></td>
+            <td>{% if run.lifecycle and run.lifecycle.value != "finished" %}<span class="badge badge-{{ run.lifecycle.value }}">{{ run.lifecycle.value }}</span>{% endif %}</td>
+            <td>{% if run.result_code %}<span class="badge badge-{{ run.result_code.value }}">{{ run.result_code.value }}</span>{% else %}—{% endif %}</td>
             <td>{% if run.recorded_verdict %}<span class="badge badge-{{ run.recorded_verdict }}">{{ run.recorded_verdict }}</span>{% else %}-{% endif %}</td>
             <td>{{ "%.1f"|format(run.duration_seconds) ~ "s" if run.duration_seconds else "-" }}</td>
             <td>{{ run.started_at.strftime("%Y-%m-%d %H:%M") if run.started_at else "-" }}</td>
