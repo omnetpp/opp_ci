@@ -201,7 +201,9 @@ class FilterPageTests(unittest.TestCase):
         return r.text
 
     def test_pages_render(self):
-        for url in ("/tests", "/test-runs", "/test-runs?view=merged",
+        for url in ("/", "/?window=day", "/?window=week", "/?window=month",
+                    "/queue",
+                    "/tests", "/test-runs", "/test-runs?view=merged",
                     "/test-runs?view=cartesian",
                     "/test-matrices", "/test-matrix-runs", "/projects",
                     "/os", "/compilers"):
