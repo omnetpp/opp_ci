@@ -146,6 +146,7 @@
         <div class="container">
             <h1>opp_ci</h1>
             <nav style="flex: 1;">
+                {% if current_user %}
                 <a href="/">Dashboard</a> &nbsp;
                 <a href="/results">Results</a> &nbsp;
                 <a href="/queue">Queue</a> &nbsp;
@@ -159,8 +160,9 @@
                 <a href="/os">OSes</a> &nbsp;
                 <a href="/compilers">Compilers</a> &nbsp;
                 <a href="/workers">Workers</a>
-                {% if current_user and current_user.role == "admin" %}
+                {% if current_user.role == "admin" %}
                 &nbsp; <a href="/admin">Admin</a>
+                {% endif %}
                 {% endif %}
             </nav>
             {% if current_user %}
