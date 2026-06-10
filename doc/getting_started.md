@@ -21,10 +21,12 @@ For cloud deployment, you'll also need:
 ## Installation
 
 ```bash
+# for general use
+uv tool install opp_ci
+
+# for development purposes
 cd ~/workspace/opp_ci
-python3 -m venv .venv
-source setenv
-pip install -e .
+uv tool install --with-editable ../opp_repl -e .
 ```
 
 `source setenv` activates the local `.venv` (if present), exports
