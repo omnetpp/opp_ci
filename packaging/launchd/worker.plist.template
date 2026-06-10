@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchDaemon for one opp_ci worker. The installer renders this template
+  per worker name, replacing __NAME__, and writes it to
+  /Library/LaunchDaemons/org.omnetpp.opp_ci.worker.__NAME__.plist.
+
+  This is the macOS analogue of packaging/systemd/opp_ci-worker@.service.
+  It is a LaunchDaemon (not a LaunchAgent) so the worker runs with no
+  interactive login, under the dedicated unprivileged opp_ci account.
+
+  Env injection (OPP_CI_COORDINATOR_URL, OPP_CI_WORKER_TOKEN) is NOT done
+  here — launchd's EnvironmentVariables dict can't source a file. Instead
+  ProgramArguments calls the opp_ci-worker-run wrapper, which sources
+  /etc/opp_ci/opp_ci.env and /etc/opp_ci/workers/__NAME__.env (mirroring
+  systemd's two EnvironmentFile= lines) before exec'ing the worker. See
+  doc/launchd.md.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.omnetpp.opp_ci.worker.__NAME__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/opp_ci/bin/opp_ci-worker-run</string>
+        <string>__NAME__</string>
+    </array>
+
+    <key>UserName</key>   <string>opp_ci</string>
+    <key>GroupName</key>  <string>opp_ci</string>
+
+    <key>WorkingDirectory</key>
+    <string>/usr/local/var/opp_ci</string>
+
+    <!-- PATH for opp_env/nix/podman lookups; mirrors the Linux unit's
+         Environment=PATH. Includes the venv bin and Homebrew paths.
+         /opt/homebrew/bin is Apple-silicon Homebrew; /usr/local/bin is
+         Intel Homebrew and most Nix single-user shims. HOME must be a
+         real dir so opp_env / ~/.nix-profile work (same as Linux). -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/opp_ci/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/usr/local/var/opp_ci</string>
+    </dict>
+
+    <!-- Restart=on-failure: relaunch only on non-zero/abnormal exit, not
+         on a clean exit(0). -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key> <false/>
+    </dict>
+    <!-- RestartSec≈10s. launchd's throttle floor is 10s anyway. -->
+    <key>ThrottleInterval</key> <integer>10</integer>
+
+    <!-- Start at boot, no login required (this is why it's a Daemon). -->
+    <key>RunAtLoad</key> <true/>
+
+    <!-- TimeoutStopSec=60s: drain in-flight jobs before SIGKILL. launchd
+         sends SIGTERM, then SIGKILL after this timeout. The worker handles
+         SIGTERM cleanly per doc/workers.md. -->
+    <key>ExitTimeOut</key> <integer>60</integer>
+
+    <!-- launchd has no journald; capture stdout+stderr to one log file.
+         Rotated by newsyslog (see packaging/launchd/newsyslog-opp_ci.conf). -->
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/opp_ci/worker-__NAME__.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/opp_ci/worker-__NAME__.log</string>
+
+    <!-- Optional resource cap (RLIMIT-based; coarser than systemd's
+         MemoryMax/CPUQuota). Commented out by default.
+    <key>SoftResourceLimits</key>
+    <dict><key>NumberOfFiles</key><integer>8192</integer></dict>
+    -->
+</dict>
+</plist>
