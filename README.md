@@ -64,6 +64,7 @@ Day-to-day:
 - [Web UI](doc/web_ui.md) — dashboard, run detail, multi-dimensional results search
 - [Deployment](doc/deployment.md) — local, cloud, hybrid
 - [systemd service](doc/systemd.md) — run as a service on Ubuntu
+- [launchd service](doc/launchd.md) — run a worker as a service on macOS
 - [Workers](doc/workers.md) — register and run remote workers
 - [Remote CLI control](doc/remote_cli.md) — drive the coordinator from your laptop with `opp_ci --remote`
 - [GitHub integration](doc/github_integration.md) — webhooks, statuses, rules

@@ -5,6 +5,10 @@ a system service so it starts on boot and can be managed with the usual
 `systemctl` commands. The packaging artefacts live in
 [`packaging/systemd/`](../packaging/systemd/).
 
+> On **macOS**, which has no systemd, run workers as launchd
+> LaunchDaemons instead — see [launchd.md](launchd.md). (macOS packaging
+> is worker-only; the coordinator/`serve` side stays on Linux.)
+
 There is no single "opp_ci" process: the systemd layer wraps the
 existing `opp_ci serve` and `opp_ci worker start` subcommands. The host
 role — coordinator, worker, or combined — is a matter of which units
