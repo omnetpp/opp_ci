@@ -220,3 +220,5 @@ __marimo__/
 # opp_ci
 *.db
 opp_ci/_version.py
+/bin/opp_ci-workers
+/bin/opp_ci-worker-run
