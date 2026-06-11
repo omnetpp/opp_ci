@@ -27,9 +27,9 @@
     <tbody>
         {% for row in rows %}
         {% set w = row.worker %}
-        <tr style="{{ 'opacity:0.55;' if not row.connected else '' }}">
+        <tr data-href="/workers/{{ w.id }}" style="{{ 'opacity:0.55;' if not row.connected else '' }}">
             <td>
-                <a href="/workers/{{ w.id }}"><strong>{{ w.name }}</strong></a>
+                <strong>{{ w.name }}</strong>
                 {% if current_user and current_user.role in ["submitter", "admin"] %}
                 <a href="/logs/worker/{{ w.id }}" class="btn btn-sm btn-secondary"
                    style="margin-left:0.4rem;">log</a>
