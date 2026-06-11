@@ -16,10 +16,14 @@ Feature 1 is the high-leverage, cheap one and delivers most of the
 "watch a remote run progress" value on its own; feature 2 is a
 presentation upgrade layered on top.
 
-> **Status:** Feature 1 implemented (`opp_ci/logbuffer.py`,
-> `opp_ci/worker_logs.py`, worker heartbeat shipping, coordinator ingest +
-> `worker_log_tail` source selection, `tests/test_worker_log_shipping.py`).
-> Feature 2 not started. Plan stays in `pending/` until feature 2 lands.
+> **Status:** Both features implemented.
+> - Feature 1: `opp_ci/logbuffer.py`, `opp_ci/worker_logs.py`, worker
+>   heartbeat shipping, coordinator ingest + `worker_log_tail` source
+>   selection, `tests/test_worker_log_shipping.py`.
+> - Feature 2: `opp_ci/run_output.py`, executor `on_output` wiring
+>   (`_CallbackStringIO`, streamed tee), worker `_RunOutputStreamer`,
+>   `POST /api/runs/{id}/output-append`, `GET /test-runs/{id}/output/tail`,
+>   run_detail live-output card, `tests/test_run_output_streaming.py`.
 
 ---
 
