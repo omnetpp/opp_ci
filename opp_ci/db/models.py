@@ -103,6 +103,9 @@ class Worker(Base):
     tags = Column(JSON, default=list)  # ["linux", "amd64", "perf-counters"]
     concurrency = Column(Integer, default=1)
     status = Column(String, default="offline")  # online, offline, busy
+    # status is auto-managed by heartbeat/poll/reaper; `enabled` is the
+    # independent, admin-controlled on/off switch (mirrors ApiToken/User).
+    enabled = Column(Boolean, default=True, nullable=False)
     last_heartbeat = Column(DateTime, nullable=True)
     registered_at = Column(DateTime, default=datetime.datetime.utcnow)
     current_job_count = Column(Integer, default=0)
@@ -112,7 +115,11 @@ class Worker(Base):
 
     @property
     def is_available(self):
-        return self.status == "online" and self.current_job_count < self.concurrency
+        # A disabled worker still heartbeats (so we see it's alive) but is
+        # handed no jobs — disable is a drain, not a kill.
+        return (self.enabled
+                and self.status == "online"
+                and self.current_job_count < self.concurrency)
 
 
 class ApiToken(Base):

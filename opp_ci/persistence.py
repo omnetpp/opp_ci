@@ -10,7 +10,7 @@ import datetime
 import logging
 import platform as _platform
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 
 from opp_ci.db.models import (
     TEST_COORD_FIELDS,
@@ -606,6 +606,57 @@ def mark_stale_workers_offline(session, now, timeout_seconds, max_reclaims):
         w.current_job_count = 0
         results.append((w.name, requeued, retired))
     return results
+
+
+# ── Worker administration ─────────────────────────────────────────────
+
+
+def update_worker(session, worker_id, *, concurrency=None, tags=None,
+                  enabled=None):
+    """Patch a worker's concurrency, tags, and/or enabled flag (admin).
+
+    Only the fields passed (non-None) are changed. Returns the Worker, or
+    None if no worker has that id. Raises ValueError on an invalid value.
+    Caller owns the transaction (does NOT commit).
+    """
+    worker = session.execute(
+        select(Worker).where(Worker.id == worker_id)
+    ).scalar_one_or_none()
+    if worker is None:
+        return None
+    if concurrency is not None:
+        if concurrency < 1:
+            raise ValueError("concurrency must be >= 1")
+        worker.concurrency = concurrency
+    if tags is not None:
+        worker.tags = list(tags)
+    if enabled is not None:
+        worker.enabled = bool(enabled)
+    return worker
+
+
+def delete_worker(session, worker_id, now, max_reclaims):
+    """Hard-delete a worker, freeing the runs that still reference it.
+
+    In-flight (`running`) runs are reclaimed first — re-queued for another
+    worker, or retired if they've exhausted their reclaim budget (see
+    reclaim_orphaned_runs). Any remaining references (finished/other runs)
+    have their `worker_id` nulled so the FK doesn't block the delete on
+    enforcing backends; historical worker attribution is dropped, which is
+    acceptable for a hard delete. Returns ``(requeued, retired)``, or None if
+    no worker has that id. Caller owns the transaction (does NOT commit).
+    """
+    worker = session.execute(
+        select(Worker).where(Worker.id == worker_id)
+    ).scalar_one_or_none()
+    if worker is None:
+        return None
+    requeued, retired = reclaim_orphaned_runs(session, worker.id, now, max_reclaims)
+    session.execute(
+        update(TestRun).where(TestRun.worker_id == worker.id).values(worker_id=None)
+    )
+    session.delete(worker)
+    return requeued, retired
 
 
 # ── Enqueue ───────────────────────────────────────────────────────────
