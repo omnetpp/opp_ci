@@ -79,6 +79,26 @@ class BareMetalOppEnvTests(unittest.TestCase):
         self.assertEqual(build[-2], "-c")
         self.assertIn("opp_build_project", build[-1])
 
+    def test_build_kind_runs_opp_env_once(self):
+        # kind=build: the build is the test — one opp_env run, and the build
+        # command must not carry --no-build (opp_build_project rejects it).
+        executor.run_test(
+            "mm1k", "build", isolation="none", toolchain="none",
+            resolved_deps={"omnetpp": "6.4.0"})
+        self.assertEqual(len(self.calls), 1, "build kind must run opp_env once")
+        self.assertNotIn("--no-build", self.calls[0][-1])
+
+    def test_test_kind_builds_then_runs_with_no_build(self):
+        # A real test kind splits into build + test, the test reusing the build.
+        executor.run_test(
+            "mm1k", "smoke", isolation="none", toolchain="none",
+            resolved_deps={"omnetpp": "6.4.0"})
+        self.assertEqual(len(self.calls), 2)
+        self.assertIn("opp_build_project", self.calls[0][-1])
+        self.assertNotIn("--no-build", self.calls[0][-1])
+        self.assertIn("opp_run_smoke_tests", self.calls[1][-1])
+        self.assertIn("--no-build", self.calls[1][-1])
+
 
 class ProjectInstallDirTests(unittest.TestCase):
     def test_globs_resolved_install_dir(self):

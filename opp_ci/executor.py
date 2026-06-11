@@ -1503,11 +1503,18 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
             label=f"opp_env:{effective_project}", env=env, cwd=run_cwd,
             stream=True, on_output=recorder.output if recorder else None)
 
+    # For kind=build the build *is* the test (opp_build_project has no
+    # --no-build flag and there is nothing to run afterwards), so the build
+    # stage carries the verdict and the test stage is skipped.
+    build_only = kind == "build"
+
     with _workspace_lock(ws):
         # ── project.build ─────────────────────────────────────────────
         if recorder is not None:
             recorder.begin(Stage.PROJECT_BUILD, command=build_inner)
+        start = time.time()
         build = _opp_env_run(build_inner)
+        build_seconds = time.time() - start
         if recorder is not None:
             recorder.end(build.returncode)
         if build.returncode != 0:
@@ -1516,6 +1523,17 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
             return {
                 "result_code": "FAIL",
                 "test_exec_seconds": 0.0,
+                "stdout": build.stdout,
+                "stderr": build.stderr,
+                "details": None,
+                "commit_sha": None,
+            }
+        if build_only:
+            if recorder is not None:
+                recorder.skip(Stage.TEST_RUN, reason="kind=build: the build is the test")
+            return {
+                "result_code": "PASS",
+                "test_exec_seconds": build_seconds,
                 "stdout": build.stdout,
                 "stderr": build.stderr,
                 "details": None,
