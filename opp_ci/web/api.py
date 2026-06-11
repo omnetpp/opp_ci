@@ -40,10 +40,11 @@ from opp_ci.db.models import (
     TestVerdictKind, User, Version, Worker,
 )
 from opp_ci.persistence import (
-    create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
-    finalize_verdict_for_run, get_current_expectation, get_matrix_by_name,
-    get_or_create_test, get_test_by_name, insert_expectation, job_to_coord,
-    parse_expectation_override, set_test_name, status_filter,
+    create_matrix_from_axes, create_matrix_run, create_test_run, delete_worker,
+    enqueue_job, finalize_verdict_for_run, get_current_expectation,
+    get_matrix_by_name, get_or_create_test, get_test_by_name, insert_expectation,
+    job_to_coord, parse_expectation_override, set_test_name, status_filter,
+    update_worker,
 )
 
 _logger = logging.getLogger(__name__)
@@ -85,6 +86,11 @@ class WorkerRegisterRequest(BaseModel):
     name: str
     tags: list[str] = Field(default_factory=list)
     concurrency: int = 1
+
+class WorkerUpdateRequest(BaseModel):
+    concurrency: int | None = None
+    tags: list[str] | None = None
+    enabled: bool | None = None
 
 class WorkerSnapshotRequest(BaseModel):
     run_id: int
@@ -396,6 +402,69 @@ async def register_worker(
         session.commit()
         _logger.info("Worker '%s' registered (id=%d)", worker.name, worker.id)
         return {"id": worker.id, "name": worker.name, "token": worker.token}
+    finally:
+        session.close()
+
+
+def _worker_to_dict(w):
+    return {
+        "id": w.id,
+        "name": w.name,
+        "tags": w.tags or [],
+        "concurrency": w.concurrency,
+        "status": w.status,
+        "enabled": bool(w.enabled),
+        "current_job_count": w.current_job_count,
+    }
+
+
+@router.patch("/workers/{worker_id}")
+async def patch_worker(
+    worker_id: int,
+    req: WorkerUpdateRequest,
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Update a worker's concurrency, tags, and/or enabled flag (admin).
+
+    Disabling drains rather than kills: the worker keeps heartbeating but is
+    assigned no new jobs, and its in-flight jobs run to completion.
+    """
+    session = SessionLocal()
+    try:
+        try:
+            worker = update_worker(
+                session, worker_id,
+                concurrency=req.concurrency, tags=req.tags, enabled=req.enabled,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if worker is None:
+            raise HTTPException(status_code=404, detail=f"Worker #{worker_id} not found")
+        session.commit()
+        _logger.info("Worker '%s' (id=%d) updated", worker.name, worker.id)
+        return _worker_to_dict(worker)
+    finally:
+        session.close()
+
+
+@router.delete("/workers/{worker_id}", status_code=204)
+async def remove_worker(
+    worker_id: int,
+    _identity: dict = Depends(require_role("admin")),
+):
+    """Hard-delete a worker (admin). In-flight jobs are re-queued for others."""
+    from opp_ci.config import MAX_RECLAIMS
+    session = SessionLocal()
+    try:
+        result = delete_worker(
+            session, worker_id, datetime.datetime.utcnow(), MAX_RECLAIMS)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Worker #{worker_id} not found")
+        requeued, retired = result
+        session.commit()
+        _logger.info("Worker #%d deleted (requeued=%d, retired=%d)",
+                     worker_id, requeued, retired)
+        return None
     finally:
         session.close()
 
@@ -732,6 +801,7 @@ async def list_workers(
                 "tags": w.tags or [],
                 "concurrency": w.concurrency,
                 "status": w.status,
+                "enabled": bool(w.enabled),
                 "last_heartbeat": w.last_heartbeat.isoformat() if w.last_heartbeat else None,
                 "current_job_count": w.current_job_count,
                 "registered_at": w.registered_at.isoformat() if w.registered_at else None,

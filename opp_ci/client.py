@@ -226,6 +226,23 @@ class OppCiClient:
             payload["tags"] = tags
         return self._post("/workers/register", payload)
 
+    def update_worker(self, worker_id, *, concurrency=None, tags=None,
+                      enabled=None):
+        """Patch a worker's concurrency/tags/enabled flag (admin). Only the
+        fields passed are sent. Returns the updated worker dict."""
+        payload = {}
+        if concurrency is not None:
+            payload["concurrency"] = concurrency
+        if tags is not None:
+            payload["tags"] = tags
+        if enabled is not None:
+            payload["enabled"] = enabled
+        return self._patch(f"/workers/{worker_id}", payload)
+
+    def delete_worker(self, worker_id):
+        """Hard-delete a worker by id (admin). Returns None on success."""
+        return self._delete(f"/workers/{worker_id}")
+
     # ── Tokens ──────────────────────────────────────────────────────────
 
     def create_token(self, name, role="readonly"):
