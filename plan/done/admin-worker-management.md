@@ -3,11 +3,28 @@
 Give admins full lifecycle control over registered workers — **delete**,
 **update concurrency**, **update tags**, and **enable/disable** — across all
 three existing surfaces: CLI (`opp_ci worker …`), REST API (`/api/workers/…`),
-and the web admin UI (`/admin`).
+and the web UI.
 
 Today admins can only **register** and **list** workers. There is no way to
 change a worker's concurrency/tags after registration, no explicit on/off
 switch, and no way to remove a stale worker except by hand-editing the DB.
+
+## Status — IMPLEMENTED
+
+Built as designed below, with these decisions locked in:
+
+- **Migration → manual ALTER, no code.** The `enabled` column lands on fresh
+  DBs via `create_all`; on existing DBs the operator runs once, by hand:
+  ```sql
+  ALTER TABLE workers ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT true;
+  ```
+  (No Alembic, no runtime ALTER guard.)
+- **Delete → hard delete** (§3), guarded by reclaim: in-flight runs are
+  re-queued (or retired past the reclaim budget), remaining run references are
+  nulled, then the row is removed.
+- **Editing → worker detail page.** A new `/workers/{id}` detail page hosts the
+  edit / enable-disable / delete controls (admin-only), instead of inline rows
+  on `/admin`. The workers list links each name to it.
 
 ## Background — what exists today
 
