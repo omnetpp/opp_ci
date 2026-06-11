@@ -13,9 +13,9 @@ from opp_ci.db.models import (
 )
 from opp_ci.executor import install_project, run_test
 from opp_ci.persistence import (
-    capture_system_snapshot, create_matrix_run, create_test_run, enqueue_job,
-    finalize_verdict_for_run, get_or_create_test, insert_expectation,
-    status_filter,
+    capture_system_snapshot, create_matrix_run, create_test_run, delete_worker,
+    enqueue_job, finalize_verdict_for_run, get_or_create_test,
+    insert_expectation, status_filter, update_worker,
 )
 from opp_ci.notes import update_ci_note
 
@@ -212,11 +212,12 @@ def _format_workers(rows):
     if not rows:
         click.echo("No workers registered.")
         return
-    click.echo(f"{'ID':<6} {'Name':<20} {'Status':<10} {'Jobs':<6} {'Cap':<6} "
-               f"{'Tags':<30} {'Last Heartbeat'}")
-    click.echo("-" * 110)
+    click.echo(f"{'ID':<6} {'Name':<20} {'Status':<10} {'Enabled':<9} {'Jobs':<6} "
+               f"{'Cap':<6} {'Tags':<30} {'Last Heartbeat'}")
+    click.echo("-" * 120)
     for w in rows:
         tags = ", ".join(w.get("tags") or []) or "-"
+        enabled = "no" if w.get("enabled") is False else "yes"
         hb = w.get("last_heartbeat")
         if hb:
             try:
@@ -224,8 +225,8 @@ def _format_workers(rows):
             except ValueError:
                 pass
         click.echo(f"{w['id']:<6} {w['name']:<20} {(w.get('status') or '-'):<10} "
-                   f"{w.get('current_job_count', 0):<6} {w.get('concurrency', 0):<6} "
-                   f"{tags:<30} {hb or '-'}")
+                   f"{enabled:<9} {w.get('current_job_count', 0):<6} "
+                   f"{w.get('concurrency', 0):<6} {tags:<30} {hb or '-'}")
 
 
 def _format_tokens(rows):
@@ -479,6 +480,72 @@ def _worker_register_remote(name, tags, auto_tags, concurrency):
 
 def _worker_list_remote():
     _remote(lambda c: _format_workers(c.list_workers()))
+
+
+def _resolve_tags(current, replace, add, remove):
+    """Compute the new tag list from a replace/add/remove spec.
+
+    Returns the new list, or None when no tag change was requested (so callers
+    can leave tags untouched). `replace` wins as the base set; `add`/`remove`
+    then layer on top (of `replace` if given, else `current`).
+    """
+    if replace is None and add is None and remove is None:
+        return None
+    if replace is not None:
+        result = [t.strip() for t in replace.split(",") if t.strip()]
+    else:
+        result = list(current)
+    if add:
+        for t in (s.strip() for s in add.split(",")):
+            if t and t not in result:
+                result.append(t)
+    if remove:
+        drop = {s.strip() for s in remove.split(",") if s.strip()}
+        result = [t for t in result if t not in drop]
+    return result
+
+
+def _remote_worker_tags(c, worker_id):
+    for w in c.list_workers():
+        if w["id"] == worker_id:
+            return w.get("tags") or []
+    raise click.ClickException(f"Worker #{worker_id} not found.")
+
+
+def _worker_update_remote(worker_id, concurrency, tags, add_tags, remove_tags):
+    def op(c):
+        new_tags = _resolve_tags(
+            _remote_worker_tags(c, worker_id) if (add_tags or remove_tags) else [],
+            tags, add_tags, remove_tags)
+        w = c.update_worker(worker_id, concurrency=concurrency, tags=new_tags)
+        click.echo(f"Worker #{w['id']} ({w['name']}) updated.")
+        click.echo(f"  Concurrency: {w['concurrency']}")
+        click.echo(f"  Tags:        {w['tags']}")
+    _remote(op)
+
+
+def _worker_enable_remote(worker_id):
+    def op(c):
+        w = c.update_worker(worker_id, enabled=True)
+        click.echo(f"Worker #{w['id']} ({w['name']}) enabled.")
+    _remote(op)
+
+
+def _worker_disable_remote(worker_id):
+    def op(c):
+        w = c.update_worker(worker_id, enabled=False)
+        click.echo(f"Worker #{w['id']} ({w['name']}) disabled "
+                   f"(draining; in-flight jobs finish).")
+    _remote(op)
+
+
+def _worker_delete_remote(worker_id, yes):
+    def op(c):
+        if not yes:
+            click.confirm(f"Delete worker #{worker_id}?", abort=True)
+        c.delete_worker(worker_id)
+        click.echo(f"Worker #{worker_id} deleted.")
+    _remote(op)
 
 
 def _token_create_remote(name, role):
@@ -2609,12 +2676,115 @@ def worker_list():
             click.echo("No workers registered.")
             return
 
-        click.echo(f"{'ID':<6} {'Name':<20} {'Status':<10} {'Jobs':<6} {'Cap':<6} {'Tags':<30} {'Last Heartbeat'}")
-        click.echo("-" * 110)
+        click.echo(f"{'ID':<6} {'Name':<20} {'Status':<10} {'Enabled':<9} {'Jobs':<6} "
+                   f"{'Cap':<6} {'Tags':<30} {'Last Heartbeat'}")
+        click.echo("-" * 120)
         for w in workers:
             hb = w.last_heartbeat.strftime("%Y-%m-%d %H:%M:%S") if w.last_heartbeat else "-"
             tags_str = ", ".join(w.tags) if w.tags else "-"
-            click.echo(f"{w.id:<6} {w.name:<20} {w.status:<10} {w.current_job_count:<6} {w.concurrency:<6} {tags_str:<30} {hb}")
+            enabled = "no" if w.enabled is False else "yes"
+            click.echo(f"{w.id:<6} {w.name:<20} {w.status:<10} {enabled:<9} "
+                       f"{w.current_job_count:<6} {w.concurrency:<6} {tags_str:<30} {hb}")
+    finally:
+        session.close()
+
+
+@worker_group.command("update")
+@click.argument("worker_id", type=int)
+@click.option("--concurrency", type=int, default=None, help="Set max concurrent jobs (>= 1)")
+@click.option("--tags", default=None, help="Replace tags with this comma-separated set")
+@click.option("--add-tags", default=None, help="Comma-separated tags to add")
+@click.option("--remove-tags", default=None, help="Comma-separated tags to remove")
+@remoteable(_worker_update_remote)
+def worker_update(worker_id, concurrency, tags, add_tags, remove_tags):
+    """Update a worker's concurrency and/or tags."""
+    if concurrency is None and tags is None and add_tags is None and remove_tags is None:
+        raise click.UsageError(
+            "Nothing to update: pass --concurrency and/or --tags/--add-tags/--remove-tags.")
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        worker = session.execute(
+            select(Worker).where(Worker.id == worker_id)
+        ).scalar_one_or_none()
+        if worker is None:
+            click.echo(f"Worker #{worker_id} not found.")
+            return
+        new_tags = _resolve_tags(worker.tags or [], tags, add_tags, remove_tags)
+        try:
+            update_worker(session, worker_id, concurrency=concurrency, tags=new_tags)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+        session.commit()
+        click.echo(f"Worker #{worker_id} ({worker.name}) updated.")
+        click.echo(f"  Concurrency: {worker.concurrency}")
+        click.echo(f"  Tags:        {worker.tags}")
+    finally:
+        session.close()
+
+
+def _set_worker_enabled(worker_id, enabled):
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        worker = update_worker(session, worker_id, enabled=enabled)
+        if worker is None:
+            click.echo(f"Worker #{worker_id} not found.")
+            return
+        name = worker.name
+        session.commit()
+        state = "enabled" if enabled else "disabled"
+        msg = f"Worker #{worker_id} ({name}) {state}."
+        if not enabled:
+            msg += " Draining; in-flight jobs finish."
+        click.echo(msg)
+    finally:
+        session.close()
+
+
+@worker_group.command("enable")
+@click.argument("worker_id", type=int)
+@remoteable(_worker_enable_remote)
+def worker_enable(worker_id):
+    """Enable a worker so the coordinator assigns it jobs again."""
+    _set_worker_enabled(worker_id, True)
+
+
+@worker_group.command("disable")
+@click.argument("worker_id", type=int)
+@remoteable(_worker_disable_remote)
+def worker_disable(worker_id):
+    """Disable a worker (drain): it keeps heartbeating but gets no new jobs."""
+    _set_worker_enabled(worker_id, False)
+
+
+@worker_group.command("delete")
+@click.argument("worker_id", type=int)
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+@remoteable(_worker_delete_remote)
+def worker_delete(worker_id, yes):
+    """Hard-delete a worker. In-flight jobs are re-queued for other workers."""
+    import datetime as _dt
+    from opp_ci.config import MAX_RECLAIMS
+
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        worker = session.execute(
+            select(Worker).where(Worker.id == worker_id)
+        ).scalar_one_or_none()
+        if worker is None:
+            click.echo(f"Worker #{worker_id} not found.")
+            return
+        name = worker.name
+        if not yes:
+            click.confirm(f"Delete worker '{name}' (#{worker_id})?", abort=True)
+        requeued, retired = delete_worker(
+            session, worker_id, _dt.datetime.utcnow(), MAX_RECLAIMS)
+        session.commit()
+        msg = f"Worker #{worker_id} ({name}) deleted. Re-queued {requeued} run(s)"
+        msg += f", retired {retired}." if retired else "."
+        click.echo(msg)
     finally:
         session.close()
 
