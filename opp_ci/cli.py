@@ -482,19 +482,37 @@ def _worker_list_remote():
     _remote(lambda c: _format_workers(c.list_workers()))
 
 
-def _resolve_tags(current, replace, add, remove):
-    """Compute the new tag list from a replace/add/remove spec.
+# Tag namespaces owned by _detect_capability_tags(). A `--auto-tags` refresh
+# replaces these in place while leaving hand-added custom tags untouched, so a
+# host that was re-imaged / upgraded (new distro version, new compiler) doesn't
+# accumulate stale platform tags.
+_AUTO_TAG_PREFIXES = ("os:", "distro:", "flavor:", "arch:", "compiler:")
+_AUTO_TAG_LITERALS = frozenset({"podman", "nix"})
+
+
+def _is_auto_managed_tag(tag):
+    """True for a tag that _detect_capability_tags() would produce."""
+    return tag in _AUTO_TAG_LITERALS or tag.startswith(_AUTO_TAG_PREFIXES)
+
+
+def _resolve_tags(current, replace, add, remove, detected=None):
+    """Compute the new tag list from a replace/refresh/add/remove spec.
 
     Returns the new list, or None when no tag change was requested (so callers
-    can leave tags untouched). `replace` wins as the base set; `add`/`remove`
-    then layer on top (of `replace` if given, else `current`).
+    can leave tags untouched). `replace` wins as the base set; `detected` (from
+    _detect_capability_tags(), passed when --auto-tags is set) then refreshes
+    the auto-managed namespace of that base — dropping stale os:/distro:/...
+    /podman/nix tags and re-seeding the freshly detected ones while preserving
+    custom tags; `add`/`remove` layer on last.
     """
-    if replace is None and add is None and remove is None:
+    if replace is None and add is None and remove is None and detected is None:
         return None
     if replace is not None:
         result = [t.strip() for t in replace.split(",") if t.strip()]
     else:
         result = list(current)
+    if detected is not None:
+        result = list(detected) + [t for t in result if not _is_auto_managed_tag(t)]
     if add:
         for t in (s.strip() for s in add.split(",")):
             if t and t not in result:
@@ -512,15 +530,23 @@ def _remote_worker_tags(c, worker_id):
     raise click.ClickException(f"Worker #{worker_id} not found.")
 
 
-def _worker_update_remote(worker_id, concurrency, tags, add_tags, remove_tags):
+def _worker_update_remote(worker_id, concurrency, tags, add_tags, remove_tags, auto_tags):
+    # Detection runs on THIS host (the one driving --remote), which is usually
+    # not the worker's host — mirror the register-time caveat.
+    detected = _detect_capability_tags() if auto_tags else None
+    need_current = bool(add_tags or remove_tags or auto_tags)
+
     def op(c):
         new_tags = _resolve_tags(
-            _remote_worker_tags(c, worker_id) if (add_tags or remove_tags) else [],
-            tags, add_tags, remove_tags)
+            _remote_worker_tags(c, worker_id) if need_current else [],
+            tags, add_tags, remove_tags, detected)
         w = c.update_worker(worker_id, concurrency=concurrency, tags=new_tags)
         click.echo(f"Worker #{w['id']} ({w['name']}) updated.")
         click.echo(f"  Concurrency: {w['concurrency']}")
         click.echo(f"  Tags:        {w['tags']}")
+        if auto_tags and detected:
+            click.echo(f"  (detected:   {', '.join(detected)} on THIS host — "
+                       f"usually not the worker host under --remote)")
     _remote(op)
 
 
@@ -939,6 +965,11 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
                 "opp_file": None,
                 "resolved_deps": resolved_deps,
             }
+            from opp_ci.persistence import validate_test_coord
+            try:
+                validate_test_coord(coord)
+            except ValueError as e:
+                raise click.ClickException(str(e))
             test = get_or_create_test(
                 session, coord, default_expectation=default_expectation,
             )
@@ -2523,31 +2554,44 @@ def _detect_capability_tags():
             variant_id = kv.get("VARIANT_ID", "").lower()
             if distro_id and distro_ver:
                 tags.append(f"distro:{distro_id}-{distro_ver}")
+            flavor = None
             if variant_id and _platforms.is_known_flavor(variant_id):
-                tags.append(f"flavor:{variant_id}-{distro_ver}")
-            elif distro_id == "ubuntu" and shutil.which("plasmashell"):
-                # Heuristic: KDE Plasma on Ubuntu ⇒ Kubuntu.
-                tags.append(f"flavor:kubuntu-{distro_ver}")
+                flavor = variant_id
+            elif distro_id == "ubuntu":
+                # No VARIANT_ID (the common case for the *buntu spins): guess
+                # the flavor from the installed desktop-session binary. First
+                # match wins; each target is in opp_ci.platforms.FLAVORS.
+                for binary, name in (("plasmashell", "kubuntu"),    # KDE Plasma
+                                     ("xfce4-session", "xubuntu"),  # XFCE
+                                     ("lxqt-session", "lubuntu")):  # LXQt
+                    if shutil.which(binary):
+                        flavor = name
+                        break
+            if flavor:
+                tags.append(f"flavor:{flavor}-{distro_ver}")
         except OSError:
             pass
     elif system == "windows":
-        tags.append("os:windows")
+        # arch/mode are mandatory on every test and Windows/MacOS tests pin a
+        # versioned os tag, so emit the versioned form (the bare one is never a
+        # required tag under strict specification). Fall back to bare only when
+        # no version is available.
         ver = _platform.release() or _platform.version()
-        if ver:
-            tags.append(f"os:windows-{ver}")
+        tags.append(f"os:windows-{ver}" if ver else "os:windows")
     elif system == "darwin":
-        tags.append("os:macos")
         ver = _platform.mac_ver()[0]
-        if ver:
-            tags.append(f"os:macos-{ver}")
+        tags.append(f"os:macos-{ver}" if ver else "os:macos")
 
-    # Normalise platform.machine() to the matrix 'arch' vocabulary
-    # (matrices pin e.g. amd64/aarch64; the matcher requires arch:<arch>
-    # whenever a run sets one).
+    # Normalise platform.machine() to the matrix 'arch' vocabulary (matrices
+    # pin e.g. amd64/aarch64). arch is mandatory on every test and the matcher
+    # requires arch:<arch> exactly, so always emit one — fall back to the raw
+    # machine string for an unrecognised CPU rather than leaving the worker
+    # arch-less (which would make it unable to claim any job).
+    machine = _platform.machine().lower()
     arch = {
         "x86_64": "amd64", "amd64": "amd64",
         "arm64": "aarch64", "aarch64": "aarch64",
-    }.get(_platform.machine().lower())
+    }.get(machine, machine or None)
     if arch:
         tags.append(f"arch:{arch}")
 
@@ -2706,12 +2750,19 @@ def worker_list():
 @click.option("--tags", default=None, help="Replace tags with this comma-separated set")
 @click.option("--add-tags", default=None, help="Comma-separated tags to add")
 @click.option("--remove-tags", default=None, help="Comma-separated tags to remove")
+@click.option("--auto-tags", is_flag=True, default=False,
+              help="Re-detect os:/distro:/flavor:/arch:/compiler:/podman/nix tags "
+                   "from this host and refresh them on the worker (stale ones "
+                   "dropped, custom tags kept). Run on the worker's own host.")
 @remoteable(_worker_update_remote)
-def worker_update(worker_id, concurrency, tags, add_tags, remove_tags):
+def worker_update(worker_id, concurrency, tags, add_tags, remove_tags, auto_tags):
     """Update a worker's concurrency and/or tags."""
-    if concurrency is None and tags is None and add_tags is None and remove_tags is None:
+    if (concurrency is None and tags is None and add_tags is None
+            and remove_tags is None and not auto_tags):
         raise click.UsageError(
-            "Nothing to update: pass --concurrency and/or --tags/--add-tags/--remove-tags.")
+            "Nothing to update: pass --concurrency and/or "
+            "--tags/--add-tags/--remove-tags/--auto-tags.")
+    detected = _detect_capability_tags() if auto_tags else None
     Base.metadata.create_all(engine)
     session = SessionLocal()
     try:
@@ -2721,7 +2772,7 @@ def worker_update(worker_id, concurrency, tags, add_tags, remove_tags):
         if worker is None:
             click.echo(f"Worker #{worker_id} not found.")
             return
-        new_tags = _resolve_tags(worker.tags or [], tags, add_tags, remove_tags)
+        new_tags = _resolve_tags(worker.tags or [], tags, add_tags, remove_tags, detected)
         try:
             update_worker(session, worker_id, concurrency=concurrency, tags=new_tags)
         except ValueError as e:
@@ -2730,6 +2781,8 @@ def worker_update(worker_id, concurrency, tags, add_tags, remove_tags):
         click.echo(f"Worker #{worker_id} ({worker.name}) updated.")
         click.echo(f"  Concurrency: {worker.concurrency}")
         click.echo(f"  Tags:        {worker.tags}")
+        if auto_tags and detected:
+            click.echo(f"  (detected:   {', '.join(detected)})")
     finally:
         session.close()
 

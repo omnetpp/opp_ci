@@ -152,9 +152,16 @@ class RestRunByNameTests(unittest.TestCase):
     def _h(self):
         return {"Authorization": f"Bearer {self.sub}"}
 
+    # Environment dimensions every submit now requires (strict specification).
+    _ENV = {
+        "mode": "release", "os": "Linux",
+        "distro": "Ubuntu", "distro_version": "24.04",
+        "arch": "amd64", "compiler": "gcc", "compiler_version": "14",
+    }
+
     def test_submit_run_with_name_then_run_by_name(self):
         r = self.client.post("/api/runs", headers=self._h(), json={
-            "project": "inet", "kind": "smoke", "os": "Linux", "name": "rest-smoke",
+            "project": "inet", "kind": "smoke", "name": "rest-smoke", **self._ENV,
         })
         self.assertEqual(r.status_code, 200, r.text)
 
@@ -175,11 +182,11 @@ class RestRunByNameTests(unittest.TestCase):
 
     def test_submit_run_name_collision_409(self):
         self.client.post("/api/runs", headers=self._h(), json={
-            "project": "inet", "kind": "build", "os": "Linux", "name": "taken",
+            "project": "inet", "kind": "build", "name": "taken", **self._ENV,
         })
         # different coordinate, same name → 409
         r = self.client.post("/api/runs", headers=self._h(), json={
-            "project": "inet", "kind": "feature", "os": "Linux", "name": "taken",
+            "project": "inet", "kind": "feature", "name": "taken", **self._ENV,
         })
         self.assertEqual(r.status_code, 409, r.text)
 
@@ -187,6 +194,7 @@ class RestRunByNameTests(unittest.TestCase):
         # anonymous inline spec → matrix row with NULL name
         r = self.client.post("/api/matrix-runs", headers=self._h(), json={
             "project": "inet", "kinds": ["smoke"], "modes": ["release"],
+            "distro": ["Ubuntu 24.04"], "arch": ["amd64"], "compiler": ["gcc-14"],
         })
         self.assertEqual(r.status_code, 200, r.text)
         mr_id = r.json()["matrix_run_id"]
@@ -203,6 +211,8 @@ class RestRunByNameTests(unittest.TestCase):
         # named inline spec → reusable
         r2 = self.client.post("/api/matrix-runs", headers=self._h(), json={
             "project": "inet", "kinds": ["smoke"], "name": "rest-matrix",
+            "modes": ["release"], "distro": ["Ubuntu 24.04"], "arch": ["amd64"],
+            "compiler": ["gcc-14"],
         })
         self.assertEqual(r2.status_code, 200, r2.text)
         s = SessionLocal()

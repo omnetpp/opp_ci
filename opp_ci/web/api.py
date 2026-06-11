@@ -44,7 +44,7 @@ from opp_ci.persistence import (
     enqueue_job, finalize_verdict_for_run, get_current_expectation,
     get_matrix_by_name, get_or_create_test, get_test_by_name, insert_expectation,
     job_to_coord, parse_expectation_override, required_tags_for_test,
-    set_test_name, status_filter, update_worker,
+    set_test_name, status_filter, update_worker, validate_test_coord,
 )
 
 _logger = logging.getLogger(__name__)
@@ -196,6 +196,10 @@ async def submit_run(
                 "opp_file": None,
                 "resolved_deps": resolved_deps,
             }
+            try:
+                validate_test_coord(coord)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
             test = get_or_create_test(
                 session, coord,
                 default_expectation=default_expectation,
@@ -262,17 +266,24 @@ async def submit_matrix_run(
             fp = compute_cache_fingerprint(
                 job, project=matrix.project, opp_file=matrix.opp_file,
             )
-            run, _ = enqueue_job(
-                session,
-                job,
-                project=matrix.project,
-                opp_file=matrix.opp_file,
-                matrix_run_id=matrix_run.id,
-                use_cache=True,
-                cache_fingerprint=fp,
-                default_expectation=default_expectation,
-                expectation_set_by=identity.get("name"),
-            )
+            try:
+                run, _ = enqueue_job(
+                    session,
+                    job,
+                    project=matrix.project,
+                    opp_file=matrix.opp_file,
+                    matrix_run_id=matrix_run.id,
+                    use_cache=True,
+                    cache_fingerprint=fp,
+                    default_expectation=default_expectation,
+                    expectation_set_by=identity.get("name"),
+                )
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Matrix '{req.matrix_name}' produces an "
+                           f"under-specified job: {e}",
+                )
             run_ids.append(run.id)
         session.commit()
         _logger.info("Matrix '%s' queued %d jobs (matrix_run=%d) by %s",

@@ -131,9 +131,18 @@ class RestEndpointTests(unittest.TestCase):
 
     # ── Runs lifecycle (submit → list → get) ─────────────────────────
 
+    # A fully-specified run coord; submit now requires every environment
+    # dimension (arch, mode, compiler+version, distro+version on Linux) so the
+    # Test identity is total and its runs are comparable.
+    _FULL_RUN = {
+        "project": "mm1k", "kind": "smoke", "mode": "release",
+        "os": "Linux", "distro": "Ubuntu", "distro_version": "24.04",
+        "arch": "amd64", "compiler": "gcc", "compiler_version": "14",
+    }
+
     def test_run_submit_and_get(self):
         r = self.client.post("/api/runs",
-                             json={"project": "mm1k", "kind": "smoke"},
+                             json=self._FULL_RUN,
                              headers=self._h(self.submitter))
         self.assertEqual(r.status_code, 200, r.text)
         run_id = r.json()["id"]
@@ -145,7 +154,7 @@ class RestEndpointTests(unittest.TestCase):
     def test_run_status_filters(self):
         # POST /runs response now keys the lifecycle as "lifecycle", not "status".
         r = self.client.post("/api/runs",
-                             json={"project": "mm1k", "kind": "smoke"},
+                             json=self._FULL_RUN,
                              headers=self._h(self.submitter))
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()

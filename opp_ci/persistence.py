@@ -83,6 +83,66 @@ def job_to_coord(job, *, project=None, opp_file=None):
     return coord
 
 
+def validate_test_coord(coord):
+    """Raise ValueError if *coord* under-specifies the execution environment.
+
+    A Test identity (its ``coord_hash``) must pin every dimension along which
+    two runs could otherwise diverge; otherwise dedup is meaningless — runs of
+    "the same" Test would execute in different environments and their results
+    could not be compared, and expectations/trends key on an ambiguous identity.
+    Called at every submit entry point so an under-specified submission fails
+    fast with a clear message instead of silently running wherever a worker
+    happens to match (or timing out unserviceable).
+
+    Rules (see plan/pending/strict-test-coordinate-specification.md):
+      * project, kind                  — required (what is run)
+      * arch, mode                     — required (change the binary/behaviour)
+      * compiler, compiler_version     — both required (change the build); also
+                                         for podman/nix, where they select the
+                                         image / nix option
+      * os                             — required
+      * os = Linux   → distro + distro_version required; os_version must be
+                       unset (Linux carries its version in the distro); flavor
+                       optional, but if set needs a version (distro_version
+                       suffices)
+      * os = Windows/MacOS → os_version required; distro/flavor must be unset
+
+    Isolation-independent: podman runs need full spec too (the coords select
+    the container image).
+    """
+    missing = [f for f in ("project", "kind", "arch", "mode",
+                           "compiler", "compiler_version", "os")
+               if not coord.get(f)]
+
+    os_folded = (coord.get("os") or "").strip().lower()
+    if os_folded == "linux":
+        missing += [f for f in ("distro", "distro_version") if not coord.get(f)]
+        if coord.get("os_version"):
+            raise ValueError(
+                "Test coordinate over-specifies os_version for Linux: Linux "
+                "carries its version in the distro — pin distro_version (and "
+                "flavor_version for a flavor) instead, and leave os_version unset."
+            )
+        if coord.get("flavor") and not (
+                coord.get("flavor_version") or coord.get("distro_version")):
+            missing.append("flavor_version")
+    elif os_folded in ("windows", "macos"):
+        if not coord.get("os_version"):
+            missing.append("os_version")
+        if coord.get("distro") or coord.get("flavor"):
+            raise ValueError(
+                "Test coordinate sets distro/flavor on a non-Linux os: "
+                "distro and flavor are only valid when os=Linux."
+            )
+
+    if missing:
+        raise ValueError(
+            "Test coordinate under-specifies the execution environment; a test "
+            "must fully specify it so its runs share one identity and are "
+            "comparable. Missing/empty: " + ", ".join(sorted(set(missing))) + "."
+        )
+
+
 def get_or_create_test(session, coord, *, default_expectation=_UNSET,
                        expectation_set_by="system"):
     """Return the Test row matching `coord`, creating it if missing.
@@ -795,6 +855,7 @@ def enqueue_job(session, job, *, project, opp_file=None, matrix_run_id=None,
     only when no `matrix_run_id` was given.
     """
     coord = job_to_coord(job, project=project, opp_file=opp_file)
+    validate_test_coord(coord)
     test = get_or_create_test(session, coord,
                               default_expectation=default_expectation,
                               expectation_set_by=expectation_set_by)

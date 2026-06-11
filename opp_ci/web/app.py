@@ -31,6 +31,7 @@ from opp_ci.persistence import (
     get_test_by_name, insert_expectation, mark_stale_workers_offline,
     parse_expectation_override, read_default_expectation_code,
     set_default_expectation_code, set_matrix_name, set_test_name, update_worker,
+    validate_test_coord,
     USE_GLOBAL_DEFAULT,
 )
 
@@ -952,6 +953,13 @@ def test_new_submit(
             "opp_file": None,
             "resolved_deps": resolved_deps,
         }
+        try:
+            validate_test_coord(coord)
+        except ValueError as e:
+            return RedirectResponse(
+                url=f"/tests/new?message={e}&message_type=error",
+                status_code=303,
+            )
         test = get_or_create_test(
             session, coord,
             default_expectation=default_expectation,
