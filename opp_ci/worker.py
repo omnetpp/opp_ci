@@ -42,6 +42,12 @@ class WorkerAgent:
         # interruptibly so a stop request is honored promptly.
         self._stop_event = threading.Event()
         self._heartbeat_thread = None
+        # Log shipping: a ring handler captures this worker's recent log
+        # records (installed in start()); the heartbeat thread ships the new
+        # ones to the coordinator. _last_shipped_seq is touched only by that
+        # thread, so it needs no extra locking.
+        self._log_handler = None
+        self._last_shipped_seq = 0
 
     def _make_session(self):
         """Build an authenticated, configured requests session."""
@@ -82,6 +88,8 @@ class WorkerAgent:
         """
         if niceness:
             self._apply_niceness(niceness)
+
+        self._install_log_handler()
 
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -127,6 +135,45 @@ class WorkerAgent:
         except (OSError, AttributeError) as e:
             _logger.warning("Could not set niceness to %d: %s", niceness, e)
 
+    def _install_log_handler(self):
+        """Attach the ring-buffer handler to the `opp_ci` logger.
+
+        Scoped to `opp_ci` (not root) so it captures this worker's own
+        records — including the executor's streamed build/compile/test
+        output, which is emitted via `_logger.info` — but not third-party
+        chatter. Best-effort: a failure here must not stop the worker.
+        """
+        try:
+            from opp_ci import config as cfg
+            from opp_ci.logbuffer import RingBufferHandler
+            handler = RingBufferHandler(cfg.WORKER_LOG_RING)
+            logging.getLogger("opp_ci").addHandler(handler)
+            self._log_handler = handler
+        except Exception as e:  # noqa: BLE001 — never block startup on this
+            _logger.warning("Could not install log-shipping handler: %s", e)
+
+    def _collect_log_batch(self):
+        """New log records since the last shipped batch, capped, with a drop
+        marker. Returns {"entries": [...], "high_seq": int} or None when
+        there's nothing new (or no handler). Does not advance the shipped
+        watermark — the caller does that only after a successful POST."""
+        if self._log_handler is None:
+            return None
+        from opp_ci import config as cfg
+        entries, dropped = self._log_handler.since(
+            self._last_shipped_seq, limit=cfg.WORKER_LOG_BATCH)
+        if not entries:
+            return None
+        out = [{"ts": e["ts"], "level": e["level"], "msg": e["msg"]}
+               for e in entries]
+        if dropped:
+            out.insert(0, {
+                "ts": entries[0]["ts"],
+                "level": logging.WARNING,
+                "msg": f"… {dropped} earlier log line(s) dropped (batch cap) …",
+            })
+        return {"entries": out, "high_seq": entries[-1]["seq"]}
+
     def _heartbeat_loop(self, heartbeat_interval):
         """Send a heartbeat immediately, then every heartbeat_interval seconds
         until shutdown. Uses its own session to avoid contending with the main
@@ -140,15 +187,24 @@ class WorkerAgent:
 
     def _heartbeat(self, session=None):
         session = session or self._session
+        batch = self._collect_log_batch()
+        body = {"logs": {"entries": batch["entries"]}} if batch else None
         try:
             resp = session.post(
                 f"{self.coordinator_url}/api/workers/heartbeat",
+                json=body,
                 timeout=10,
             )
             if resp.status_code != 200:
                 _logger.warning("Heartbeat failed: %s %s", resp.status_code, resp.text)
+                return
         except requests.RequestException as e:
             _logger.warning("Heartbeat error: %s", e)
+            return
+        # Advance the watermark only after the coordinator has the batch, so
+        # a failed heartbeat re-ships the same lines next beat.
+        if batch:
+            self._last_shipped_seq = batch["high_seq"]
 
     def _poll(self):
         """Poll the coordinator for a job. Returns the job dict or None."""

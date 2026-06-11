@@ -2338,6 +2338,55 @@ def _tail_response(unit, cursor):
                          "cursor": last_cursor})
 
 
+def _level_to_priority(level):
+    """Map a Python log level to the syslog-style priority the log_view
+    template colours by (<=3 error, 4 warning, else info)."""
+    if level is None:
+        return 6
+    if level >= logging.ERROR:    # ERROR, CRITICAL
+        return 3
+    if level >= logging.WARNING:  # WARNING
+        return 4
+    return 6                      # INFO, DEBUG and below
+
+
+def _render_shipped_entries(entries):
+    """Shipped worker-log rows → the same shape `_render_log_entries` emits.
+
+    A shipped entry is {seq, ts (epoch float), level (Python level), msg}.
+    """
+    rows = []
+    for e in entries:
+        ts = e.get("ts")
+        try:
+            hhmmss = (datetime.datetime.fromtimestamp(
+                ts, datetime.timezone.utc).strftime("%H:%M:%S")
+                if ts is not None else "")
+        except (ValueError, OSError, OverflowError):
+            hhmmss = ""
+        rows.append({
+            "ts": hhmmss,
+            "priority": _level_to_priority(e.get("level")),
+            "html": str(_ansi_to_html(e.get("msg") or "")),
+        })
+    return rows
+
+
+def _shipped_tail_response(worker_id, cursor):
+    """Tail JSON served from a remote worker's shipped-log store."""
+    from opp_ci.worker_logs import STORE
+    try:
+        after = int(cursor) if cursor else 0
+    except (TypeError, ValueError):
+        # A leftover journald cursor from before this worker started
+        # shipping — start fresh rather than error.
+        after = 0
+    entries, last_seq = STORE.since(worker_id, after)
+    return JSONResponse({"available": True, "reason": None,
+                         "entries": _render_shipped_entries(entries),
+                         "cursor": str(last_seq) if last_seq else ""})
+
+
 def _worker_or_404(session, worker_id):
     w = session.execute(
         select(Worker).where(Worker.id == worker_id)).scalar_one_or_none()
@@ -2411,11 +2460,18 @@ def worker_log(request: Request, worker_id: int,
 def worker_log_tail(request: Request, worker_id: int, cursor: str = Query(default=None),
                     current_user: User = Depends(require_user("submitter"))):
     from opp_ci.journal import worker_unit_name, JournalUnavailable
+    from opp_ci.worker_logs import STORE
     session = SessionLocal()
     try:
         name = _worker_or_404(session, worker_id).name
     finally:
         session.close()
+    # A worker on another host ships its logs to the coordinator (its journal
+    # lives on its own box). Serve those when present; otherwise fall back to
+    # the local journal — which covers the co-located `local` worker and a
+    # remote worker that hasn't reported its first batch yet.
+    if STORE.has(worker_id):
+        return _shipped_tail_response(worker_id, cursor)
     try:
         unit = worker_unit_name(name)
     except JournalUnavailable as e:

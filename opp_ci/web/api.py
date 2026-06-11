@@ -28,7 +28,7 @@ Endpoints:
 import datetime
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
@@ -493,9 +493,15 @@ async def worker_me(
 
 @router.post("/workers/heartbeat")
 async def worker_heartbeat(
+    payload: dict = Body(default=None),
     worker_info: dict = Depends(require_worker_token()),
 ):
-    """Worker heartbeat — keeps the worker marked as online and reconciles job count."""
+    """Worker heartbeat — keeps the worker marked as online and reconciles job count.
+
+    The optional body may carry shipped log lines
+    (``{"logs": {"entries": [...]}}``) for the per-worker log view; older
+    workers send no body, so the field is optional.
+    """
     session = SessionLocal()
     try:
         worker = session.execute(
@@ -516,6 +522,13 @@ async def worker_heartbeat(
                 session.commit()
     finally:
         session.close()
+
+    # Ingest shipped logs (best-effort; keyed by the authenticated worker id).
+    logs = payload.get("logs") if isinstance(payload, dict) else None
+    if isinstance(logs, dict) and logs.get("entries"):
+        from opp_ci.worker_logs import STORE
+        STORE.append(worker_info["worker_id"], logs["entries"])
+
     return {"status": "ok", "worker_id": worker_info["worker_id"]}
 
 

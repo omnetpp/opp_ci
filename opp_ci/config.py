@@ -75,6 +75,15 @@ WORKER_UNIT_TEMPLATE = os.environ.get(
 # Lines to fetch on the initial (cursor-less) tail load.
 LOG_TAIL_LINES = int(os.environ.get("OPP_CI_LOG_TAIL_LINES", "1000"))
 
+# Per-worker log shipping (for workers running on a different host than the
+# coordinator, whose journal the coordinator can't read). The worker keeps
+# the last WORKER_LOG_RING records in memory and ships up to WORKER_LOG_BATCH
+# new ones per heartbeat; the coordinator keeps the last SERVE_WORKER_LOG_RING
+# per worker for the log view. All in-memory — dropped on restart.
+WORKER_LOG_RING = int(os.environ.get("OPP_CI_WORKER_LOG_RING", "2000"))
+WORKER_LOG_BATCH = int(os.environ.get("OPP_CI_WORKER_LOG_BATCH", "500"))
+SERVE_WORKER_LOG_RING = int(os.environ.get("OPP_CI_SERVE_WORKER_LOG_RING", "2000"))
+
 # ── TLS ───────────────────────────────────────────────────────────────
 #
 # Native TLS termination in `opp_ci serve`. Empty pair → plain HTTP, the
