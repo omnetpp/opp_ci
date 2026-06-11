@@ -1,0 +1,100 @@
+"""Tests for the staged podman lifecycle — detached container + per-stage
+exec + guaranteed teardown (plan/pending/staged-execution-capture.md, phase 2).
+
+These mock run_external (there's no podman in CI); they pin the command
+sequence, stage recording, bootstrap-failure handling, and that the container
+is always torn down. Real podman validation happens on a podman host.
+
+Run with: python -m unittest tests.test_podman_staged
+"""
+
+import subprocess
+import unittest
+from unittest import mock
+
+from opp_ci import executor
+from opp_ci.stages import Stage, StageRecorder, FAILED, SKIPPED, PASSED
+
+
+def _ok(args, **kw):
+    return subprocess.CompletedProcess(args, 0, stdout="out\n", stderr="")
+
+
+def _call(recorder, fake_run):
+    with mock.patch("opp_ci.executor.run_external", side_effect=fake_run):
+        return executor._run_podman_staged(
+            image="img:tag", container_args=["run", "-c", "x"],
+            entry_script="/opt/e.sh",
+            run_flags=["-v", "/m:/work:Z", "-w", "/work"],
+            recorder=recorder, git_ref=None, worktree_path=None, scratch_dir=None)
+
+
+class PodmanStagedTests(unittest.TestCase):
+    def test_lifecycle_sequence_and_stages(self):
+        rec = StageRecorder()
+        calls = []
+
+        def fake(args, **kw):
+            calls.append(args)
+            return _ok(args)
+
+        outcome = _call(rec, fake)
+        # detached run → bootstrap exec → test exec → rm -f
+        self.assertEqual(calls[0][:4], ["podman", "run", "-d", "--name"])
+        self.assertIn("--entrypoint", calls[0])
+        self.assertEqual(calls[1][:2], ["podman", "exec"])
+        self.assertIn("--bootstrap-only", calls[1])
+        self.assertIn("--skip-bootstrap", calls[2])
+        self.assertEqual(calls[-1][:3], ["podman", "rm", "-f"])
+        self.assertEqual([s["name"] for s in rec.stages],
+                         [Stage.RUNNER_BOOTSTRAP, Stage.TEST_RUN])
+        self.assertEqual([s["status"] for s in rec.stages], [PASSED, PASSED])
+        self.assertEqual(outcome["result_code"], "PASS")
+
+    def test_bootstrap_failure_skips_test_still_tears_down(self):
+        rec = StageRecorder()
+        calls = []
+
+        def fake(args, **kw):
+            calls.append(args)
+            rc = 1 if "--bootstrap-only" in args else 0
+            return subprocess.CompletedProcess(args, rc, stdout="", stderr="boom")
+
+        outcome = _call(rec, fake)
+        self.assertFalse(any("--skip-bootstrap" in c for c in calls))  # test skipped
+        self.assertTrue(any(c[:3] == ["podman", "rm", "-f"] for c in calls))
+        self.assertEqual(rec.stages[0]["status"], FAILED)
+        self.assertEqual(rec.stages[1]["name"], Stage.TEST_RUN)
+        self.assertEqual(rec.stages[1]["status"], SKIPPED)
+        self.assertEqual(outcome["result_code"], "FAIL")
+
+    def test_teardown_runs_even_if_a_stage_raises(self):
+        calls = []
+
+        def fake(args, **kw):
+            calls.append(args)
+            if "--skip-bootstrap" in args:
+                raise RuntimeError("exec blew up")
+            return _ok(args)
+
+        with self.assertRaises(RuntimeError):
+            _call(StageRecorder(), fake)
+        self.assertTrue(any(c[:3] == ["podman", "rm", "-f"] for c in calls))
+
+    def test_failed_run_d_raises_and_tears_down(self):
+        calls = []
+
+        def fake(args, **kw):
+            calls.append(args)
+            if args[:3] == ["podman", "run", "-d"]:
+                return subprocess.CompletedProcess(args, 125, stdout="", stderr="no image")
+            return _ok(args)
+
+        with self.assertRaises(RuntimeError):
+            _call(StageRecorder(), fake)
+        # even though startup failed, the finally still issues an rm -f
+        self.assertTrue(any(c[:3] == ["podman", "rm", "-f"] for c in calls))
+
+
+if __name__ == "__main__":
+    unittest.main()

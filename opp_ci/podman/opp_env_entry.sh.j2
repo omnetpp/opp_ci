@@ -24,10 +24,22 @@ sync_repo() {
     fi
 }
 
-sync_repo opp_ci   https://github.com/omnetpp/opp_ci.git
-sync_repo opp_repl https://github.com/omnetpp/opp_repl.git
+do_bootstrap() {
+    sync_repo opp_ci   https://github.com/omnetpp/opp_ci.git
+    sync_repo opp_repl https://github.com/omnetpp/opp_repl.git
+    pip install -q -e /opt/opp_ci_src /opt/opp_repl_src
+}
 
-pip install -q -e /opt/opp_ci_src /opt/opp_repl_src
+# Stages, driven as separate `podman exec`s by the worker (see
+# executor._run_test_in_podman):
+#   --bootstrap-only  clone/fetch + pip install, then exit (run once)
+#   --skip-bootstrap  skip the clone/pip and exec opp_env with the rest
+#   (no flag)         bootstrap + exec opp_env, the legacy single-shot path
+case "$1" in
+    --bootstrap-only) do_bootstrap; exit 0 ;;
+    --skip-bootstrap) shift ;;
+    *)                do_bootstrap ;;
+esac
 
 # opp_env's -w is a per-subcommand option, not a top-level flag, so cd
 # into the workspace and let opp_env auto-detect it from cwd.

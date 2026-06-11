@@ -5,15 +5,22 @@ outside podman** — organised into ordered **stages** (container prepare,
 bootstrap, dependency install, compilation, test run, …), and stream them
 **live** to the run-detail page as the run progresses.
 
-> **Status:** Phase 1 (stage spine on host-nix + direct paths) and Phase 3
-> (TestRunStage persistence + finished staged render) are implemented and
-> tested (`opp_ci/stages.py`, executor build/test split, worker stage events,
-> stage-aware `run_output.py`, `TestRunStage`, run-detail live + finished
-> views; `tests/test_stages.py`, `test_run_output_streaming.py`,
-> `test_stage_persistence.py`). **Phase 2 (podman option b) is not done** — it
-> is a container-lifecycle rewrite that needs a real podman host to validate
-> (see the integration note under Testing), so it should be implemented and
-> verified where podman runs, not blind.
+> **Status:** Phases 1 + 3 done and tested (`opp_ci/stages.py`, executor
+> build/test split, worker stage events, stage-aware `run_output.py`,
+> `TestRunStage`, run-detail live + finished views).
+>
+> **Phase 2 (podman option b): lifecycle implemented, NOT yet validated on a
+> real podman host.** `_run_test_in_podman` now starts the container detached
+> (`--entrypoint sleep`) and drives it with separate `podman exec`s — a
+> `runner.bootstrap` stage (entry script `--bootstrap-only`) then a `test.run`
+> stage (`--skip-bootstrap` + run args) — with a guaranteed `podman rm -f`
+> teardown in a `finally`. The entry scripts gained `--bootstrap-only` /
+> `--skip-bootstrap` modes. Lifecycle/teardown/skip logic is unit-tested with
+> mocked podman (`tests/test_podman_staged.py`), but **the real container run
+> needs validation on a podman host, and images must be rebuilt** to pick up
+> the new entry scripts. The in-container build/test split (separate
+> `project.build` vs `test.run` inside podman) is deliberately deferred until
+> this lifecycle is confirmed working.
 
 Builds directly on the remote-worker log view (see
 `plan/done/remote-worker-log-view.md`):

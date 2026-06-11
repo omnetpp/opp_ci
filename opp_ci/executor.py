@@ -1158,22 +1158,18 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
 
     # `:Z` relabels the host bind mount for SELinux-enforcing hosts (Fedora);
     # it's a no-op on Ubuntu/Debian. Required for rootless podman to read /work.
-    podman_cmd = [
-        "podman", "run", "--rm",
+    run_flags = [
         "-v", f"{os.path.abspath(mount_path)}:/work:Z",
         "-w", "/work",
     ]
     if is_catalog:
         # The entrypoint reads this, opp_env-installs each project, and cd's
         # into the first one's install dir.
-        podman_cmd += ["-e", f"OPP_CI_INSTALL_PROJECTS={catalog_install_id}"]
-    # The image's ENTRYPOINT is the runner binary (opp_env / opp_ci), so we
-    # only need to pass its arguments here — repeating the binary name would
-    # produce `opp_ci opp_ci ...` and "No such command" from click.
+        run_flags += ["-e", f"OPP_CI_INSTALL_PROJECTS={catalog_install_id}"]
     if toolchain == "nix":
-        podman_cmd += ["-v", f"{_NIX_STORE_VOLUME}:/nix"]
+        run_flags += ["-v", f"{_NIX_STORE_VOLUME}:/nix"]
         if git_ref:
-            podman_cmd += ["-e", f"OPP_ENV_GIT_REF={git_ref}"]
+            run_flags += ["-e", f"OPP_ENV_GIT_REF={git_ref}"]
         effective_project, _ = resolve_opp_env_id(project, git_ref, toolchain="nix")
         inner_cmd = COMMAND_MAP.get(kind)
         if inner_cmd is None:
@@ -1214,6 +1210,7 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         container_args = (["run", "--install", "--no-isolated", effective_project]
                           + pinned_deps
                           + ["-c", f"env -u PYTHONPATH {inner_cmd}"])
+        entry_script = "/opt/opp_env_entry.sh"
     else:
         # Host toolchain: the entrypoint (opp_ci_entry.sh) reads OPP_CI_PIN_DEPS
         # and appends these tokens to both its `opp_env install` (for catalog
@@ -1222,7 +1219,7 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         # baked into the image instead of recompiling a newer one.
         pinned_deps = [t for t in dep_tokens if not t.startswith(f"{repl_project}-")]
         if pinned_deps:
-            podman_cmd += ["-e", f"OPP_CI_PIN_DEPS={' '.join(pinned_deps)}"]
+            run_flags += ["-e", f"OPP_CI_PIN_DEPS={' '.join(pinned_deps)}"]
         container_args = ["internal", "run-direct",
                           "--project", repl_project, "--kind", kind]
         if mode:
@@ -1232,32 +1229,93 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         # Catalog runs deliberately omit --opp-file: opp_repl's _load_workspace
         # auto-discovers any .opp in cwd (the install dir, set by entrypoint),
         # else falls back to a default SimulationProject rooted there.
+        entry_script = "/opt/opp_ci_entry.sh"
 
-    podman_cmd.append(image)
-    podman_cmd += container_args
+    return _run_podman_staged(
+        image=image, container_args=container_args, entry_script=entry_script,
+        run_flags=run_flags, recorder=recorder, git_ref=git_ref,
+        worktree_path=worktree_path, scratch_dir=scratch_dir)
 
-    if recorder is not None:
-        recorder.begin(Stage.TEST_RUN, command=_format_argv(podman_cmd))
+
+def _run_podman_staged(*, image, container_args, entry_script, run_flags,
+                       recorder, git_ref, worktree_path, scratch_dir):
+    """Run a podman job as a long-lived container driven stage by stage
+    (option b of plan/pending/staged-execution-capture.md).
+
+    Instead of one `podman run <image> <args>`, start the container detached
+    (entrypoint overridden to idle) and drive it with separate `podman exec`s:
+    a runner.bootstrap stage (clone opp_ci/opp_repl + pip install via the
+    entry script's --bootstrap-only) then a test.run stage (the entry script
+    --skip-bootstrap with the run args). Each exec is captured like any host
+    command. The container is always removed in the finally — even if a stage
+    fails or raises — so a crash can't leak containers.
+
+    The in-container build/test split (separate project.build vs test.run
+    stages) is a follow-up; this establishes the lifecycle first. Needs a real
+    podman host to validate.
+    """
+    container = f"opp_ci_run_{uuid.uuid4().hex[:12]}"
+    run_d = (["podman", "run", "-d", "--name", container]
+             + run_flags + ["--entrypoint", "sleep", image, "infinity"])
+
+    def _exec(args, label):
+        return run_external(["podman", "exec", container] + args, label=label,
+                            stream=True,
+                            on_output=recorder.output if recorder else None)
+
+    out_parts, err_parts = [], []
+    result = None
     start = time.time()
     try:
-        result = run_external(podman_cmd, label=f"podman:{image}", stream=True,
-                              on_output=recorder.output if recorder else None)
-        duration = time.time() - start
+        up = run_external(run_d, label=f"podman run -d {image}")
+        if up.returncode != 0:
+            raise RuntimeError(
+                f"podman run -d for {image} failed (exit {up.returncode}): "
+                f"{(up.stderr or '').strip()}")
+
+        # ── runner.bootstrap ──────────────────────────────────────────
         if recorder is not None:
-            recorder.end(result.returncode)
+            recorder.begin(Stage.RUNNER_BOOTSTRAP,
+                           command=f"{entry_script} --bootstrap-only")
+        boot = _exec([entry_script, "--bootstrap-only"],
+                     label=f"podman:{container}:bootstrap")
+        if recorder is not None:
+            recorder.end(boot.returncode)
+        out_parts.append(boot.stdout or "")
+        err_parts.append(boot.stderr or "")
+
+        if boot.returncode != 0:
+            if recorder is not None:
+                recorder.skip(Stage.TEST_RUN, reason="skipped: bootstrap failed")
+            result = boot
+        else:
+            # ── test.run (build + test combined for now) ──────────────
+            if recorder is not None:
+                recorder.begin(Stage.TEST_RUN, command=_format_argv(container_args))
+            result = _exec([entry_script, "--skip-bootstrap"] + container_args,
+                           label=f"podman:{image}")
+            if recorder is not None:
+                recorder.end(result.returncode)
+            out_parts.append(result.stdout or "")
+            err_parts.append(result.stderr or "")
     finally:
+        # Teardown is its own best-effort step; a failed remove must not mask
+        # the run's result.
+        run_external(["podman", "rm", "-f", container],
+                     label=f"podman rm {container}")
         if worktree_path:
             _remove_git_worktree(worktree_path)
         if scratch_dir:
             import shutil
             shutil.rmtree(scratch_dir, ignore_errors=True)
+    duration = time.time() - start
 
-    result_code = "PASS" if result.returncode == 0 else "FAIL"
+    result_code = "PASS" if (result is not None and result.returncode == 0) else "FAIL"
     return {
         "result_code": result_code,
         "test_exec_seconds": duration,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
+        "stdout": "".join(out_parts),
+        "stderr": "".join(err_parts),
         "details": None,
         "commit_sha": git_ref,
     }
