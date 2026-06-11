@@ -102,13 +102,17 @@
         .ro-line { display:block; }
         .ro-line.err { background:rgba(220,53,69,.12); border-left:2px solid rgba(220,53,69,.5); }
         .ro-cmd { display:block; color:#7ee787; font-weight:600; }
-        .commands-only .ro-line { display:none; }
+        #ro-stages.hide-cmd .ro-cmd { display:none; }
+        #ro-stages.hide-out .ro-line:not(.err) { display:none; }
+        #ro-stages.hide-err .ro-line.err { display:none; }
     </style>
     <h2>Live output <span class="derived-tag" title="streamed from the worker while the test runs, organised into stages; replaced by the full stdout/stderr once it finishes">live · staged</span></h2>
     <div class="ro-stepper" id="ro-stepper"></div>
     <div class="ro-toolbar">
         <label><input type="checkbox" id="ro-follow" checked> Follow tail</label>
-        <label><input type="checkbox" id="ro-cmdonly"> Commands only</label>
+        <label><input type="checkbox" class="ro-filter" data-hide="hide-cmd" checked> Commands</label>
+        <label><input type="checkbox" class="ro-filter" data-hide="hide-out" checked> stdout</label>
+        <label><input type="checkbox" class="ro-filter" data-hide="hide-err" checked> stderr</label>
         <button id="ro-pause" class="btn btn-sm btn-secondary">Pause</button>
         <span class="ro-status" id="ro-status">connecting…</span>
     </div>
@@ -121,7 +125,6 @@
     const stepperEl = document.getElementById("ro-stepper");
     const stagesEl = document.getElementById("ro-stages");
     const followBox = document.getElementById("ro-follow");
-    const cmdOnlyBox = document.getElementById("ro-cmdonly");
     const pauseBtn = document.getElementById("ro-pause");
     const statusEl = document.getElementById("ro-status");
     let cursor = null, paused = false, timer = null, runningOrdinal = null;
@@ -219,8 +222,11 @@
         }
     }
 
-    cmdOnlyBox.addEventListener("change", function () {
-        stagesEl.classList.toggle("commands-only", cmdOnlyBox.checked);
+    document.querySelectorAll(".ro-filter").forEach(function (box) {
+        box.addEventListener("change", function () {
+            // checked = show that stream; unchecked = add the hide-* class
+            stagesEl.classList.toggle(box.dataset.hide, !box.checked);
+        });
     });
     pauseBtn.addEventListener("click", function () {
         paused = !paused;
@@ -249,13 +255,17 @@
         .rs-line { display:block; }
         .rs-line.err { background:rgba(220,53,69,.12); border-left:2px solid rgba(220,53,69,.5); }
         .rs-cmd { display:block; color:#7ee787; font-weight:600; }
-        #rs-stages.commands-only .rs-line { display:none; }
+        #rs-stages.hide-cmd .rs-cmd { display:none; }
+        #rs-stages.hide-out .rs-line:not(.err) { display:none; }
+        #rs-stages.hide-err .rs-line.err { display:none; }
         .rs-toolbar { display:flex; align-items:center; gap:1rem; margin:.2rem 0 .7rem; font-size:.85rem; color:var(--muted); }
         .rs-toolbar label { display:inline-flex; align-items:center; gap:.35rem; cursor:pointer; }
     </style>
     <h2>Stages</h2>
     <div class="rs-toolbar">
-        <label><input type="checkbox" id="rs-cmdonly"> Commands only</label>
+        <label><input type="checkbox" class="rs-filter" data-hide="hide-cmd" checked> Commands</label>
+        <label><input type="checkbox" class="rs-filter" data-hide="hide-out" checked> stdout</label>
+        <label><input type="checkbox" class="rs-filter" data-hide="hide-err" checked> stderr</label>
     </div>
     <div id="rs-stages">
     {% for st in run.stages %}
@@ -272,13 +282,14 @@
 </div>
 <script>
 (function () {
-    var box = document.getElementById("rs-cmdonly");
     var stages = document.getElementById("rs-stages");
-    if (box && stages) {
+    if (!stages) return;
+    document.querySelectorAll(".rs-filter").forEach(function (box) {
         box.addEventListener("change", function () {
-            stages.classList.toggle("commands-only", box.checked);
+            // checked = show that stream; unchecked = add the hide-* class
+            stages.classList.toggle(box.dataset.hide, !box.checked);
         });
-    }
+    });
 })();
 </script>
 {% endif %}
