@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}opp_ci — Worker {{ w.name }}{% endblock %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+    <h2>Worker — {{ w.name }}</h2>
+    <a href="/workers" class="btn btn-sm btn-secondary">← All workers</a>
+</div>
+
+{% if message %}<div class="flash flash-success">{{ message }}</div>{% endif %}
+{% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
+
+<div class="card">
+    <table>
+        <tbody>
+            <tr><th style="text-align:left; width:12rem;">ID</th><td>{{ w.id }}</td></tr>
+            <tr><th style="text-align:left;">Enabled</th>
+                <td>
+                    {% if w.enabled %}<span class="badge badge-passed">enabled</span>
+                    {% else %}<span class="badge badge-failed">disabled</span>{% endif %}
+                </td></tr>
+            <tr><th style="text-align:left;">Connected</th>
+                <td>
+                    {% if connected %}<span class="badge badge-passed">● online</span>
+                    {% else %}<span class="badge badge-queued">○ offline</span>{% endif %}
+                    <span style="color:var(--muted); font-size:0.85rem;">(heartbeat timeout {{ heartbeat_timeout }}s)</span>
+                </td></tr>
+            <tr><th style="text-align:left;">Status</th>
+                <td>
+                    {% if w.status == "online" %}<span class="badge badge-passed">online</span>
+                    {% elif w.status == "busy" %}<span class="badge badge-running">busy</span>
+                    {% else %}<span class="badge badge-queued">{{ w.status }}</span>{% endif %}
+                </td></tr>
+            <tr><th style="text-align:left;">Jobs / Concurrency</th>
+                <td>{{ w.current_job_count }} / {{ w.concurrency }}</td></tr>
+            <tr><th style="text-align:left;">Tags</th>
+                <td>{% if w.tags %}{% for t in w.tags %}<code>{{ t }}</code>{% if not loop.last %} {% endif %}{% endfor %}{% else %}<span style="color:var(--muted);">-</span>{% endif %}</td></tr>
+            <tr><th style="text-align:left;">Last Heartbeat</th>
+                <td>{{ w.last_heartbeat.strftime("%Y-%m-%d %H:%M:%S") ~ " UTC" if w.last_heartbeat else "never" }}</td></tr>
+            <tr><th style="text-align:left;">Registered</th>
+                <td>{{ w.registered_at.strftime("%Y-%m-%d %H:%M") ~ " UTC" if w.registered_at else "-" }}</td></tr>
+        </tbody>
+    </table>
+    {% if current_user and current_user.role in ["submitter", "admin"] %}
+    <a href="/logs/worker/{{ w.id }}" class="btn btn-sm btn-secondary" style="margin-top:0.75rem;">View log</a>
+    {% endif %}
+</div>
+
+{% if is_admin %}
+<div class="card">
+    <h3 style="font-size:0.95rem; margin-top:0;">Edit</h3>
+    <form method="post" action="/workers/{{ w.id }}/update">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Concurrency</label>
+                <input type="number" name="concurrency" value="{{ w.concurrency }}" min="1" required>
+            </div>
+            <div class="form-group" style="flex:1;">
+                <label>Tags (comma-separated)</label>
+                <input type="text" name="tags" value="{{ tags_str }}" placeholder="os:linux, podman, nix">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-success btn-sm">Save changes</button>
+    </form>
+
+    <hr style="margin:1rem 0; border:none; border-top:1px solid var(--border);">
+
+    <div style="display:flex; gap:0.5rem; align-items:center;">
+        <form method="post" action="/workers/{{ w.id }}/toggle" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="enabled" value="{{ 'false' if w.enabled else 'true' }}">
+            {% if w.enabled %}
+            <button type="submit" class="btn btn-secondary btn-sm">Disable (drain)</button>
+            {% else %}
+            <button type="submit" class="btn btn-success btn-sm">Enable</button>
+            {% endif %}
+        </form>
+
+        <form method="post" action="/workers/{{ w.id }}/delete" class="inline-form"
+              onsubmit="return confirm('Delete worker {{ w.name }}? In-flight jobs are re-queued for other workers. This cannot be undone.');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-danger btn-sm">Delete worker</button>
+        </form>
+    </div>
+    <p style="color:var(--muted); font-size:0.85rem; margin-top:0.75rem;">
+        Disabling drains the worker: it keeps heartbeating but is assigned no new
+        jobs, and its in-flight jobs run to completion. Deleting removes it and
+        re-queues any jobs it was still running.
+    </p>
+</div>
+{% endif %}
+
+{% endblock %}

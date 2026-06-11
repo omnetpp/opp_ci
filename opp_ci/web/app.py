@@ -6,6 +6,7 @@ import re
 from contextlib import asynccontextmanager
 from html import escape as html_escape
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -24,11 +25,11 @@ from opp_ci.db.models import (
     TestVerdict, TestVerdictKind, User, Version, Worker,
 )
 from opp_ci.persistence import (
-    create_matrix_from_axes, create_matrix_run, create_test_run, enqueue_job,
-    get_current_expectation, get_matrix_by_name, get_or_create_test,
+    create_matrix_from_axes, create_matrix_run, create_test_run, delete_worker,
+    enqueue_job, get_current_expectation, get_matrix_by_name, get_or_create_test,
     get_test_by_name, insert_expectation, mark_stale_workers_offline,
     parse_expectation_override, read_default_expectation_code,
-    set_default_expectation_code, set_matrix_name, set_test_name,
+    set_default_expectation_code, set_matrix_name, set_test_name, update_worker,
     USE_GLOBAL_DEFAULT,
 )
 
@@ -2216,6 +2217,89 @@ def workers_list(request: Request, current_user: User = Depends(require_user()))
             "heartbeat_timeout": WORKER_HEARTBEAT_TIMEOUT,
             **_template_globals(request, current_user),
         })
+    finally:
+        session.close()
+
+
+@web_router.get("/workers/{worker_id}", response_class=HTMLResponse)
+def worker_detail(request: Request, worker_id: int,
+                  current_user: User = Depends(require_user())):
+    """Worker detail page. Admins get inline edit/enable/disable/delete controls."""
+    import datetime as _dt
+    from opp_ci.config import WORKER_HEARTBEAT_TIMEOUT
+
+    session = SessionLocal()
+    try:
+        w = _worker_or_404(session, worker_id)
+        now = _dt.datetime.utcnow()
+        threshold = now - _dt.timedelta(seconds=WORKER_HEARTBEAT_TIMEOUT)
+        connected = w.last_heartbeat is not None and w.last_heartbeat > threshold
+        return templates.TemplateResponse(request, "worker_detail.html", {
+            "w": w,
+            "connected": connected,
+            "tags_str": ", ".join(w.tags or []),
+            "heartbeat_timeout": WORKER_HEARTBEAT_TIMEOUT,
+            "is_admin": current_user.role == "admin",
+            "message": request.query_params.get("message"),
+            "error": request.query_params.get("error"),
+            **_template_globals(request, current_user),
+        })
+    finally:
+        session.close()
+
+
+@web_router.post("/workers/{worker_id}/update", dependencies=[Depends(require_csrf)])
+def worker_update_web(worker_id: int,
+                      current_user: User = Depends(require_user("admin")),
+                      concurrency: int = Form(...), tags: str = Form(default="")):
+    session = SessionLocal()
+    try:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        try:
+            worker = update_worker(
+                session, worker_id, concurrency=concurrency, tags=tag_list)
+        except ValueError as e:
+            return RedirectResponse(
+                url=f"/workers/{worker_id}?error={quote_plus(str(e))}", status_code=303)
+        if worker is None:
+            return RedirectResponse(url="/workers?error=Worker+not+found", status_code=303)
+        session.commit()
+        return RedirectResponse(
+            url=f"/workers/{worker_id}?message=Worker+updated", status_code=303)
+    finally:
+        session.close()
+
+
+@web_router.post("/workers/{worker_id}/toggle", dependencies=[Depends(require_csrf)])
+def worker_toggle_web(worker_id: int,
+                      current_user: User = Depends(require_user("admin")),
+                      enabled: str = Form(...)):
+    want = enabled == "true"
+    session = SessionLocal()
+    try:
+        worker = update_worker(session, worker_id, enabled=want)
+        if worker is None:
+            return RedirectResponse(url="/workers?error=Worker+not+found", status_code=303)
+        session.commit()
+        state = "enabled" if want else "disabled"
+        return RedirectResponse(
+            url=f"/workers/{worker_id}?message=Worker+{state}", status_code=303)
+    finally:
+        session.close()
+
+
+@web_router.post("/workers/{worker_id}/delete", dependencies=[Depends(require_csrf)])
+def worker_delete_web(worker_id: int,
+                      current_user: User = Depends(require_user("admin"))):
+    import datetime as _dt
+    session = SessionLocal()
+    try:
+        result = delete_worker(
+            session, worker_id, _dt.datetime.utcnow(), cfg.MAX_RECLAIMS)
+        if result is None:
+            return RedirectResponse(url="/workers?error=Worker+not+found", status_code=303)
+        session.commit()
+        return RedirectResponse(url="/workers?message=Worker+deleted", status_code=303)
     finally:
         session.close()
 
