@@ -1240,7 +1240,16 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
             return (["run", "--install", "--no-isolated", effective_project]
                     + pinned_deps + ["-c", f"env -u PYTHONPATH {inner}"])
 
-        run_stages = [(Stage.PROJECT_BUILD, _oe_args(build_inner)),
+        # Three groups: deps.install (opp_env --install resolves/installs the
+        # project + its deps; omnetpp is pre-baked into the image — see
+        # container.prepare — so this is mostly the project install/clone),
+        # project.build (opp_build_project), and test.run (the test with
+        # --no-build). The build/test commands are byte-identical to the
+        # combined form; deps.install just front-loads the (idempotent)
+        # --install so it is its own stage and an install failure is
+        # attributed there, skipping build + test.
+        run_stages = [(Stage.DEPS_INSTALL, _oe_args("true")),
+                      (Stage.PROJECT_BUILD, _oe_args(build_inner)),
                       (Stage.TEST_RUN, _oe_args(test_inner))]
         entry_script = "/opt/opp_env_entry.sh"
     else:

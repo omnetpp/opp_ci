@@ -22,9 +22,12 @@ bootstrap, dependency install, compilation, test run, …), and stream them
 > one combined `test.run` because its `internal run-direct` builds + tests in
 > a single shared-worktree process the host recorder can't see split.
 > The image build/bake is wrapped as a `container.prepare` stage (its build
-> output streams into the stage; near-silent when layer-cached). So a nix
-> podman run records: container.prepare → runner.bootstrap → project.build →
-> test.run. Lifecycle / teardown / skip / split / prepare logic is unit-tested
+> output streams into the stage; near-silent when layer-cached). A nix podman
+> run records: container.prepare (omnetpp baked here) → runner.bootstrap →
+> deps.install (project install/resolve) → project.build (opp_build_project) →
+> test.run. deps.install front-loads the idempotent `opp_env run --install`
+> (build/test commands unchanged); an install failure is attributed there and
+> skips build+test. Lifecycle / teardown / skip / split / prepare logic is unit-tested
 > with mocked podman (`tests/test_podman_staged.py`), but **the real container
 > run needs validation on a podman host, and images must be rebuilt** to pick
 > up the new entry scripts.

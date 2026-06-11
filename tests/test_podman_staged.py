@@ -150,10 +150,10 @@ class ContainerPrepareStageTests(unittest.TestCase):
         ensure.assert_called_once()
         self.assertEqual(rec.stages[0]["name"], Stage.CONTAINER_PREPARE)
         self.assertEqual(rec.stages[0]["status"], PASSED)
-        # nix hands two run stages (build, test) to the staged runner
+        # nix hands three run stages (install, build, test) to the staged runner
         run_stages = staged.call_args.kwargs["run_stages"]
         self.assertEqual([s[0] for s in run_stages],
-                         [Stage.PROJECT_BUILD, Stage.TEST_RUN])
+                         [Stage.DEPS_INSTALL, Stage.PROJECT_BUILD, Stage.TEST_RUN])
 
     def test_prepare_failure_recorded_and_raised(self):
         rec = StageRecorder()
