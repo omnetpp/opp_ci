@@ -5,6 +5,16 @@ outside podman** — organised into ordered **stages** (container prepare,
 bootstrap, dependency install, compilation, test run, …), and stream them
 **live** to the run-detail page as the run progresses.
 
+> **Status:** Phase 1 (stage spine on host-nix + direct paths) and Phase 3
+> (TestRunStage persistence + finished staged render) are implemented and
+> tested (`opp_ci/stages.py`, executor build/test split, worker stage events,
+> stage-aware `run_output.py`, `TestRunStage`, run-detail live + finished
+> views; `tests/test_stages.py`, `test_run_output_streaming.py`,
+> `test_stage_persistence.py`). **Phase 2 (podman option b) is not done** — it
+> is a container-lifecycle rewrite that needs a real podman host to validate
+> (see the integration note under Testing), so it should be implemented and
+> verified where podman runs, not blind.
+
 Builds directly on the remote-worker log view (see
 `plan/done/remote-worker-log-view.md`):
 - Feature 1 (worker process log shipping) is unaffected — it's the
