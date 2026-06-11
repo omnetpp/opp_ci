@@ -1,12 +1,17 @@
 # Plan: features to answer the operational questions
 
 Companion to [doc/operational_questions.md](../../doc/operational_questions.md),
-which frames the four questions a release manager asks opp_ci:
+which frames four questions a release manager asks opp_ci. This plan
+answers those four **and** adds a fifth, development-time question a
+maintainer asks *before* a release is even a candidate (the doc does not
+yet frame it — see [Mirroring into the doc](#mirroring-into-the-doc)):
 
 1. **Is this release ready?** (a project's own surface)
 2. **Will dependent projects work with the release?** (downstream)
 3. **Do we support this new OS / compiler?** (platform qualification)
 4. **What is the current state of all opp_env projects?** (coverage)
+5. **How bad is this backward-incompatible change — how badly are
+   dependents affected?** (blast-radius / impact of an in-progress change)
 
 The [test-data-model redesign](../done/test-data-model-redesign.md)
 already shipped the primitives these questions reduce to: deduped `Test`
@@ -25,8 +30,15 @@ is supported" / "here is the state of everything." Per
 the three missing pieces are a **declared support model**, **graph-driven
 expansion** (downstream + platform sweeps), and **aggregation + freshness**.
 
+The fifth question reuses two of those three — graph-driven expansion and
+aggregation — and layers on one more *read model*: **baseline-delta
+scoring**, which differences two downstream run-sets so a deliberate
+breakage is measured by the *new* damage it causes rather than by an
+absolute (and uninformative, since it is expected to be red) verdict.
+
 This plan adds exactly those, as read models, generators, and one new
-table — not a redesign.
+table — not a redesign. The fifth question adds **no** persistence beyond
+what the other four already need.
 
 ## Why this revisits a previously-rejected idea
 
@@ -54,6 +66,8 @@ verified results against. That commitment is the support model.
 | Platform qualification | The same generator, but fixing a new platform axis value and crossing the union of active support targets instead of pinning a dep. |
 | Freshness | Derived per coordinate: a verdict is *fresh* iff its backing `TestRun.commit_sha` equals the catalog/HEAD SHA for that version **and** `recorded_at` is within a configurable window. Surfaced everywhere; never stored. |
 | Coverage / state view | A read model joining catalog × support targets × latest verdict × freshness. New web **State** page, `opp_ci coverage` CLI, `GET /api/coverage` REST. No new persistence beyond `support_targets`. |
+| How a breaking change is scored | As a **diff of two downstream run-sets** (candidate ref vs. baseline ref), not an absolute verdict — a breaking change is *meant* to break things, so only *new* breakage counts. Blast radius = coordinates EXPECTED-and-fresh at baseline but UNEXPECTED at the candidate. Reuses F2 expansion and the `release_key` grouping; no new table. |
+| Impact candidate & baseline refs | Candidate is any ref (branch / PR head / SHA), pinned as a pseudo-version (`omnetpp@<sha>`) with the real `commit_sha` on each `TestRun`. Baseline defaults to the changed project's previous released version on the same line (whose downstream runs are likely already present); overridable with `--baseline`. |
 | Auto-proposing support targets / interpolation | Deferred — see [Future scope](#future-scope). Same boundary the redesign drew. |
 
 ## How each question gets answered after this plan
@@ -77,6 +91,18 @@ the platform.
 renders, for every project × version, the declared support target, the
 latest verdict per supported coordinate, and whether it is fresh —
 intended vs. verified vs. stale, in one table.
+
+**Q5 — how bad is a breaking change?** `opp_ci impact omnetpp@<branch-or-PR>`
+reuses the F2 downstream generator to qualify the candidate ref across the
+reverse-dependency closure, then **diffs** the resulting verdicts against a
+baseline ref (the changed project's previous release, or an explicit
+`--baseline`). The blast radius is the set of downstream coordinates that
+were EXPECTED-and-fresh at the baseline but are UNEXPECTED at the candidate
+— reported as a severity rollup: how many downstream projects *newly*
+break, how deep in the graph (direct vs. transitive), broken down by kind
+(a `build` break outranks a `smoke` break outranks a `test` break).
+Coordinates already broken at the baseline are excluded — they are not this
+change's fault.
 
 ## Schema additions
 
@@ -123,6 +149,11 @@ This is the only column added outside the new table. The release-status
 aggregate is a query over `WHERE release_key = ?`, not a stored rollup —
 consistent with the redesign's "derive lifecycle, store only what can't be
 derived" stance.
+
+The fifth question (breaking-change impact) needs **no** further schema: a
+candidate run-set and its baseline run-set each get a `release_key`, and
+the impact report is a *diff* of those two queries — a read model, not a
+stored artifact.
 
 ## Features in detail
 
@@ -237,6 +268,45 @@ cell stops masquerading as current evidence.
 Already useful: a single page answers "what is the current state of all
 opp_env projects" — exactly Question 4 — without a redesign.
 
+### F7 — Breaking-change impact / blast-radius report
+
+- `opp_ci impact <project>@<ref> [--baseline <ref>] [--transitive]
+  [--kinds …] [--dry-run]`:
+  1. Resolve the **candidate** (`<project>@<ref>` — a branch, PR head, or
+     SHA) and the **baseline** (default: the project's previous released
+     version on the same line; else `--baseline`).
+  2. Reuse the F2 downstream generator **twice**: one pinned run-set for
+     the candidate (`release_key = impact:<project>@<sha>`), one for the
+     baseline (reused if its runs already exist and are fresh, else
+     launched).
+  3. **Diff** the two aggregates: the blast radius is every downstream
+     coordinate that was EXPECTED-and-fresh at the baseline and is
+     UNEXPECTED at the candidate. Coordinates UNKNOWN or already broken at
+     the baseline are excluded — the change can't be blamed for breakage
+     that pre-dates it or was never verified.
+  4. Report a **severity rollup**: count of downstream projects newly
+     broken, classified by graph depth (direct vs. transitive dependents)
+     and by first-failing kind (`build` ≻ `smoke` ≻ `test`), with the
+     offending cell per project.
+  - `--dry-run` prints which runs would launch (and which baseline runs are
+    reused) without launching anything.
+- REST: `POST /api/impact` (candidate + baseline + options).
+- Web: a **Breaking-change impact** view — the reverse-dep graph rendered
+  as a tree, each downstream node colored by its delta (newly-broken /
+  still-green / already-broken / unverified), under a severity headline
+  ("`omnetpp@feature-x` breaks 7 of 23 downstream projects — 3 at build, 4
+  at smoke").
+
+Why it is distinct from F2/F3: those gate a *finished* candidate and expect
+green; F7 measures an *in-progress* change that is *expected* to break
+things, and isolates the *incremental* damage by differencing against a
+baseline. Same generator, opposite expectation, plus a delta.
+
+Already useful: a maintainer about to land a breaking API change sees the
+exact downstream cost — who to warn, who to patch, and whether the change
+is worth its blast radius — before it ships, not after the release
+post-mortem.
+
 ## CLI surface (new commands)
 
 | Command | Purpose |
@@ -248,6 +318,7 @@ opp_env projects" — exactly Question 4 — without a redesign.
 | `opp_ci qualify-platform` | Sweep the support suite across a new OS/compiler value. |
 | `opp_ci platform-status` | Per-project support verdict for a platform. |
 | `opp_ci coverage` | Ecosystem intended-vs-verified-vs-fresh table. |
+| `opp_ci impact <proj>@<ref>` | Qualify an in-progress ref downstream and diff vs. a baseline → blast-radius severity report (`--baseline`, `--transitive`, `--dry-run`). |
 
 All wire through the existing `@remoteable` dual-mode decorator so they
 work locally and via `--remote`. No existing command changes behavior;
@@ -259,6 +330,8 @@ work locally and via `--remote`. No existing command changes behavior;
 - `POST /api/downstream` — candidate + options → launches qualification runs
 - `GET /api/releases/<key>` — release aggregate
 - `GET /api/coverage` — coverage read model
+- `POST /api/impact` — candidate + baseline + options → launches/reuses the
+  qualification runs and returns the blast-radius diff
 
 Mirrors of the CLI; same auth roles (submitter to launch, readonly to view).
 
@@ -268,6 +341,9 @@ Mirrors of the CLI; same auth roles (submitter to launch, readonly to view).
 - **Release readiness** card on the project page (F3 aggregate + breakdown).
 - Top-level **State** page (F6 coverage), reusing the grouped-filter
   controls and the compatibility-grid renderer.
+- **Breaking-change impact** view (F7): the reverse-dep tree colored by
+  per-node delta, under a severity headline. Reachable from a project's
+  branch/PR context and standalone.
 
 ## Phased implementation
 
@@ -306,6 +382,29 @@ fixed platform axis + the F3 aggregate over a platform `release_key`.
 `coverage` CLI/REST + the **State** web page, joining everything above.
 The capstone answer to Question 4.
 
+### Phase 7 — Breaking-change impact (F7)
+
+`impact` CLI/REST + the **Breaking-change impact** web view. Reuses F2's
+generator (downstream expansion), F3's `release_key` aggregation, and F5's
+freshness (so the baseline is real evidence). Adds only a baseline resolver
+and a diff read model — no new persistence. Answers Q5: the development-time
+blast radius of an in-progress breaking change. Can ship any time after
+Phase 4 (release aggregate); ordered last because it is the most derived.
+
+## Mirroring into the doc
+
+[operational_questions.md](../../doc/operational_questions.md) currently
+frames only four questions. The fifth (breaking-change impact) is
+introduced here in the plan first because it is the most derived and the
+last to ship. When Phase 7 lands — or sooner, if the framing is agreed — it
+should be mirrored into the doc as **Question 5**, in the same shape as the
+others (what opp_ci answers today, the exact coordinates, the commands, and
+the gap), plus a "today's manual recipe" entry (run the F2 downstream
+recipe twice — once at the candidate ref, once at the baseline — and diff
+the per-project verdicts by hand). Until then, the doc and this plan are
+intentionally one question apart, and this section is the note that closes
+the gap.
+
 ## Future scope
 
 Carried from the redesign's
@@ -343,3 +442,16 @@ or code here.
    downstream cell block a release, or only an UNEXPECTED one? Leaning:
    UNKNOWN blocks the *aggregate* (you haven't said what should happen),
    matching the per-matrix-run semantics.
+5. **Impact baseline selection.** What is the right baseline to diff a
+   breaking change against — the changed project's previous released
+   version (cheap, its downstream runs likely already exist), the
+   merge-base of the candidate branch (most precise about *this* branch's
+   incremental damage), or always an explicit `--baseline`? Leaning:
+   previous release by default, merge-base when the candidate is a PR with a
+   known base, explicit override always available.
+6. **Impact and UNKNOWN baseline cells.** A downstream coordinate that is
+   UNKNOWN (uncharacterised) at the baseline can't be proven *newly* broken
+   — exclude it from the blast radius, or surface it as a separate
+   "uncovered, can't tell" bucket? Leaning: exclude from the headline
+   count, list separately so the gap is visible rather than silently
+   swallowed.
