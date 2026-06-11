@@ -13,6 +13,7 @@ the coordinator is the single source of truth.
 """
 
 import logging
+import os
 import signal
 import threading
 import time
@@ -66,7 +67,7 @@ class WorkerAgent:
         self.tags = data.get("tags") or []
         self.concurrency = data.get("concurrency", 1)
 
-    def start(self, poll_interval=10, heartbeat_interval=30):
+    def start(self, poll_interval=10, heartbeat_interval=30, niceness=10):
         """
         Main loop: poll for jobs and execute them.
 
@@ -74,7 +75,14 @@ class WorkerAgent:
         while a job blocks this thread for minutes (e.g. a long compile);
         otherwise the coordinator would mark a busy worker offline and reclaim
         the run it is still executing.
+
+        ``niceness`` lowers the worker's scheduling priority; the build/test
+        subprocesses it spawns inherit it, so CI work yields to interactive use
+        on a shared host. Pass 0 to keep normal priority.
         """
+        if niceness:
+            self._apply_niceness(niceness)
+
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
 
@@ -105,6 +113,19 @@ class WorkerAgent:
             self._heartbeat_thread.join(timeout=5)
 
         _logger.info("Worker stopped.")
+
+    def _apply_niceness(self, niceness):
+        """Raise the nice level (lower the priority) of this process.
+
+        Best-effort: an unprivileged process can always increase its own
+        niceness, so this normally succeeds, but we never let a scheduling
+        tweak stop the worker from running.
+        """
+        try:
+            new_nice = os.nice(niceness)
+            _logger.info("Worker running at nice level %d", new_nice)
+        except (OSError, AttributeError) as e:
+            _logger.warning("Could not set niceness to %d: %s", niceness, e)
 
     def _heartbeat_loop(self, heartbeat_interval):
         """Send a heartbeat immediately, then every heartbeat_interval seconds

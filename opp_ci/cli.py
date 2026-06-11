@@ -2515,8 +2515,12 @@ def worker_detect_tags():
               help="Worker token (default from $OPP_CI_WORKER_TOKEN)")
 @click.option("--poll-interval", default=10, help="Seconds between polls (default: 10)")
 @click.option("--heartbeat-interval", default=30, help="Seconds between heartbeats (default: 30)")
+@click.option("--niceness", default=10,
+              help="Run the worker and its build/test subprocesses at this nice "
+                   "level so CI work yields to interactive use (higher = lower "
+                   "priority; default: 10). Pass 0 for normal priority.")
 @remoteable(_refuse_remote("worker start"))
-def worker_start(coordinator, token, poll_interval, heartbeat_interval):
+def worker_start(coordinator, token, poll_interval, heartbeat_interval, niceness):
     """Start a worker agent that polls the coordinator for jobs.
 
     Tags and concurrency are configured at registration time (see
@@ -2543,7 +2547,8 @@ def worker_start(coordinator, token, poll_interval, heartbeat_interval):
         f"Starting worker '{agent.name}' — coordinator={coordinator} "
         f"tags={agent.tags} concurrency={agent.concurrency}"
     )
-    agent.start(poll_interval=poll_interval, heartbeat_interval=heartbeat_interval)
+    agent.start(poll_interval=poll_interval, heartbeat_interval=heartbeat_interval,
+                niceness=niceness)
 
 
 @worker_group.command("register")
