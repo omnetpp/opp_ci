@@ -531,7 +531,11 @@ def _opp_env_workspace(*, project, resolved_deps, toolchain, compiler,
 
 
 def _workspace_lock_path(ws):
-    return os.path.join(ws, ".opp_ci.lock")
+    # The lock lives *beside* the workspace dir, not inside it: `opp_env
+    # install --init` refuses to initialise a non-empty directory, so the dir
+    # must be empty when opp_env first runs. A sibling file also can't be
+    # mistaken for a workspace by _gc_workspaces (it filters to os.path.isdir).
+    return ws.rstrip("/") + ".opp_ci.lock"
 
 
 @contextlib.contextmanager
@@ -586,6 +590,7 @@ def _gc_workspaces():
             fd = os.open(_workspace_lock_path(ws), os.O_CREAT | os.O_RDWR, 0o644)
         except OSError:
             continue
+        evicted = False
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -594,8 +599,16 @@ def _gc_workspaces():
                 continue
             shutil.rmtree(ws, ignore_errors=True)
             _logger.info("Evicted LRU opp_env workspace %s", ws)
+            evicted = True
         finally:
             os.close(fd)
+        # Only after a successful eviction: drop the now-orphan sibling lock
+        # file. Never unlink it on the skip path — another job holds it.
+        if evicted:
+            try:
+                os.unlink(_workspace_lock_path(ws))
+            except OSError:
+                pass
 
 
 def _parse_opp_file_kwargs(opp_file):

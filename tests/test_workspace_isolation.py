@@ -127,13 +127,33 @@ class GcTests(unittest.TestCase):
         for ws in dirs:
             self.assertTrue(os.path.isdir(ws))
 
+    def test_lock_file_is_sibling_not_inside_workspace(self):
+        # opp_env install --init refuses a non-empty dir, so the lock must live
+        # beside the workspace, leaving the dir empty when opp_env first runs.
+        import fcntl
+        ws = self._make("fresh", 100)
+        path = _workspace_lock_path(ws)
+        self.assertEqual(os.path.dirname(path), os.path.dirname(ws),
+                         "lock file must be a sibling of the workspace dir")
+        self.assertFalse(path.startswith(ws + os.sep),
+                         "lock file must not be inside the workspace dir")
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.assertEqual(os.listdir(ws), [],
+                             "workspace dir must stay empty while the lock is held")
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
     def test_locked_dir_skipped(self):
         import fcntl
         kept = [self._make(f"keep{i}", 2000 + i) for i in range(3)]
         locked = self._make("locked", 100)  # oldest → would be evicted
         another = self._make("old", 200)
         fd = os.open(_workspace_lock_path(locked), os.O_CREAT | os.O_RDWR, 0o644)
-        # Creating the lock file bumped locked's mtime; force it oldest again
+        # The lock file is a sibling of `locked`, not inside it, so creating it
+        # doesn't touch the dir's mtime — but reassert oldest mtime for clarity
         # so the LRU sweep targets it (and must skip it because it's held).
         os.utime(locked, (100, 100))
         fcntl.flock(fd, fcntl.LOCK_EX)
