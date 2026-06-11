@@ -26,7 +26,8 @@ from opp_ci.db.models import (
 )
 from opp_ci.persistence import (
     create_matrix_from_axes, create_matrix_run, create_test_run, delete_worker,
-    enqueue_job, get_current_expectation, get_matrix_by_name, get_or_create_test,
+    enqueue_job, expire_unserviceable_queued_runs, get_current_expectation,
+    get_matrix_by_name, get_or_create_test,
     get_test_by_name, insert_expectation, mark_stale_workers_offline,
     parse_expectation_override, read_default_expectation_code,
     set_default_expectation_code, set_matrix_name, set_test_name, update_worker,
@@ -108,17 +109,25 @@ def _resolve_ansi_style(codes):
 
 
 def _reap_stale_workers():
-    """Sweep once for workers silent past WORKER_HEARTBEAT_TIMEOUT: mark
-    them offline and reclaim their orphaned `running` runs. Sync DB work,
-    meant to be called via asyncio.to_thread off the event loop."""
+    """Sweep once for workers silent past WORKER_HEARTBEAT_TIMEOUT (mark them
+    offline, reclaim their orphaned `running` runs) and for `queued` runs no
+    enabled worker can ever serve (retire them). Sync DB work, meant to be
+    called via asyncio.to_thread off the event loop."""
     session = SessionLocal()
+    now = datetime.datetime.utcnow()
     try:
         results = mark_stale_workers_offline(
             session,
-            datetime.datetime.utcnow(),
+            now,
             cfg.WORKER_HEARTBEAT_TIMEOUT,
             cfg.MAX_RECLAIMS,
         )
+        # Same tick, same transaction: serviceability counts enabled workers
+        # of any status, so flipping a stale worker `offline` just above does
+        # not make the runs only it can serve look unserviceable.
+        workers = session.execute(select(Worker)).scalars().all()
+        expired = expire_unserviceable_queued_runs(
+            session, now, workers, cfg.QUEUE_UNSERVICEABLE_TIMEOUT)
         session.commit()
     finally:
         session.close()
@@ -126,6 +135,9 @@ def _reap_stale_workers():
         _logger.warning(
             "Reaped stale worker '%s': %d run(s) re-queued, %d retired "
             "(poison pill)", name, requeued, retired)
+    if expired:
+        _logger.warning(
+            "Expired %d queued run(s) no enabled worker can serve", expired)
     return results
 
 

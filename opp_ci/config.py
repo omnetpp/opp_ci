@@ -140,6 +140,16 @@ WORKER_REAP_INTERVAL = int(os.environ.get(
 # opp_ci.persistence.reclaim_orphaned_runs.
 MAX_RECLAIMS = int(os.environ.get("OPP_CI_MAX_RECLAIMS", "2"))
 
+# A `queued` run that no enabled worker's tags can ever satisfy (a misrouted
+# submission, not transient backlog) is retired to `timed_out`/ERROR once it
+# has waited this long — long enough that a worker still coming up has time
+# to register and heartbeat. Serviceable-but-starved runs (right tags, fleet
+# busy/offline) are never auto-expired. Swept on the same tick as the stale-
+# worker reaper. `0` disables the sweep. See
+# opp_ci.persistence.expire_unserviceable_queued_runs.
+QUEUE_UNSERVICEABLE_TIMEOUT = int(os.environ.get(
+    "OPP_CI_QUEUE_UNSERVICEABLE_TIMEOUT", "300"))
+
 WORKER_TOKEN = os.environ.get("OPP_CI_WORKER_TOKEN", "")
 
 GITHUB_TOKEN_FILE = os.environ.get("OPP_CI_GITHUB_TOKEN_FILE", os.path.expanduser("~/.ssh/opp_ci_github_token"))
