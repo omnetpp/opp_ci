@@ -484,6 +484,9 @@ class TestRun(Base):
     test = relationship("Test", back_populates="runs")
     matrix_run = relationship("TestMatrixRun", back_populates="test_runs")
     worker = relationship("Worker", backref="test_runs")
+    stages = relationship(
+        "TestRunStage", back_populates="test_run",
+        cascade="all, delete-orphan", order_by="TestRunStage.ordinal")
 
     def __repr__(self):
         lc = self.lifecycle.value if self.lifecycle else "?"
@@ -672,3 +675,32 @@ class AppSetting(Base):
 
     def __repr__(self):
         return f"<AppSetting(key={self.key!r}, value={self.value!r})>"
+
+
+class TestRunStage(Base):
+    """One captured stage of a run's execution (deps.install, project.build,
+    test.run, …) — the persisted form of the live stage stream.
+
+    Written at result time from the worker's assembled stage tree, so a
+    finished run renders the same staged view the live page showed. ``output``
+    holds the stage's captured lines as a JSON list of {"stream", "text"} so
+    the finished render can still mark stderr and show the command. Schema
+    changes here are handled by recreating the DB, not migrating.
+    """
+    __tablename__ = "test_run_stages"
+
+    id = Column(Integer, primary_key=True)
+    test_run_id = Column(Integer, ForeignKey("test_runs.id"), nullable=False, index=True)
+    ordinal = Column(Integer, nullable=False)
+    name = Column(String, nullable=False)
+    command = Column(Text, nullable=True)
+    status = Column(String, nullable=False)        # running/passed/failed/skipped
+    exit_code = Column(Integer, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+    output = Column(JSON, nullable=True)           # [{"stream": ..., "text": ...}, ...]
+
+    test_run = relationship("TestRun", back_populates="stages")
+
+    def __repr__(self):
+        return (f"<TestRunStage(run={self.test_run_id}, ord={self.ordinal}, "
+                f"name={self.name!r}, status={self.status!r})>")

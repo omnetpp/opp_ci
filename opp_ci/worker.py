@@ -349,14 +349,16 @@ class WorkerAgent:
                                 recorder=recorder)
             except RuntimeError as e:
                 _logger.error("Install failed for run #%d: %s", run_id, e)
-                self._report_result(run_id, "ERROR", stderr=str(e))
+                self._report_result(run_id, "ERROR", stderr=str(e),
+                                    stages=recorder.stages)
                 return
 
             try:
                 outcome = run_test(project, kind, recorder=recorder, **run_kwargs)
             except Exception as e:
                 _logger.error("Test execution failed for run #%d: %s", run_id, e)
-                self._report_result(run_id, "ERROR", stderr=str(e))
+                self._report_result(run_id, "ERROR", stderr=str(e),
+                                    stages=recorder.stages)
                 return
 
             self._report_result(
@@ -367,6 +369,7 @@ class WorkerAgent:
                 stdout=outcome["stdout"],
                 stderr=outcome["stderr"],
                 details=outcome.get("details"),
+                stages=recorder.stages,
             )
             _logger.info("Run #%d completed: %s (%.1fs)", run_id, outcome["result_code"], outcome["test_exec_seconds"])
         finally:
@@ -386,8 +389,13 @@ class WorkerAgent:
             _logger.warning("Snapshot report error for run #%d: %s", run_id, e)
 
     def _report_result(self, run_id, result_code, test_exec_seconds=None,
-                       commit_sha=None, stdout=None, stderr=None, details=None):
-        """Report a job result back to the coordinator."""
+                       commit_sha=None, stdout=None, stderr=None, details=None,
+                       stages=None):
+        """Report a job result back to the coordinator.
+
+        ``stages`` is the recorder's assembled stage tree; the coordinator
+        persists it as TestRunStage rows for the finished staged view.
+        """
         payload = {
             "run_id": run_id,
             "result_code": result_code,
@@ -402,6 +410,8 @@ class WorkerAgent:
             payload["stderr"] = stderr
         if details:
             payload["details"] = details
+        if stages:
+            payload["stages"] = stages
 
         try:
             resp = self._session.post(

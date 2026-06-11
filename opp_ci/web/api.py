@@ -104,6 +104,7 @@ class WorkerResultRequest(BaseModel):
     stdout: str | None = None
     stderr: str | None = None
     details: dict | None = None
+    stages: list[dict] | None = None
 
 class RunOutputAppendRequest(BaseModel):
     events: list[dict]
@@ -773,6 +774,27 @@ async def worker_report_result(
         run.details = req.details
         if req.commit_sha:
             run.commit_sha = req.commit_sha
+
+        # Persist the captured stages (replace any existing — idempotent if a
+        # worker re-reports). Duration is derived from the stage timestamps.
+        if req.stages is not None:
+            from opp_ci.db.models import TestRunStage
+            for old in list(run.stages):
+                session.delete(old)
+            session.flush()
+            for s in req.stages:
+                started, finished = s.get("started_at"), s.get("finished_at")
+                duration = (finished - started) if (started and finished) else None
+                session.add(TestRunStage(
+                    test_run_id=run.id,
+                    ordinal=s.get("ordinal"),
+                    name=s.get("name"),
+                    command=s.get("command"),
+                    status=s.get("status"),
+                    exit_code=s.get("exit"),
+                    duration_seconds=duration,
+                    output=s.get("output"),
+                ))
 
         worker = session.execute(
             select(Worker).where(Worker.id == worker_info["worker_id"])
