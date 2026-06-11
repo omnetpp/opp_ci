@@ -13,7 +13,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="name">Name (optional)</label>
-                <input type="text" name="name" id="name" placeholder="leave blank for anonymous">
+                <input type="text" name="name" id="name" placeholder="leave blank for anonymous" value="{{ values.name or '' }}">
             </div>
         </div>
         <div class="form-row">
@@ -22,28 +22,16 @@
                 <select name="project" id="project" required>
                     <option value="">— select —</option>
                     {% for p in projects %}
-                    <option value="{{ p.name }}">{{ p.name }}</option>
+                    <option value="{{ p.name }}"{% if values.project == p.name %} selected{% endif %}>{{ p.name }}</option>
                     {% endfor %}
                 </select>
             </div>
             <div class="form-group">
                 <label for="kind">Kind</label>
                 <select name="kind" id="kind" required>
-                    <option value="smoke">smoke</option>
-                    <option value="fingerprint">fingerprint</option>
-                    <option value="statistical">statistical</option>
-                    <option value="build">build</option>
-                    <option value="module">module</option>
-                    <option value="unit">unit</option>
-                    <option value="chart">chart</option>
-                    <option value="feature">feature</option>
-                    <option value="packet">packet</option>
-                    <option value="queueing">queueing</option>
-                    <option value="protocol">protocol</option>
-                    <option value="validation">validation</option>
-                    <option value="sanitizer">sanitizer</option>
-                    <option value="speed">speed</option>
-                    <option value="opp">opp</option>
+                    {% for k in ["smoke", "fingerprint", "statistical", "build", "module", "unit", "chart", "feature", "packet", "queueing", "protocol", "validation", "sanitizer", "speed", "opp"] %}
+                    <option value="{{ k }}"{% if values.kind == k %} selected{% endif %}>{{ k }}</option>
+                    {% endfor %}
                 </select>
             </div>
         </div>
@@ -52,12 +40,14 @@
                 <label for="version">Project Version</label>
                 <select name="version" id="version">
                     <option value="">— any —</option>
+                    {% if values.version %}<option value="{{ values.version }}" selected>{{ values.version }}</option>{% endif %}
                 </select>
             </div>
             <div class="form-group">
                 <label for="omnetpp_version">OMNeT++ Version</label>
                 <select name="omnetpp_version" id="omnetpp_version">
                     <option value="">— any —</option>
+                    {% if values.omnetpp_version %}<option value="{{ values.omnetpp_version }}" selected>{{ values.omnetpp_version }}</option>{% endif %}
                 </select>
             </div>
         </div>
@@ -66,33 +56,33 @@
                 <label for="mode">Build Mode</label>
                 <select name="mode" id="mode">
                     <option value="">— default —</option>
-                    <option value="release">release</option>
-                    <option value="debug">debug</option>
+                    <option value="release"{% if values.mode == 'release' %} selected{% endif %}>release</option>
+                    <option value="debug"{% if values.mode == 'debug' %} selected{% endif %}>debug</option>
                 </select>
             </div>
             <div class="form-group">
                 <label for="git_ref">Git Ref (optional)</label>
-                <input type="text" name="git_ref" id="git_ref" placeholder="master, topic/feature, v4.5.0, etc.">
+                <input type="text" name="git_ref" id="git_ref" placeholder="master, topic/feature, v4.5.0, etc." value="{{ values.git_ref or '' }}">
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
                 <label for="os">OS</label>
-                <input type="text" name="os" id="os" list="os-options" placeholder="Linux">
+                <input type="text" name="os" id="os" list="os-options" placeholder="Linux" value="{{ values.os or '' }}">
                 <datalist id="os-options">
                     {% for o in os_suggestions %}<option value="{{ o }}">{% endfor %}
                 </datalist>
             </div>
             <div class="form-group">
                 <label for="os_version">OS Version</label>
-                <input type="text" name="os_version" id="os_version" list="os-version-options" placeholder="Windows/MacOS only">
+                <input type="text" name="os_version" id="os_version" list="os-version-options" placeholder="Windows/MacOS only" value="{{ values.os_version or '' }}">
                 <datalist id="os-version-options">
                     {% for v in os_version_suggestions %}<option value="{{ v }}">{% endfor %}
                 </datalist>
             </div>
             <div class="form-group">
                 <label for="arch">Architecture</label>
-                <input type="text" name="arch" id="arch" list="arch-options" placeholder="amd64">
+                <input type="text" name="arch" id="arch" list="arch-options" placeholder="amd64" value="{{ values.arch or '' }}">
                 <datalist id="arch-options">
                     {% for a in arch_suggestions %}<option value="{{ a }}">{% endfor %}
                 </datalist>
@@ -101,38 +91,38 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="distro">Distro (Linux only)</label>
-                <input type="text" name="distro" id="distro" list="distro-options" placeholder="Ubuntu">
+                <input type="text" name="distro" id="distro" list="distro-options" placeholder="Ubuntu" value="{{ values.distro or '' }}">
                 <datalist id="distro-options">
                     {% for d in distro_suggestions %}<option value="{{ d }}">{% endfor %}
                 </datalist>
             </div>
             <div class="form-group">
                 <label for="distro_version">Distro Version</label>
-                <input type="text" name="distro_version" id="distro_version" placeholder="24.04">
+                <input type="text" name="distro_version" id="distro_version" placeholder="24.04" value="{{ values.distro_version or '' }}">
             </div>
             <div class="form-group">
                 <label for="flavor">Flavor</label>
-                <input type="text" name="flavor" id="flavor" list="flavor-options" placeholder="Kubuntu">
+                <input type="text" name="flavor" id="flavor" list="flavor-options" placeholder="Kubuntu" value="{{ values.flavor or '' }}">
                 <datalist id="flavor-options">
                     {% for f in flavor_suggestions %}<option value="{{ f }}">{% endfor %}
                 </datalist>
             </div>
             <div class="form-group">
                 <label for="flavor_version">Flavor Version</label>
-                <input type="text" name="flavor_version" id="flavor_version" placeholder="(inherits distro)">
+                <input type="text" name="flavor_version" id="flavor_version" placeholder="(inherits distro)" value="{{ values.flavor_version or '' }}">
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
                 <label for="compiler">Compiler</label>
-                <input type="text" name="compiler" id="compiler" list="compiler-options" placeholder="clang">
+                <input type="text" name="compiler" id="compiler" list="compiler-options" placeholder="clang" value="{{ values.compiler or '' }}">
                 <datalist id="compiler-options">
                     {% for c in compiler_suggestions %}<option value="{{ c }}">{% endfor %}
                 </datalist>
             </div>
             <div class="form-group">
                 <label for="compiler_version">Compiler Version</label>
-                <input type="text" name="compiler_version" id="compiler_version" list="compiler-version-options" placeholder="22">
+                <input type="text" name="compiler_version" id="compiler_version" list="compiler-version-options" placeholder="22" value="{{ values.compiler_version or '' }}">
                 <datalist id="compiler-version-options">
                     {% for v in compiler_version_suggestions %}<option value="{{ v }}">{% endfor %}
                 </datalist>
@@ -146,24 +136,24 @@
             <div class="form-group">
                 <label for="isolation">Isolation</label>
                 <select name="isolation" id="isolation">
-                    <option value="none">none (run on host)</option>
-                    <option value="podman">podman (run in container)</option>
+                    <option value="none"{% if not values.isolation or values.isolation == 'none' %} selected{% endif %}>none (run on host)</option>
+                    <option value="podman"{% if values.isolation == 'podman' %} selected{% endif %}>podman (run in container)</option>
                 </select>
             </div>
             <div class="form-group">
                 <label for="toolchain">Toolchain</label>
                 <select name="toolchain" id="toolchain">
-                    <option value="none">none (host packages)</option>
-                    <option value="nix">nix (via opp_env)</option>
+                    <option value="none"{% if not values.toolchain or values.toolchain == 'none' %} selected{% endif %}>none (host packages)</option>
+                    <option value="nix"{% if values.toolchain == 'nix' %} selected{% endif %}>nix (via opp_env)</option>
                 </select>
             </div>
             <div class="form-group">
                 <label for="expected_result_code">Expected result</label>
                 <select name="expected_result_code" id="expected_result_code">
                     <option value="">(use default{% if current_default_expectation %} — {{ current_default_expectation }}{% endif %})</option>
-                    <option value="PASS">PASS</option>
-                    <option value="FAIL">FAIL</option>
-                    <option value="ERROR">ERROR</option>
+                    <option value="PASS"{% if values.expected_result_code == 'PASS' %} selected{% endif %}>PASS</option>
+                    <option value="FAIL"{% if values.expected_result_code == 'FAIL' %} selected{% endif %}>FAIL</option>
+                    <option value="ERROR"{% if values.expected_result_code == 'ERROR' %} selected{% endif %}>ERROR</option>
                 </select>
             </div>
         </div>

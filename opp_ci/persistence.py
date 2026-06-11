@@ -83,6 +83,19 @@ def job_to_coord(job, *, project=None, opp_file=None):
     return coord
 
 
+# Human labels for the coord fields, matching the test-creation form's field
+# labels (web/templates/test_new.html) so a validation message names fields the
+# way the user sees them ("Compiler Version", not "compiler_version").
+_COORD_FIELD_LABELS = {
+    "project": "Project", "kind": "Kind", "mode": "Build Mode",
+    "os": "OS", "os_version": "OS Version",
+    "distro": "Distro", "distro_version": "Distro Version",
+    "flavor": "Flavor", "flavor_version": "Flavor Version",
+    "arch": "Architecture",
+    "compiler": "Compiler", "compiler_version": "Compiler Version",
+}
+
+
 def validate_test_coord(coord):
     """Raise ValueError if *coord* under-specifies the execution environment.
 
@@ -136,10 +149,11 @@ def validate_test_coord(coord):
             )
 
     if missing:
+        labels = sorted({_COORD_FIELD_LABELS.get(f, f) for f in missing})
         raise ValueError(
             "Test coordinate under-specifies the execution environment; a test "
             "must fully specify it so its runs share one identity and are "
-            "comparable. Missing/empty: " + ", ".join(sorted(set(missing))) + "."
+            "comparable. Missing/empty: " + ", ".join(labels) + "."
         )
 
 

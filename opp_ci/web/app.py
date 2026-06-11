@@ -766,6 +766,25 @@ def _test_form_context(session):
     }
 
 
+def _render_test_form(request, session, current_user, *, values=None,
+                      message=None, message_type=None, status_code=200):
+    """Render the new-test form, preserving the submitted `values` and an
+    optional flash message.
+
+    Used by both the GET form (empty values) and every POST validation-error
+    path, so a rejected submission re-renders in place — the user keeps what
+    they typed and the message names exactly what to fix — instead of being
+    redirected to a blank form.
+    """
+    return templates.TemplateResponse(request, "test_new.html", {
+        **_test_form_context(session),
+        "values": values or {},
+        "message": message,
+        "message_type": message_type,
+        **_template_globals(request, current_user),
+    }, status_code=status_code)
+
+
 @web_router.get("/tests", response_class=HTMLResponse)
 def tests_list(
     request: Request,
@@ -872,12 +891,8 @@ def test_new_form(request: Request,
                   message: str = Query(default=None), message_type: str = Query(default=None)):
     session = SessionLocal()
     try:
-        return templates.TemplateResponse(request, "test_new.html", {
-            **_test_form_context(session),
-            "message": message,
-            "message_type": message_type,
-            **_template_globals(request, current_user),
-        })
+        return _render_test_form(request, session, current_user,
+                                 message=message, message_type=message_type)
     finally:
         session.close()
 
@@ -916,15 +931,28 @@ def test_new_submit(
     ERROR stamps that code so the first run already yields a verdict."""
     from opp_ci import platforms
 
+    # Echo back exactly what the user typed so a rejected submission re-renders
+    # with state intact (see _render_test_form).
+    values = {
+        "name": name, "project": project, "kind": kind, "mode": mode,
+        "git_ref": git_ref, "version": version, "omnetpp_version": omnetpp_version,
+        "os": os, "os_version": os_version, "distro": distro,
+        "distro_version": distro_version, "flavor": flavor,
+        "flavor_version": flavor_version, "arch": arch,
+        "compiler": compiler, "compiler_version": compiler_version,
+        "isolation": isolation, "toolchain": toolchain,
+        "expected_result_code": expected_result_code,
+    }
+
     session = SessionLocal()
     try:
         try:
             default_expectation = parse_expectation_override(expected_result_code)
         except ValueError:
-            return RedirectResponse(
-                url="/tests/new?message=Invalid+expected+result&message_type=error",
-                status_code=303,
-            )
+            return _render_test_form(
+                request, session, current_user, values=values, status_code=400,
+                message=f"Invalid expected result: {expected_result_code!r}.",
+                message_type="error")
         resolved_deps = None
         if omnetpp_version and project != "omnetpp":
             resolved_deps = {"omnetpp": omnetpp_version}
@@ -933,10 +961,9 @@ def test_new_submit(
                 os=os or None, distro=distro or None, flavor=flavor or None,
             )
         except ValueError as e:
-            return RedirectResponse(
-                url=f"/tests/new?message={e}&message_type=error",
-                status_code=303,
-            )
+            return _render_test_form(
+                request, session, current_user, values=values,
+                message=str(e), message_type="error", status_code=400)
         os_canon = platforms._os_canonical(r_os) if r_os else None
         os_ver_clean = (os_version or None) if os_canon and os_canon != "Linux" else None
         distro_ver_clean = (distro_version or None) if r_distro else None
@@ -962,10 +989,9 @@ def test_new_submit(
         try:
             validate_test_coord(coord)
         except ValueError as e:
-            return RedirectResponse(
-                url=f"/tests/new?message={e}&message_type=error",
-                status_code=303,
-            )
+            return _render_test_form(
+                request, session, current_user, values=values,
+                message=str(e), message_type="error", status_code=400)
         test = get_or_create_test(
             session, coord,
             default_expectation=default_expectation,
@@ -976,10 +1002,9 @@ def test_new_submit(
                 set_test_name(session, test, name)
             except ValueError as e:
                 session.rollback()
-                return RedirectResponse(
-                    url=f"/tests/new?message={e}&message_type=error",
-                    status_code=303,
-                )
+                return _render_test_form(
+                    request, session, current_user, values=values,
+                    message=str(e), message_type="error", status_code=409)
         if action == "run":
             run = create_test_run(
                 session,
