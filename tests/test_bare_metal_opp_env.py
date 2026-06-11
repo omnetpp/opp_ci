@@ -68,12 +68,37 @@ class BareMetalOppEnvTests(unittest.TestCase):
         executor.run_test(
             "mm1k", "build", isolation="none", toolchain="none",
             resolved_deps={"omnetpp": "6.4.0"})
-        # build stage is the first opp_env run; it must name the pinned omnetpp.
+        # build stage is the first opp_env run; it must name the pinned omnetpp,
+        # pass -w <ws>, and end with the bare build command.
         self.assertTrue(self.calls, "no opp_env run invoked")
         build = self.calls[0]
-        self.assertEqual(build[:4], ["opp_env", "run", "omnetpp-6.4.0", "mm1k-latest"])
-        self.assertEqual(build[4], "-c")
-        self.assertIn("opp_build_project", build[5])
+        self.assertEqual(build[:2], ["opp_env", "run"])
+        self.assertIn("-w", build)
+        self.assertIn("omnetpp-6.4.0", build)
+        self.assertIn("mm1k-latest", build)
+        self.assertEqual(build[-2], "-c")
+        self.assertIn("opp_build_project", build[-1])
+
+
+class ProjectInstallDirTests(unittest.TestCase):
+    def test_globs_resolved_install_dir(self):
+        import tempfile
+        ws = tempfile.mkdtemp(prefix="opp_ci_pid_")
+        self.addCleanup(lambda: __import__("shutil").rmtree(ws, ignore_errors=True))
+        os.makedirs(os.path.join(ws, "mm1k-git"))
+        os.makedirs(os.path.join(ws, "omnetpp-6.4.0"))
+        # A -latest alias the matrix passed resolves to the on-disk -git dir,
+        # and the omnetpp dep dir is never picked for the mm1k project.
+        self.assertEqual(executor._project_install_dir(ws, "mm1k-latest"),
+                         os.path.join(ws, "mm1k-git"))
+        self.assertEqual(executor._project_install_dir(ws, "mm1k"),
+                         os.path.join(ws, "mm1k-git"))
+
+    def test_falls_back_to_ws_when_absent(self):
+        import tempfile
+        ws = tempfile.mkdtemp(prefix="opp_ci_pid_")
+        self.addCleanup(lambda: __import__("shutil").rmtree(ws, ignore_errors=True))
+        self.assertEqual(executor._project_install_dir(ws, "mm1k"), ws)
 
 
 if __name__ == "__main__":

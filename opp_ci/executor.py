@@ -470,6 +470,26 @@ def _opp_env_pin_args(resolved_deps):
     return [f"{name}-{ver}" for name, ver in sorted(deps.items()) if ver]
 
 
+def _project_install_dir(ws, project):
+    """Return the project's opp_env install dir under *ws*, or *ws* itself.
+
+    opp_env installs each project into ``<ws>/<name>-<version>`` (e.g.
+    ``mm1k-git``, ``omnetpp-6.4.0``). opp_repl discovers the simulation project
+    from the current directory, so the build/test command must run *inside*
+    this dir — running from the workspace root yields "No enclosing simulation
+    project is found". Strip any ``-latest``/``-git``/``-<version>`` suffix to a
+    bare prefix and glob; the bare prefix scopes to this project (omnetpp and
+    other deps have different prefixes). Falls back to *ws* when nothing
+    matches (e.g. install hasn't run yet), preserving prior behaviour.
+    """
+    import glob
+
+    bare = re.sub(r"-(latest|git|\d.*)$", "", project)
+    matches = sorted(
+        d for d in glob.glob(os.path.join(ws, bare + "*")) if os.path.isdir(d))
+    return matches[0] if matches else ws
+
+
 def _opp_cache_root():
     """Return the directory where the worker keeps cloned project sources."""
     base = os.environ.get("OPP_CI_CACHE_DIR")
@@ -1473,10 +1493,14 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
     # sets up the matching environment instead of resolving to latest.
     pins = _opp_env_pin_args(kwargs.get("resolved_deps"))
 
+    # Run inside the project's install dir so opp_repl can discover the project
+    # from cwd; pass -w explicitly so workspace detection doesn't depend on it.
+    run_cwd = _project_install_dir(ws, project)
+
     def _opp_env_run(inner):
         return run_external(
-            ["opp_env", "run", *pins, effective_project, "-c", inner],
-            label=f"opp_env:{effective_project}", env=env, cwd=ws,
+            ["opp_env", "run", "-w", ws, *pins, effective_project, "-c", inner],
+            label=f"opp_env:{effective_project}", env=env, cwd=run_cwd,
             stream=True, on_output=recorder.output if recorder else None)
 
     with _workspace_lock(ws):
