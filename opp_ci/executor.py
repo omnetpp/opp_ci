@@ -370,9 +370,13 @@ def install_project(project, git_ref=None, *, isolation="none", toolchain="none"
                     recorder=None):
     """Install a project via opp_env on the worker's host.
 
-    Only meaningful when ``isolation=none`` and ``toolchain=nix``:
-      - isolation=podman → install happens inside the container's entrypoint
-      - toolchain=none   → project is expected to be pre-built on the host
+    Runs for the host paths (``isolation=none``); podman installs inside the
+    container's entrypoint instead, so that case is a no-op here.
+      - toolchain=nix  → opp_env installs into a Nix-isolated workspace.
+      - toolchain=none → opp_env installs into a ``--nixless-workspace``: the
+        pinned omnetpp (and any other deps) are built with the *host* toolchain,
+        the same mechanism the podman host image uses. Nothing is assumed to be
+        pre-installed on the host.
 
     The remaining keyword args (``resolved_deps``, ``compiler``,
     ``compiler_version``) plus *project* and *git_ref* form the build
@@ -380,22 +384,32 @@ def install_project(project, git_ref=None, *, isolation="none", toolchain="none"
     axes the run step passes to :py:func:`_opp_env_workspace` so install and
     run land in the *same* directory (omnetpp built once, reused by the run).
 
-    When ``recorder`` is given and the install actually runs (host-nix), it is
-    captured as a ``deps.install`` stage; on the no-op paths no stage is added.
+    The pinned omnetpp version comes from *resolved_deps* (the Test
+    coordinate), never from anything found on the host.
+
+    When ``recorder`` is given and the install actually runs, it is captured as
+    a ``deps.install`` stage; on the podman no-op path no stage is added.
     """
-    if isolation != "none" or toolchain != "nix":
+    if isolation != "none" or toolchain not in ("nix", "none"):
         _logger.info("Skipping install (isolation=%s, toolchain=%s)", isolation, toolchain)
         return
 
-    effective_project, _ = resolve_opp_env_id(project, git_ref, toolchain="nix")
+    effective_project, _ = resolve_opp_env_id(project, git_ref, toolchain=toolchain)
     ws = _opp_env_workspace(
-        project=project, resolved_deps=resolved_deps, toolchain="nix",
+        project=project, resolved_deps=resolved_deps, toolchain=toolchain,
         compiler=compiler, compiler_version=compiler_version, git_ref=git_ref,
     )
     _gc_workspaces()
     # --init marks the workspace on first use (same flag the host Containerfile
     # uses); it is a no-op once the workspace exists, so reuse is idempotent.
-    argv = ["opp_env", "install", "--init", effective_project]
+    # toolchain=none → --nixless-workspace (host toolchain). The pinned deps are
+    # passed as positional projects so opp_env builds those exact versions
+    # rather than resolving each to its latest.
+    pins = _opp_env_pin_args(resolved_deps)
+    argv = ["opp_env", "install", "--init"]
+    if toolchain == "none":
+        argv.append("--nixless-workspace")
+    argv += pins + [effective_project]
     if recorder is not None:
         recorder.begin(Stage.DEPS_INSTALL, command=_format_argv(argv))
     with _workspace_lock(ws):
@@ -415,8 +429,10 @@ def run_test(project, kind, *, isolation=None, toolchain=None, recorder=None, **
     Run a test for the given project, dispatching on isolation × toolchain.
 
       isolation=podman          → _run_test_in_podman (wraps the inner path)
-      isolation=none, tc=nix    → _run_test_via_opp_env  (opp_env on host)
-      isolation=none, tc=none   → _run_test_direct       (opp_repl in-process)
+      isolation=none, tc=nix    → _run_test_via_opp_env  (opp_env on host, Nix)
+      isolation=none, tc=none   → _run_test_via_opp_env  (opp_env on host,
+                                  --nixless-workspace: host toolchain, pinned
+                                  omnetpp from the coordinate's resolved_deps)
 
     Extra kwargs (git_ref, opp_file, mode, os, os_version, compiler,
     compiler_version) are passed through; helpers extract what they need.
@@ -434,9 +450,24 @@ def run_test(project, kind, *, isolation=None, toolchain=None, recorder=None, **
     if isolation == "podman":
         return _run_test_in_podman(project, kind, toolchain=toolchain,
                                    recorder=recorder, **kwargs)
-    if toolchain == "nix":
-        return _run_test_via_opp_env(project, kind, recorder=recorder, **kwargs)
-    return _run_test_direct(project, kind, recorder=recorder, **kwargs)
+    # Both host paths provision the pinned omnetpp via opp_env; toolchain=none
+    # uses a --nixless-workspace (host toolchain). The legacy in-process
+    # _run_test_direct had no version-aware provider and is no longer dispatched.
+    return _run_test_via_opp_env(project, kind, recorder=recorder,
+                                 toolchain=toolchain, **kwargs)
+
+
+def _opp_env_pin_args(resolved_deps):
+    """Turn a resolved_deps mapping into opp_env positional project pins.
+
+    ``{"omnetpp": "6.4.0"}`` → ``["omnetpp-6.4.0"]``. Passing these as
+    positional projects to ``opp_env install``/``run`` makes opp_env build the
+    *exact* pinned versions instead of resolving each dependency to its latest
+    (mirrors ``$OPP_CI_PIN_DEPS`` in the podman host entrypoint). Sorted for a
+    stable command line. Deps with no version are skipped.
+    """
+    deps = resolved_deps if isinstance(resolved_deps, dict) else {}
+    return [f"{name}-{ver}" for name, ver in sorted(deps.items()) if ver]
 
 
 def _opp_cache_root():
@@ -1375,8 +1406,13 @@ def _run_podman_staged(*, image, run_stages, entry_script, run_flags,
     }
 
 
-def _run_test_via_opp_env(project, kind, recorder=None, **kwargs):
-    """Run a test via opp_env subprocess (Nix environment on the host).
+def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwargs):
+    """Run a test via opp_env subprocess (opp_env environment on the host).
+
+    Serves both host toolchains: ``nix`` (Nix-isolated workspace) and ``none``
+    (the ``--nixless-workspace`` the install step created, where opp_env built
+    the pinned omnetpp with the host toolchain). The only difference here is the
+    workspace coordinate; the run names the same pinned deps either way.
 
     Compilation and the test run as two opp_env invocations — a
     ``project.build`` stage (``opp_build_project``) then a ``test.run`` stage
@@ -1397,24 +1433,27 @@ def _run_test_via_opp_env(project, kind, recorder=None, **kwargs):
     test_inner = test_command + mode_suffix + " --no-build"
 
     env = os.environ.copy()
-    effective_project, effective_ref = resolve_opp_env_id(project, git_ref, toolchain="nix")
+    effective_project, effective_ref = resolve_opp_env_id(project, git_ref, toolchain=toolchain)
     if effective_ref:
         env["OPP_ENV_GIT_REF"] = effective_ref
 
     # Resolve the same per-coordinate workspace the install step created and
-    # run from it (opp_env auto-detects the workspace from cwd). The axes must
-    # match install_project's exactly, or run would land in a different dir and
-    # rebuild omnetpp. toolchain isn't in kwargs here (run_test consumes it),
-    # but this path is always nix.
+    # run from it (opp_env auto-detects the workspace from cwd). The axes —
+    # including toolchain — must match install_project's exactly, or run would
+    # land in a different dir and rebuild omnetpp.
     ws = _opp_env_workspace(
         project=project, resolved_deps=kwargs.get("resolved_deps"),
-        toolchain="nix", compiler=kwargs.get("compiler"),
+        toolchain=toolchain, compiler=kwargs.get("compiler"),
         compiler_version=kwargs.get("compiler_version"), git_ref=git_ref,
     )
 
+    # Name the pinned deps (e.g. omnetpp-6.4.0) alongside the project so opp_env
+    # sets up the matching environment instead of resolving to latest.
+    pins = _opp_env_pin_args(kwargs.get("resolved_deps"))
+
     def _opp_env_run(inner):
         return run_external(
-            ["opp_env", "run", effective_project, "-c", inner],
+            ["opp_env", "run", *pins, effective_project, "-c", inner],
             label=f"opp_env:{effective_project}", env=env, cwd=ws,
             stream=True, on_output=recorder.output if recorder else None)
 
