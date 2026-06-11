@@ -51,7 +51,14 @@ contract is explicit.
 | `OPP_CI_WORKER_TOKEN` | *(empty)* | Token used by `opp_ci worker start` when `--token` is omitted (e.g. when run from a systemd unit). |
 | `OPP_CI_WORKER_POLL_INTERVAL` | `10` | Seconds between worker job polls. |
 | `OPP_CI_WORKER_HEARTBEAT_INTERVAL` | `30` | Seconds between worker heartbeats. |
-| `OPP_CI_WORKER_HEARTBEAT_TIMEOUT` | `120` | Seconds before a worker is marked offline. |
+| `OPP_CI_WORKER_HEARTBEAT_TIMEOUT` | `120` | Seconds before a silent worker is marked offline and its in-flight runs reclaimed. |
+| `OPP_CI_WORKER_REAP_INTERVAL` | *(half the heartbeat timeout, min 15)* | Seconds between coordinator reaper sweeps. Each sweep marks stale workers offline, reclaims their orphaned `running` runs, and expires unserviceable `queued` runs. |
+| `OPP_CI_MAX_RECLAIMS` | `2` | Times a `running` run is re-queued after its worker goes dark before it is retired to `timed_out`/`ERROR` as a poison pill. |
+| `OPP_CI_QUEUE_UNSERVICEABLE_TIMEOUT` | `300` | Seconds a `queued` run may wait with no enabled worker able to serve its capability tags before it is expired to `timed_out`/`ERROR`. Serviceable-but-starved runs (right tags, fleet busy/offline) are never auto-expired. `0` disables the sweep. |
+
+The reaper sweep runs in the coordinator (`opp_ci serve`), not the worker:
+it covers both dead workers and queued runs no worker can serve. See
+[workers.md → Lifecycle](workers.md#lifecycle).
 
 Note: `opp_ci worker start` also falls back to `OPP_CI_COORDINATOR_URL`
 when `--coordinator` is omitted.

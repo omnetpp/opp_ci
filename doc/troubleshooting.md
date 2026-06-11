@@ -89,6 +89,25 @@ Either re-register a worker with the right `os:<lc>-<ver>` /
 `compiler:<lc>-<ver>` / `arch:<lc>` tags, or relax the matrix.
 Dispatch rules are in [workers.md](workers.md#capability-tags).
 
+### A run shows `timed_out` / `ERROR`: "no enabled worker advertises the required tags"
+
+The run sat `queued` longer than `OPP_CI_QUEUE_UNSERVICEABLE_TIMEOUT`
+(default 300s) with no *enabled* worker whose tags cover it, so the
+coordinator reaper expired it rather than leave it queued forever. The
+`stderr` / run details name the unsatisfiable tag set. This is the same
+root cause as the capability-tags failure above — a misroute — surfaced
+as a terminal outcome instead of a silent hang. Fixes:
+
+- Register or re-enable a worker advertising the named tags (a *disabled*
+  worker does not count — it is draining), then re-run the test.
+- Or correct the submission's platform/compiler so it targets tags a
+  worker already advertises.
+
+A run that is serviceable but merely starved (matching workers all busy
+or temporarily offline) is **not** expired — it waits. Raise the timeout
+or set it to `0` (see [configuration.md](configuration.md#workers)) if
+you want long fleet outages to never expire pinned work.
+
 ## Database
 
 ### `opp_ci.db` is in my current directory — what is it?

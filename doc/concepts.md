@@ -222,8 +222,12 @@ State-machine enum on TestRun:
 - `finished` — worker reported a result; `result_code` is populated.
 - `cancelled` — user-cancelled while still queued. (Running runs are
   left to finish — the worker can't be interrupted.)
-- `timed_out` — coordinator's watchdog reclaimed the run after the
-  worker stopped heartbeating.
+- `timed_out` — terminally retired by the coordinator's reaper, with a
+  synthetic `ERROR` outcome. Two causes: a `running` run whose worker
+  stopped heartbeating and was reclaimed past `OPP_CI_MAX_RECLAIMS` (a
+  poison pill), or a `queued` run no enabled worker could serve, expired
+  after `OPP_CI_QUEUE_UNSERVICEABLE_TIMEOUT`. See
+  [workers.md → Coordinator reaper](workers.md#coordinator-reaper).
 
 ### TestResultCode
 

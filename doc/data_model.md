@@ -381,7 +381,7 @@ lifecycle state, and — once `lifecycle == finished` — the outcome.
 
 | Column | Type | Notes |
 |---|---|---|
-| `lifecycle` | enum [`TestRunLifecycle`](#testrunlifecycle), not null, default `queued` | The state machine. Set to `running` when a worker claims the row, `finished` on worker result, `cancelled` by a user action, `timed_out` by the watchdog. |
+| `lifecycle` | enum [`TestRunLifecycle`](#testrunlifecycle), not null, default `queued` | The state machine. Set to `running` when a worker claims the row, `finished` on worker result, `cancelled` by a user action, `timed_out` by the coordinator reaper (poison pill or unserviceable-queue expiry). |
 | `created_at` | datetime, default now | Insert time |
 | `started_at` | datetime, nullable | Set at claim time by `/api/workers/poll` (not at insert) |
 | `finished_at` | datetime, nullable | Set on worker result |
@@ -549,7 +549,7 @@ Python `enum.Enum`, stored as the SQL `Enum` type on
 | `running` | Claimed by a worker |
 | `finished` | Worker reported a result — `result_code` is now populated |
 | `cancelled` | A user action cancelled the run. Only valid transition from `queued`; running runs are left to finish (the worker can't be interrupted). |
-| `timed_out` | The coordinator's watchdog reclaimed the run after the worker stopped heartbeating |
+| `timed_out` | Terminally retired by the coordinator reaper with a synthetic `ERROR` outcome — either a `running` run reclaimed past `OPP_CI_MAX_RECLAIMS` (poison pill) or a `queued` run no enabled worker could serve, expired after `OPP_CI_QUEUE_UNSERVICEABLE_TIMEOUT`. See [workers.md → Coordinator reaper](workers.md#coordinator-reaper). |
 
 ---
 

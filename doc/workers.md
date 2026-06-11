@@ -26,6 +26,28 @@ poll loop and a heartbeat loop.
 
 The worker handles `SIGINT` / `SIGTERM` for clean shutdown.
 
+### Coordinator reaper
+
+The coordinator runs a periodic reaper sweep (interval
+`OPP_CI_WORKER_REAP_INTERVAL`, also once at startup) that handles two
+kinds of stuck work:
+
+- **Orphaned `running` runs** — a worker that stopped heartbeating is
+  marked `offline` and its in-flight runs are re-queued, up to
+  `OPP_CI_MAX_RECLAIMS` times. A run that keeps outliving its worker
+  (suspected crash/OOM loop) is retired as a *poison pill* to
+  `timed_out` / `ERROR`.
+- **Unserviceable `queued` runs** — a run whose required [capability
+  tags](#capability-tags) no *enabled* worker advertises is a misroute,
+  not transient backlog. After `OPP_CI_QUEUE_UNSERVICEABLE_TIMEOUT`
+  seconds it is expired to `timed_out` / `ERROR` with a message naming
+  the missing tags, instead of waiting forever for a worker that will
+  never poll. Serviceability counts enabled workers of *any* status, so
+  a busy or temporarily-offline worker still covers a run; only true
+  misroutes are expired. A run that is serviceable but starved (all
+  matching workers busy or down) is left queued. Set the timeout to `0`
+  to disable.
+
 ## Capability tags
 
 Workers advertise their capabilities with a list of tags (set via
