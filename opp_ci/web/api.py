@@ -43,8 +43,8 @@ from opp_ci.persistence import (
     create_matrix_from_axes, create_matrix_run, create_test_run, delete_worker,
     enqueue_job, finalize_verdict_for_run, get_current_expectation,
     get_matrix_by_name, get_or_create_test, get_test_by_name, insert_expectation,
-    job_to_coord, parse_expectation_override, set_test_name, status_filter,
-    update_worker,
+    job_to_coord, parse_expectation_override, required_tags_for_test,
+    set_test_name, status_filter, update_worker,
 )
 
 _logger = logging.getLogger(__name__)
@@ -608,56 +608,12 @@ async def worker_poll(
         session.close()
 
 
-def _platform_required_tag(test):
-    """Return the most-specific platform capability tag a worker must
-    advertise to claim a TestRun targeting *test*, or None when the test
-    doesn't pin a platform.
-
-    Rules:
-      - test names a flavor   →  flavor:<flavor>-<flavor_version-or-distro_version>
-      - test names a distro   →  distro:<distro>-<distro_version>
-      - test names Windows/MacOS with a version → os:<os>-<ver>
-      - test names just an OS family → os:<os>
-    """
-    if test.flavor:
-        ver = test.flavor_version or test.distro_version
-        return f"flavor:{test.flavor.lower()}-{ver}" if ver else f"flavor:{test.flavor.lower()}"
-    if test.distro:
-        return (f"distro:{test.distro.lower()}-{test.distro_version}"
-                if test.distro_version else f"distro:{test.distro.lower()}")
-    if test.os:
-        os_lower = test.os.lower()
-        if os_lower != "linux" and test.os_version:
-            return f"os:{os_lower}-{test.os_version}"
-        return f"os:{os_lower}"
-    return None
-
-
 def _worker_can_run(worker_tags, test):
     """Return True if a worker with *worker_tags* may claim a TestRun
-    targeting *test*.
-
-    Required tags by execution environment:
-      - isolation=podman             →  {"podman"}
-      - isolation=none, toolchain=nix → {"nix", "<platform>", "compiler:<c>-<cv>"}
-      - isolation=none, toolchain=none → {"<platform>", "compiler:<c>-<cv>"}
+    targeting *test*. The required-tag rules live in
+    persistence.required_tags_for_test (shared with the queue-expiry sweep).
     """
-    isolation = test.isolation or "none"
-    toolchain = test.toolchain or "none"
-    required = set()
-    if isolation == "podman":
-        required.add("podman")
-    else:
-        if toolchain == "nix":
-            required.add("nix")
-        platform_tag = _platform_required_tag(test)
-        if platform_tag:
-            required.add(platform_tag)
-        if test.compiler and test.compiler_version:
-            required.add(f"compiler:{test.compiler.lower()}-{test.compiler_version}")
-    if test.arch:
-        required.add(f"arch:{test.arch.lower()}")
-    return required.issubset(worker_tags)
+    return required_tags_for_test(test).issubset(worker_tags)
 
 
 @router.post("/workers/snapshot")

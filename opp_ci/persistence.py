@@ -580,6 +580,116 @@ def reclaim_orphaned_runs(session, worker_id, now, max_reclaims):
     return requeued, retired
 
 
+def _platform_required_tag(test):
+    """Return the most-specific platform capability tag a worker must
+    advertise to claim a TestRun targeting *test*, or None when the test
+    doesn't pin a platform.
+
+    Rules:
+      - test names a flavor   →  flavor:<flavor>-<flavor_version-or-distro_version>
+      - test names a distro   →  distro:<distro>-<distro_version>
+      - test names Windows/MacOS with a version → os:<os>-<ver>
+      - test names just an OS family → os:<os>
+    """
+    if test.flavor:
+        ver = test.flavor_version or test.distro_version
+        return f"flavor:{test.flavor.lower()}-{ver}" if ver else f"flavor:{test.flavor.lower()}"
+    if test.distro:
+        return (f"distro:{test.distro.lower()}-{test.distro_version}"
+                if test.distro_version else f"distro:{test.distro.lower()}")
+    if test.os:
+        os_lower = test.os.lower()
+        if os_lower != "linux" and test.os_version:
+            return f"os:{os_lower}-{test.os_version}"
+        return f"os:{os_lower}"
+    return None
+
+
+def required_tags_for_test(test):
+    """Return the set of capability tags a worker must advertise to claim a
+    TestRun targeting *test*.
+
+    Required tags by execution environment:
+      - isolation=podman             →  {"podman"}
+      - isolation=none, toolchain=nix → {"nix", "<platform>", "compiler:<c>-<cv>"}
+      - isolation=none, toolchain=none → {"<platform>", "compiler:<c>-<cv>"}
+    `arch:<arch>` is added whenever the test pins an arch. A worker may run
+    the test iff this set is a subset of its tags (see web.api._worker_can_run).
+    """
+    isolation = test.isolation or "none"
+    toolchain = test.toolchain or "none"
+    required = set()
+    if isolation == "podman":
+        required.add("podman")
+    else:
+        if toolchain == "nix":
+            required.add("nix")
+        platform_tag = _platform_required_tag(test)
+        if platform_tag:
+            required.add(platform_tag)
+        if test.compiler and test.compiler_version:
+            required.add(f"compiler:{test.compiler.lower()}-{test.compiler_version}")
+    if test.arch:
+        required.add(f"arch:{test.arch.lower()}")
+    return required
+
+
+def retire_unserviceable_run(session, run, now, required):
+    """Terminally fail a queued run that no enabled worker's tags can satisfy.
+
+    Mirrors retire_poison_run: marks it `timed_out`/ERROR and resolves its
+    matrix cell so the parent TestMatrixRun completes instead of hanging on
+    a run that would never be claimed. `required` is the unsatisfiable tag
+    set (for the operator-facing message). Caller owns the transaction.
+    """
+    missing = ", ".join(sorted(required)) or "(none)"
+    run.lifecycle = TestRunLifecycle.timed_out
+    run.worker_id = None
+    run.finished_at = now
+    run.result_code = TestResultCode.ERROR
+    run.stderr = (run.stderr or "") + (
+        f"\n[opp_ci] expired from queue: no enabled worker advertises the "
+        f"required tags {{{missing}}}."
+    )
+    run.details = {**(run.details or {}),
+                   "unserviceable": True,
+                   "required_tags": sorted(required)}
+    finalize_verdict_for_run(session, run.id)
+
+
+def expire_unserviceable_queued_runs(session, now, workers, timeout_seconds):
+    """Retire `queued` runs that no enabled worker can ever claim.
+
+    A run is *unserviceable* when its required tag set is not a subset of
+    any enabled worker's tags — a misrouted submission, not transient
+    backlog. Only runs queued longer than `timeout_seconds` are touched, so
+    a worker still coming up (registered, not yet heartbeating) has time to
+    appear. `workers` is the full worker list; enabled workers of ANY status
+    count toward serviceability, so a worker the heartbeat sweep just flipped
+    `offline` (or one that is merely rebooting) does not falsely condemn the
+    runs only it can serve. Returns the number of runs expired. A
+    `timeout_seconds <= 0` disables the sweep. Caller owns the transaction.
+    """
+    if timeout_seconds <= 0:
+        return 0
+    enabled_tag_sets = [set(w.tags or []) for w in workers if w.enabled]
+    threshold = now - datetime.timedelta(seconds=timeout_seconds)
+    stale_queued = session.execute(
+        select(TestRun).where(
+            TestRun.lifecycle == TestRunLifecycle.queued,
+            TestRun.created_at < threshold,
+        )
+    ).scalars().all()
+    expired = 0
+    for run in stale_queued:
+        required = required_tags_for_test(run.test)
+        if any(required.issubset(tags) for tags in enabled_tag_sets):
+            continue  # serviceable — legitimate backlog, leave it queued
+        retire_unserviceable_run(session, run, now, required)
+        expired += 1
+    return expired
+
+
 def mark_stale_workers_offline(session, now, timeout_seconds, max_reclaims):
     """Flip online/busy workers whose last_heartbeat is older than the
     timeout to `offline`, reclaim their orphaned `running` runs, and zero
