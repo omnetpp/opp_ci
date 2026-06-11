@@ -20,11 +20,12 @@ def _ok(args, **kw):
     return subprocess.CompletedProcess(args, 0, stdout="out\n", stderr="")
 
 
-def _call(recorder, fake_run):
+def _call(recorder, fake_run, run_stages=None):
+    if run_stages is None:
+        run_stages = [(Stage.TEST_RUN, ["run", "-c", "x"])]
     with mock.patch("opp_ci.executor.run_external", side_effect=fake_run):
         return executor._run_podman_staged(
-            image="img:tag", container_args=["run", "-c", "x"],
-            entry_script="/opt/e.sh",
+            image="img:tag", run_stages=run_stages, entry_script="/opt/e.sh",
             run_flags=["-v", "/m:/work:Z", "-w", "/work"],
             recorder=recorder, git_ref=None, worktree_path=None, scratch_dir=None)
 
@@ -80,6 +81,39 @@ class PodmanStagedTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _call(StageRecorder(), fake)
         self.assertTrue(any(c[:3] == ["podman", "rm", "-f"] for c in calls))
+
+    def test_two_run_stages_build_then_test(self):
+        rec = StageRecorder()
+        calls = []
+
+        def fake(args, **kw):
+            calls.append(args)
+            return _ok(args)
+
+        out = _call(rec, fake, run_stages=[
+            (Stage.PROJECT_BUILD, ["run", "-c", "build"]),
+            (Stage.TEST_RUN, ["run", "-c", "test"])])
+        self.assertEqual([s["name"] for s in rec.stages],
+                         [Stage.RUNNER_BOOTSTRAP, Stage.PROJECT_BUILD, Stage.TEST_RUN])
+        self.assertEqual(len([c for c in calls if "--skip-bootstrap" in c]), 2)
+        self.assertEqual(out["result_code"], "PASS")
+
+    def test_build_failure_skips_test_stage(self):
+        rec = StageRecorder()
+
+        def fake(args, **kw):
+            if "--skip-bootstrap" in args and "build" in args:
+                return subprocess.CompletedProcess(args, 1, stdout="", stderr="boom")
+            return _ok(args)
+
+        out = _call(rec, fake, run_stages=[
+            (Stage.PROJECT_BUILD, ["run", "-c", "build"]),
+            (Stage.TEST_RUN, ["run", "-c", "test"])])
+        self.assertEqual([(s["name"], s["status"]) for s in rec.stages],
+                         [(Stage.RUNNER_BOOTSTRAP, PASSED),
+                          (Stage.PROJECT_BUILD, FAILED),
+                          (Stage.TEST_RUN, SKIPPED)])
+        self.assertEqual(out["result_code"], "FAIL")
 
     def test_failed_run_d_raises_and_tears_down(self):
         calls = []

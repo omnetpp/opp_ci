@@ -1207,9 +1207,25 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         # Pin every resolved dependency (omnetpp etc.) so opp_env builds the
         # exact versions the run requested rather than the latest available.
         pinned_deps = [t for t in dep_tokens if not t.startswith(f"{bare_project}-")]
-        container_args = (["run", "--install", "--no-isolated", effective_project]
-                          + pinned_deps
-                          + ["-c", f"env -u PYTHONPATH {inner_cmd}"])
+
+        # Split compilation from the test: opp_build_project (project.build)
+        # then the test command with --no-build (test.run), as two opp_env
+        # invocations over the same persistent /opt/opp_env_workspace, so the
+        # build's artifacts are reused. opp_build_project takes the same
+        # --load/-p/--mode flags as the test commands. `inner_cmd` already has
+        # the test command + mode + the --load/-p suffix; reuse that suffix for
+        # the build command. (omnetpp's own compile rides inside --install on
+        # the build stage — see the taxonomy note in the plan.)
+        repl_suffix = inner_cmd[len(COMMAND_MAP[kind]):]   # " --mode … --load … -p …"
+        build_inner = "opp_build_project" + repl_suffix
+        test_inner = inner_cmd + " --no-build"
+
+        def _oe_args(inner):
+            return (["run", "--install", "--no-isolated", effective_project]
+                    + pinned_deps + ["-c", f"env -u PYTHONPATH {inner}"])
+
+        run_stages = [(Stage.PROJECT_BUILD, _oe_args(build_inner)),
+                      (Stage.TEST_RUN, _oe_args(test_inner))]
         entry_script = "/opt/opp_env_entry.sh"
     else:
         # Host toolchain: the entrypoint (opp_ci_entry.sh) reads OPP_CI_PIN_DEPS
@@ -1229,15 +1245,20 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         # Catalog runs deliberately omit --opp-file: opp_repl's _load_workspace
         # auto-discovers any .opp in cwd (the install dir, set by entrypoint),
         # else falls back to a default SimulationProject rooted there.
+        # The host path runs build+test in one in-container `internal run-direct`
+        # process; they share a worktree, so they can't be split into separate
+        # execs without losing the build's artifacts. Keep it one test.run
+        # stage (its internal build/test split isn't visible to the host).
+        run_stages = [(Stage.TEST_RUN, container_args)]
         entry_script = "/opt/opp_ci_entry.sh"
 
     return _run_podman_staged(
-        image=image, container_args=container_args, entry_script=entry_script,
+        image=image, run_stages=run_stages, entry_script=entry_script,
         run_flags=run_flags, recorder=recorder, git_ref=git_ref,
         worktree_path=worktree_path, scratch_dir=scratch_dir)
 
 
-def _run_podman_staged(*, image, container_args, entry_script, run_flags,
+def _run_podman_staged(*, image, run_stages, entry_script, run_flags,
                        recorder, git_ref, worktree_path, scratch_dir):
     """Run a podman job as a long-lived container driven stage by stage
     (option b of plan/pending/staged-execution-capture.md).
@@ -1245,14 +1266,13 @@ def _run_podman_staged(*, image, container_args, entry_script, run_flags,
     Instead of one `podman run <image> <args>`, start the container detached
     (entrypoint overridden to idle) and drive it with separate `podman exec`s:
     a runner.bootstrap stage (clone opp_ci/opp_repl + pip install via the
-    entry script's --bootstrap-only) then a test.run stage (the entry script
-    --skip-bootstrap with the run args). Each exec is captured like any host
-    command. The container is always removed in the finally — even if a stage
-    fails or raises — so a crash can't leak containers.
-
-    The in-container build/test split (separate project.build vs test.run
-    stages) is a follow-up; this establishes the lifecycle first. Needs a real
-    podman host to validate.
+    entry script's --bootstrap-only), then each (stage_name, args) in
+    *run_stages* via the entry script --skip-bootstrap. The nix path passes
+    two — project.build then test.run; the host path passes one combined
+    test.run. A failed stage aborts the rest (build fails → test skipped).
+    Each exec is captured like any host command. The container is always
+    removed in the finally — even if a stage fails or raises — so a crash
+    can't leak containers. Needs a real podman host to validate.
     """
     container = f"opp_ci_run_{uuid.uuid4().hex[:12]}"
     run_d = (["podman", "run", "-d", "--name", container]
@@ -1286,18 +1306,27 @@ def _run_podman_staged(*, image, container_args, entry_script, run_flags,
 
         if boot.returncode != 0:
             if recorder is not None:
-                recorder.skip(Stage.TEST_RUN, reason="skipped: bootstrap failed")
+                for stage_name, _args in run_stages:
+                    recorder.skip(stage_name, reason="skipped: bootstrap failed")
             result = boot
         else:
-            # ── test.run (build + test combined for now) ──────────────
-            if recorder is not None:
-                recorder.begin(Stage.TEST_RUN, command=_format_argv(container_args))
-            result = _exec([entry_script, "--skip-bootstrap"] + container_args,
-                           label=f"podman:{image}")
-            if recorder is not None:
-                recorder.end(result.returncode)
-            out_parts.append(result.stdout or "")
-            err_parts.append(result.stderr or "")
+            ran = 0
+            for stage_name, args in run_stages:
+                if recorder is not None:
+                    recorder.begin(stage_name, command=_format_argv(args))
+                result = _exec([entry_script, "--skip-bootstrap"] + args,
+                               label=f"podman:{image}:{stage_name}")
+                if recorder is not None:
+                    recorder.end(result.returncode)
+                out_parts.append(result.stdout or "")
+                err_parts.append(result.stderr or "")
+                ran += 1
+                if result.returncode != 0:
+                    # Abort the rest (e.g. build fails → skip test).
+                    if recorder is not None:
+                        for skip_name, _a in run_stages[ran:]:
+                            recorder.skip(skip_name, reason="skipped: previous stage failed")
+                    break
     finally:
         # Teardown is its own best-effort step; a failed remove must not mask
         # the run's result.

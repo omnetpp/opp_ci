@@ -12,15 +12,19 @@ bootstrap, dependency install, compilation, test run, …), and stream them
 > **Phase 2 (podman option b): lifecycle implemented, NOT yet validated on a
 > real podman host.** `_run_test_in_podman` now starts the container detached
 > (`--entrypoint sleep`) and drives it with separate `podman exec`s — a
-> `runner.bootstrap` stage (entry script `--bootstrap-only`) then a `test.run`
-> stage (`--skip-bootstrap` + run args) — with a guaranteed `podman rm -f`
+> `runner.bootstrap` stage (entry script `--bootstrap-only`) then one or more
+> run stages (`--skip-bootstrap` + args) — with a guaranteed `podman rm -f`
 > teardown in a `finally`. The entry scripts gained `--bootstrap-only` /
-> `--skip-bootstrap` modes. Lifecycle/teardown/skip logic is unit-tested with
-> mocked podman (`tests/test_podman_staged.py`), but **the real container run
-> needs validation on a podman host, and images must be rebuilt** to pick up
-> the new entry scripts. The in-container build/test split (separate
-> `project.build` vs `test.run` inside podman) is deliberately deferred until
-> this lifecycle is confirmed working.
+> `--skip-bootstrap` modes. The in-container build/test split is implemented
+> for the **nix** path (project.build = `opp_build_project`, test.run = the
+> test command with `--no-build`, as two `opp_env run` execs over the
+> persistent workspace; a build failure skips test); the **host** path stays
+> one combined `test.run` because its `internal run-direct` builds + tests in
+> a single shared-worktree process the host recorder can't see split.
+> Lifecycle / teardown / skip / split logic is unit-tested with mocked podman
+> (`tests/test_podman_staged.py`), but **the real container run needs
+> validation on a podman host, and images must be rebuilt** to pick up the new
+> entry scripts.
 
 Builds directly on the remote-worker log view (see
 `plan/done/remote-worker-log-view.md`):
