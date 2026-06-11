@@ -91,6 +91,22 @@ SERVE_TLS_KEY_PASSWORD_FILE = os.environ.get("OPP_CI_SERVE_TLS_KEY_PASSWORD_FILE
 TLS_CA_BUNDLE = os.environ.get("OPP_CI_TLS_CA_BUNDLE", "")
 TLS_INSECURE = os.environ.get("OPP_CI_TLS_INSECURE", "0") == "1"
 
+# ── opp_env host workspace (isolation=none, toolchain=nix) ────────────
+#
+# Root under which the worker keeps one opp_env workspace *per build
+# coordinate* (project × omnetpp pin × compiler × git ref). Each host-nix
+# run resolves to <root>/<key>: identical coordinate reuses the directory
+# (omnetpp built once), a different coordinate gets its own isolated tree
+# so concurrent or differently-pinned runs can't clobber each other. The
+# podman path isolates the same way via one image per omnetpp version; the
+# host path has no container, hence directories. Only the host-nix path
+# reads this. `OPP_CI_WORKSPACE` is the *root*, not a single workspace.
+WORKSPACE_ROOT = os.path.expanduser(
+    os.environ.get("OPP_CI_WORKSPACE", "~/.local/share/opp_ci/workspace"))
+# Retention cap: before each install, sweep the root and evict LRU-by-mtime
+# directories beyond this count (currently-locked ones are skipped).
+WORKSPACE_MAX = int(os.environ.get("OPP_CI_WORKSPACE_MAX", "10"))
+
 WORKER_POLL_INTERVAL = int(os.environ.get("OPP_CI_WORKER_POLL_INTERVAL", "10"))
 WORKER_HEARTBEAT_INTERVAL = int(os.environ.get("OPP_CI_WORKER_HEARTBEAT_INTERVAL", "30"))
 WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("OPP_CI_WORKER_HEARTBEAT_TIMEOUT", "120"))

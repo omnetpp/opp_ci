@@ -842,7 +842,9 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
         if not skip_install:
             try:
                 install_project(project, git_ref=git_ref,
-                                isolation=isolation, toolchain=toolchain)
+                                isolation=isolation, toolchain=toolchain,
+                                resolved_deps=resolved_deps,
+                                compiler=compiler, compiler_version=compiler_version)
             except RuntimeError as e:
                 click.echo(f"ERROR during install: {e}")
                 return
@@ -1750,20 +1752,29 @@ def run_matrix(matrix_name, new_name, spec_file, project, kinds, modes, refs, si
         click.echo(f"Running matrix '{matrix.name}': {len(jobs)} jobs"
                    f"{'' if not no_cache else ' (cache disabled)'}")
 
-        # Install once per unique project+ref+toolchain+isolation combination.
-        # install_project is a no-op unless isolation=none and toolchain=nix,
-        # so non-nix jobs cheaply pass through.
+        # Install once per unique build coordinate. install_project is a no-op
+        # unless isolation=none and toolchain=nix, so non-nix jobs cheaply pass
+        # through; for nix the coordinate (project, ref, compiler, deps) also
+        # picks the per-coordinate workspace, so jobs differing in any of those
+        # axes must each install (into their own workspace) — keep them in the
+        # dedup key.
         if not skip_install:
             installed = set()
             for job in jobs:
+                deps = job.get("resolved_deps") or {}
                 install_key = (job["project"], job.get("git_ref"),
-                               job.get("isolation"), job.get("toolchain"))
+                               job.get("isolation"), job.get("toolchain"),
+                               job.get("compiler"), job.get("compiler_version"),
+                               frozenset(deps.items()) if isinstance(deps, dict) else None)
                 if install_key not in installed:
                     try:
                         install_project(
                             job["project"], git_ref=job.get("git_ref"),
                             isolation=job.get("isolation") or "none",
                             toolchain=job.get("toolchain") or "none",
+                            resolved_deps=job.get("resolved_deps"),
+                            compiler=job.get("compiler"),
+                            compiler_version=job.get("compiler_version"),
                         )
                         installed.add(install_key)
                     except RuntimeError as e:

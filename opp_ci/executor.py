@@ -1,5 +1,7 @@
 import contextlib
+import hashlib
 import io
+import json
 import logging
 import os
 import re
@@ -322,25 +324,41 @@ def resolve_commit_sha(project, opp_file=None):
     return None
 
 
-def install_project(project, git_ref=None, *, isolation="none", toolchain="none"):
+def install_project(project, git_ref=None, *, isolation="none", toolchain="none",
+                    resolved_deps=None, compiler=None, compiler_version=None):
     """Install a project via opp_env on the worker's host.
 
     Only meaningful when ``isolation=none`` and ``toolchain=nix``:
       - isolation=podman → install happens inside the container's entrypoint
       - toolchain=none   → project is expected to be pre-built on the host
+
+    The remaining keyword args (``resolved_deps``, ``compiler``,
+    ``compiler_version``) plus *project* and *git_ref* form the build
+    coordinate that picks the per-coordinate workspace; they must match the
+    axes the run step passes to :py:func:`_opp_env_workspace` so install and
+    run land in the *same* directory (omnetpp built once, reused by the run).
     """
     if isolation != "none" or toolchain != "nix":
         _logger.info("Skipping install (isolation=%s, toolchain=%s)", isolation, toolchain)
         return
 
     effective_project, _ = resolve_opp_env_id(project, git_ref, toolchain="nix")
-    result = run_external(
-        ["opp_env", "install", effective_project],
-        label=f"opp_env install {effective_project}",
+    ws = _opp_env_workspace(
+        project=project, resolved_deps=resolved_deps, toolchain="nix",
+        compiler=compiler, compiler_version=compiler_version, git_ref=git_ref,
     )
+    _gc_workspaces()
+    # --init marks the workspace on first use (same flag the host Containerfile
+    # uses); it is a no-op once the workspace exists, so reuse is idempotent.
+    with _workspace_lock(ws):
+        result = run_external(
+            ["opp_env", "install", "--init", effective_project],
+            label=f"opp_env install {effective_project}",
+            cwd=ws,
+        )
     if result.returncode != 0:
         raise RuntimeError(f"opp_env install {effective_project} failed (exit code {result.returncode})")
-    _logger.info("Installation of %s complete", effective_project)
+    _logger.info("Installation of %s complete in %s", effective_project, ws)
 
 
 def run_test(project, kind, *, isolation=None, toolchain=None, **kwargs):
@@ -372,6 +390,126 @@ def _opp_cache_root():
     if base:
         return base
     return os.path.join(os.path.expanduser("~"), ".cache", "opp_ci", "clones")
+
+
+def _opp_env_workspace(*, project, resolved_deps, toolchain, compiler,
+                       compiler_version, git_ref):
+    """Return (creating + touching it) the per-coordinate opp_env workspace dir.
+
+    The host-nix path (isolation=none, toolchain=nix) has no container to
+    isolate it: ``opp_env install``/``run`` compile omnetpp and the project
+    *in-tree*, and the Nix store only content-addresses the toolchain and
+    external libs, not that build. So two runs differing in any axis that
+    changes the dependency closure (omnetpp pin, compiler, git ref, project)
+    must not share a tree — else their builds clobber each other or two
+    concurrent jobs race. Identical coordinate → same directory → omnetpp is
+    built once and reused.
+
+    The directory name is a legible prefix plus a stable hash of the full
+    coordinate tuple; the hash is authoritative, the prefix is only there so
+    ``ls <root>`` is readable. The dir's mtime is bumped on every resolution
+    (install *and* run) so GC's LRU reflects actual use, not creation.
+    """
+    from opp_ci import config
+
+    deps = resolved_deps if isinstance(resolved_deps, dict) else {}
+    # Canonical, order-independent view of the coordinate: sorting keys and
+    # normalising None→"" means dict iteration order or a missing axis can
+    # never shift the hash between the install and run steps.
+    coordinate = {
+        "project": project or "",
+        "toolchain": toolchain or "",
+        "compiler": compiler or "",
+        "compiler_version": str(compiler_version or ""),
+        "git_ref": git_ref or "",
+        "deps": {str(k): str(v) for k, v in sorted(deps.items())},
+    }
+    canon = json.dumps(coordinate, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha1(canon.encode()).hexdigest()[:8]
+
+    omnetpp = deps.get("omnetpp")
+    raw_prefix = "-".join(filter(None, [
+        project or "proj",
+        f"omnetpp{omnetpp}" if omnetpp else "omnetpp",
+        f"{compiler}{compiler_version}" if compiler else (toolchain or "nix"),
+        (git_ref or "")[:8] or "none",
+    ]))
+    prefix = re.sub(r"[^A-Za-z0-9._-]", "", raw_prefix)
+    ws = os.path.join(config.WORKSPACE_ROOT, f"{prefix}-{digest}")
+    os.makedirs(ws, exist_ok=True)
+    try:
+        os.utime(ws, None)  # LRU touch; reuse should look recent to GC
+    except OSError:
+        pass
+    return ws
+
+
+def _workspace_lock_path(ws):
+    return os.path.join(ws, ".opp_ci.lock")
+
+
+@contextlib.contextmanager
+def _workspace_lock(ws):
+    """Hold an exclusive flock on ``<ws>/.opp_ci.lock`` for the block.
+
+    Serialises same-coordinate install/build so a re-run (or worker
+    concurrency > 1) waits for the in-flight build instead of reading or
+    corrupting a half-built tree. Different coordinates use different files
+    and never contend. flock is advisory and Unix-only — the host-nix path
+    only runs on Unix workers.
+    """
+    import fcntl
+
+    os.makedirs(ws, exist_ok=True)
+    fd = os.open(_workspace_lock_path(ws), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _gc_workspaces():
+    """Evict least-recently-used workspace dirs beyond ``config.WORKSPACE_MAX``.
+
+    Called before each install. The newest WORKSPACE_MAX directories (by
+    mtime, bumped on each reuse) are kept; older ones are removed. A dir
+    whose lock is currently held by a concurrent build is skipped, so GC
+    never deletes a tree out from under a running job. Count-based, not
+    age-based — kept deliberately simple.
+    """
+    import fcntl
+    import shutil
+
+    from opp_ci import config
+
+    root = config.WORKSPACE_ROOT
+    try:
+        dirs = [os.path.join(root, n) for n in os.listdir(root)]
+    except OSError:
+        return
+    dirs = [p for p in dirs if os.path.isdir(p)]
+    if len(dirs) <= config.WORKSPACE_MAX:
+        return
+    dirs.sort(key=lambda p: os.path.getmtime(p))  # oldest first
+    for ws in dirs[:-config.WORKSPACE_MAX]:
+        try:
+            fd = os.open(_workspace_lock_path(ws), os.O_CREAT | os.O_RDWR, 0o644)
+        except OSError:
+            continue
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                _logger.debug("Skipping GC of in-use workspace %s", ws)
+                continue
+            shutil.rmtree(ws, ignore_errors=True)
+            _logger.info("Evicted LRU opp_env workspace %s", ws)
+        finally:
+            os.close(fd)
 
 
 def _parse_opp_file_kwargs(opp_file):
@@ -1083,8 +1221,21 @@ def _run_test_via_opp_env(project, kind, **kwargs):
         env["OPP_ENV_GIT_REF"] = effective_ref
     args = ["opp_env", "run", effective_project, "-c", cmd]
 
+    # Resolve the same per-coordinate workspace the install step created and
+    # run from it (opp_env auto-detects the workspace from cwd). The axes must
+    # match install_project's exactly, or run would land in a different dir and
+    # rebuild omnetpp. toolchain isn't in kwargs here (run_test consumes it),
+    # but this path is always nix.
+    ws = _opp_env_workspace(
+        project=project, resolved_deps=kwargs.get("resolved_deps"),
+        toolchain="nix", compiler=kwargs.get("compiler"),
+        compiler_version=kwargs.get("compiler_version"), git_ref=git_ref,
+    )
+
     start = time.time()
-    result = run_external(args, label=f"opp_env:{effective_project}", env=env, stream=True)
+    with _workspace_lock(ws):
+        result = run_external(args, label=f"opp_env:{effective_project}",
+                              env=env, cwd=ws, stream=True)
     duration = time.time() - start
 
     result_code = "PASS" if result.returncode == 0 else "FAIL"

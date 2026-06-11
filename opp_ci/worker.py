@@ -192,7 +192,10 @@ class WorkerAgent:
 
         try:
             install_project(project, git_ref=git_ref,
-                            isolation=isolation, toolchain=toolchain)
+                            isolation=isolation, toolchain=toolchain,
+                            resolved_deps=run_kwargs["resolved_deps"],
+                            compiler=run_kwargs["compiler"],
+                            compiler_version=run_kwargs["compiler_version"])
         except RuntimeError as e:
             _logger.error("Install failed for run #%d: %s", run_id, e)
             self._report_result(run_id, "ERROR", stderr=str(e))
