@@ -1292,9 +1292,17 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         # combined form; deps.install just front-loads the (idempotent)
         # --install so it is its own stage and an install failure is
         # attributed there, skipping build + test.
-        run_stages = [(Stage.DEPS_INSTALL, _oe_args("true")),
-                      (Stage.PROJECT_BUILD, _oe_args(build_inner)),
-                      (Stage.TEST_RUN, _oe_args(test_inner))]
+        # Each stage carries a third element: the *bare* command to show in the
+        # stage view, stripped of the opp_env / `-c env -u PYTHONPATH …` /
+        # entry-script / podman-exec plumbing that the executed argv needs. The
+        # plumbing still goes to the worker journal (run_external logs the full
+        # argv); the UI just shows what actually ran inside.
+        mode_suffix = f" --mode {mode}" if mode else ""
+        run_stages = [
+            (Stage.DEPS_INSTALL, _oe_args("true"), f"opp_env install {effective_project}"),
+            (Stage.PROJECT_BUILD, _oe_args(build_inner), "opp_build_project" + mode_suffix),
+            (Stage.TEST_RUN, _oe_args(test_inner), COMMAND_MAP[kind] + mode_suffix + " --no-build"),
+        ]
         entry_script = "/opt/opp_env_entry.sh"
     else:
         # Host toolchain: the entrypoint (opp_ci_entry.sh) reads OPP_CI_PIN_DEPS
@@ -1318,7 +1326,8 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         # process; they share a worktree, so they can't be split into separate
         # execs without losing the build's artifacts. Keep it one test.run
         # stage (its internal build/test split isn't visible to the host).
-        run_stages = [(Stage.TEST_RUN, container_args)]
+        bare = COMMAND_MAP.get(kind, kind) + (f" --mode {mode}" if mode else "")
+        run_stages = [(Stage.TEST_RUN, container_args, bare)]
         entry_script = "/opt/opp_ci_entry.sh"
 
     return _run_podman_staged(
@@ -1375,14 +1384,14 @@ def _run_podman_staged(*, image, run_stages, entry_script, run_flags,
 
         if boot.returncode != 0:
             if recorder is not None:
-                for stage_name, _args in run_stages:
+                for stage_name, *_rest in run_stages:
                     recorder.skip(stage_name, reason="skipped: bootstrap failed")
             result = boot
         else:
             ran = 0
-            for stage_name, args in run_stages:
+            for stage_name, args, display in run_stages:
                 if recorder is not None:
-                    recorder.begin(stage_name, command=_format_argv(args))
+                    recorder.begin(stage_name, command=display)
                 result = _exec([entry_script, "--skip-bootstrap"] + args,
                                label=f"podman:{image}:{stage_name}")
                 if recorder is not None:
@@ -1393,7 +1402,7 @@ def _run_podman_staged(*, image, run_stages, entry_script, run_flags,
                 if result.returncode != 0:
                     # Abort the rest (e.g. build fails → skip test).
                     if recorder is not None:
-                        for skip_name, _a in run_stages[ran:]:
+                        for skip_name, *_a in run_stages[ran:]:
                             recorder.skip(skip_name, reason="skipped: previous stage failed")
                     break
     finally:
@@ -1473,8 +1482,7 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
     with _workspace_lock(ws):
         # ── project.build ─────────────────────────────────────────────
         if recorder is not None:
-            recorder.begin(Stage.PROJECT_BUILD,
-                           command=f"opp_env run {effective_project} -c {build_inner!r}")
+            recorder.begin(Stage.PROJECT_BUILD, command=build_inner)
         build = _opp_env_run(build_inner)
         if recorder is not None:
             recorder.end(build.returncode)
@@ -1491,8 +1499,7 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
             }
         # ── test.run ──────────────────────────────────────────────────
         if recorder is not None:
-            recorder.begin(Stage.TEST_RUN,
-                           command=f"opp_env run {effective_project} -c {test_inner!r}")
+            recorder.begin(Stage.TEST_RUN, command=test_inner)
         start = time.time()
         result = _opp_env_run(test_inner)
         duration = time.time() - start

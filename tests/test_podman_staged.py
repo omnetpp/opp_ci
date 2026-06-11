@@ -22,7 +22,7 @@ def _ok(args, **kw):
 
 def _call(recorder, fake_run, run_stages=None):
     if run_stages is None:
-        run_stages = [(Stage.TEST_RUN, ["run", "-c", "x"])]
+        run_stages = [(Stage.TEST_RUN, ["run", "-c", "x"], "bare-x")]
     with mock.patch("opp_ci.executor.run_external", side_effect=fake_run):
         return executor._run_podman_staged(
             image="img:tag", run_stages=run_stages, entry_script="/opt/e.sh",
@@ -91,10 +91,14 @@ class PodmanStagedTests(unittest.TestCase):
             return _ok(args)
 
         out = _call(rec, fake, run_stages=[
-            (Stage.PROJECT_BUILD, ["run", "-c", "build"]),
-            (Stage.TEST_RUN, ["run", "-c", "test"])])
+            (Stage.PROJECT_BUILD, ["run", "-c", "build"], "opp_build_project"),
+            (Stage.TEST_RUN, ["run", "-c", "test"], "opp_run_smoke_tests")])
         self.assertEqual([s["name"] for s in rec.stages],
                          [Stage.RUNNER_BOOTSTRAP, Stage.PROJECT_BUILD, Stage.TEST_RUN])
+        # the stage view shows the bare command, not the executed `run -c …` argv
+        self.assertEqual(
+            [s["command"] for s in rec.stages if s["name"] != Stage.RUNNER_BOOTSTRAP],
+            ["opp_build_project", "opp_run_smoke_tests"])
         self.assertEqual(len([c for c in calls if "--skip-bootstrap" in c]), 2)
         self.assertEqual(out["result_code"], "PASS")
 
@@ -107,8 +111,8 @@ class PodmanStagedTests(unittest.TestCase):
             return _ok(args)
 
         out = _call(rec, fake, run_stages=[
-            (Stage.PROJECT_BUILD, ["run", "-c", "build"]),
-            (Stage.TEST_RUN, ["run", "-c", "test"])])
+            (Stage.PROJECT_BUILD, ["run", "-c", "build"], "opp_build_project"),
+            (Stage.TEST_RUN, ["run", "-c", "test"], "opp_run_smoke_tests")])
         self.assertEqual([(s["name"], s["status"]) for s in rec.stages],
                          [(Stage.RUNNER_BOOTSTRAP, PASSED),
                           (Stage.PROJECT_BUILD, FAILED),
