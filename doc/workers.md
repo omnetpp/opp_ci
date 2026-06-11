@@ -148,9 +148,11 @@ Or via the web UI at `/admin`.
 ## Operational notes
 
 - Run workers under a process supervisor so they restart on crash — the
-  worker has no built-in supervision. On Linux use systemd
-  ([systemd.md](systemd.md)); on macOS use launchd
-  ([launchd.md](launchd.md)); Podman or k8s also work.
+  worker has no built-in supervision. The CLI installs one for you:
+  `opp_ci worker service install` (systemd on Linux
+  [systemd.md](systemd.md); launchd on macOS [launchd.md](launchd.md);
+  a rendered module on NixOS [nixos.md](nixos.md)). Podman or k8s also
+  work.
 - For speed tests, pick a worker host with stable, low-noise CPU (no
   shared cloud tenants, frequency scaling off). Add a `perf-counters`
   tag and use a matrix that requires that tag.

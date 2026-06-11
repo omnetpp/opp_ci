@@ -1100,7 +1100,7 @@ def _run_remote(project, kinds, git_ref, *, mode=None,
             click.echo(f"ERROR submitting {project}/{kind}: {e}")
 
 
-@main.command("serve")
+@main.group("serve", invoke_without_command=True)
 @click.option("--host", default=None,
               help="Bind host (default from $OPP_CI_SERVE_HOST, or 127.0.0.1)")
 @click.option("--port", default=None, type=int,
@@ -1109,9 +1109,24 @@ def _run_remote(project, kinds, git_ref, *, mode=None,
               help="TLS certificate file (default $OPP_CI_SERVE_TLS_CERT_FILE)")
 @click.option("--key", "key_file", default=None,
               help="TLS private key file (default $OPP_CI_SERVE_TLS_KEY_FILE)")
-@remoteable(_refuse_remote("serve"))
-def serve(host, port, cert_file, key_file):
-    """Start the web UI server."""
+@click.pass_context
+def serve(ctx, host, port, cert_file, key_file):
+    """Start the web UI server, or manage it as a system service.
+
+    With no subcommand this starts the coordinator (web UI + API + scheduler)
+    exactly as before. `opp_ci serve service …` manages the systemd / NixOS
+    service (Linux-only).
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    if ctx.obj.get("remote"):
+        click.echo("ERROR: serve is local-only; ignoring --remote", err=True)
+        raise SystemExit(2)
+    _serve_run(host, port, cert_file, key_file)
+
+
+def _serve_run(host, port, cert_file, key_file):
+    """Start the web UI server (the bare `opp_ci serve` body)."""
     import os
     import uvicorn
     from opp_ci.web.app import app
@@ -1169,6 +1184,95 @@ def serve(host, port, cert_file, key_file):
         ssl_keyfile=key_file or None,
         ssl_keyfile_password=cfg.get_tls_key_password() or None,
     )
+
+
+# ── Service lifecycle subgroups (serve service … / worker service …) ────────
+#
+# These fold the old packaging/{systemd,launchd} installers into the CLI: they
+# generate and apply the unit/plist artifacts that run opp_ci from GitHub via
+# uvx (refreshing the pinned ref on each restart). See opp_ci/service.py and
+# plan/pending/uvx-service-management.md.
+
+
+def _run_service(fn, *args, **kwargs):
+    """Invoke a service.py operation, mapping ServiceError → exit code 1."""
+    from opp_ci import service
+    try:
+        fn(*args, echo=click.echo, **kwargs)
+    except service.ServiceError as e:
+        click.echo(f"ERROR: {e}", err=True)
+        raise SystemExit(1)
+
+
+def _refuse_serve_on_macos():
+    """serve service is Linux-only (incl. NixOS); macOS packaging is
+    worker-only."""
+    from opp_ci import service
+    if service.detect_os() == "macos":
+        click.echo("ERROR: `serve service` is Linux-only — the coordinator "
+                   "runs on Linux. macOS packaging is worker-only "
+                   "(`worker service`).", err=True)
+        raise SystemExit(2)
+
+
+@serve.group("service")
+def serve_service():
+    """Install/manage the opp_ci coordinator as a system service (Linux)."""
+    _refuse_serve_on_macos()
+
+
+@serve_service.command("install")
+@click.option("--host", default=None, help="Bind host → OPP_CI_SERVE_HOST")
+@click.option("--port", default=None, type=int, help="Bind port → OPP_CI_SERVE_PORT")
+@click.option("--cert", default=None, help="TLS cert file → OPP_CI_SERVE_TLS_CERT_FILE")
+@click.option("--key", default=None, help="TLS key file → OPP_CI_SERVE_TLS_KEY_FILE")
+@click.option("--user", default="opp_ci", help="Run-as service user (User= in the unit)")
+@click.option("--ref", default="main", help="opp_ci GitHub ref baked into the uvx command")
+@click.option("--no-postgres", is_flag=True, help="Skip local PostgreSQL provisioning (remote DB)")
+@click.option("--tls", is_flag=True, help="Also install the cert-watch auto-reload units")
+@click.option("--no-enable", is_flag=True, help="Don't enable-on-boot")
+@click.option("--no-start", is_flag=True, help="Don't start now")
+@click.option("--out", "out_dir", default=None,
+              help="NixOS: write the rendered module/flake/env bodies to this dir")
+@click.option("--dry-run", is_flag=True, help="Render + print all artifacts, change nothing")
+def serve_service_install(host, port, cert, key, user, ref, no_postgres, tls,
+                          no_enable, no_start, out_dir, dry_run):
+    """Install (and by default enable + start) the opp_ci-serve service."""
+    from opp_ci import service
+    spec = service.InstallSpec(
+        role="serve", user=user, ref=ref,
+        host=host, port=port, cert=cert, key=key,
+        postgres=not no_postgres, tls=tls,
+        enable=not no_enable, start=not no_start,
+        dry_run=dry_run, out_dir=out_dir)
+    _run_service(service.do_install, spec)
+
+
+@serve_service.command("uninstall")
+@click.option("--purge", is_flag=True, help="Also remove config + state (after confirmation)")
+@click.option("--dry-run", is_flag=True, help="Render the uninstall transcript, change nothing")
+def serve_service_uninstall(purge, dry_run):
+    """Stop + disable the serve service and remove its unit files."""
+    from opp_ci import service
+    if purge and not dry_run:
+        click.confirm("Purge will delete /etc/opp_ci config + state. Continue?",
+                      abort=True)
+    spec = service.InstallSpec(role="serve", purge=purge, dry_run=dry_run)
+    _run_service(service.do_uninstall, spec)
+
+
+def _add_serve_lifecycle(action):
+    def _cmd():
+        from opp_ci import service
+        spec = service.InstallSpec(role="serve")
+        _run_service(service.do_lifecycle, spec, action)
+    _cmd.__name__ = f"serve_service_{action}"
+    _cmd.__doc__ = f"{action.capitalize()} the opp_ci-serve service."
+    serve_service.command(action)(_cmd)
+
+
+for _action in ("start", "stop", "restart", "status"):
+    _add_serve_lifecycle(_action)
 
 
 @main.command("tls-selfsign")
@@ -2661,10 +2765,11 @@ def worker_detect_tags():
               help="Worker token (default from $OPP_CI_WORKER_TOKEN)")
 @click.option("--poll-interval", default=10, help="Seconds between polls (default: 10)")
 @click.option("--heartbeat-interval", default=30, help="Seconds between heartbeats (default: 30)")
-@click.option("--niceness", default=10,
+@click.option("--niceness", default=None, type=int,
               help="Run the worker and its build/test subprocesses at this nice "
                    "level so CI work yields to interactive use (higher = lower "
-                   "priority; default: 10). Pass 0 for normal priority.")
+                   "priority; default from $OPP_CI_WORKER_NICENESS, or 10). "
+                   "Pass 0 for normal priority.")
 @remoteable(_refuse_remote("worker start"))
 def worker_start(coordinator, token, poll_interval, heartbeat_interval, niceness):
     """Start a worker agent that polls the coordinator for jobs.
@@ -2679,6 +2784,8 @@ def worker_start(coordinator, token, poll_interval, heartbeat_interval, niceness
         coordinator = cfg.COORDINATOR_URL
     if token is None:
         token = cfg.WORKER_TOKEN
+    if niceness is None:
+        niceness = cfg.WORKER_NICENESS
     if not token:
         raise click.ClickException(
             "Worker token missing. Pass --token or set $OPP_CI_WORKER_TOKEN."
@@ -2875,6 +2982,78 @@ def worker_delete(worker_id, yes):
         click.echo(msg)
     finally:
         session.close()
+
+
+# ── worker service … (system service lifecycle) ────────────────────────────
+
+
+@worker_group.group("service")
+def worker_service():
+    """Install/manage an opp_ci worker as a system service (systemd/launchd)."""
+
+
+@worker_service.command("install")
+@click.option("--name", default="default",
+              help="Worker instance → opp_ci-worker@<name>.service + workers/<name>.env")
+@click.option("--coordinator", default=None, help="→ OPP_CI_COORDINATOR_URL")
+@click.option("--token", default=None, help="→ OPP_CI_WORKER_TOKEN")
+@click.option("--poll-interval", default=None, type=int, help="→ OPP_CI_WORKER_POLL_INTERVAL")
+@click.option("--heartbeat-interval", default=None, type=int,
+              help="→ OPP_CI_WORKER_HEARTBEAT_INTERVAL")
+@click.option("--niceness", default=None, type=int, help="→ OPP_CI_WORKER_NICENESS")
+@click.option("--user", default="opp_ci", help="Run-as service user")
+@click.option("--ref", default="main", help="opp_ci GitHub ref baked into the uvx command")
+@click.option("--no-enable", is_flag=True, help="Don't enable-on-boot")
+@click.option("--no-start", is_flag=True, help="Don't start now")
+@click.option("--out", "out_dir", default=None,
+              help="NixOS: write the rendered module/flake/env bodies to this dir")
+@click.option("--dry-run", is_flag=True, help="Render + print all artifacts, change nothing")
+def worker_service_install(name, coordinator, token, poll_interval,
+                           heartbeat_interval, niceness, user, ref,
+                           no_enable, no_start, out_dir, dry_run):
+    """Install (and by default enable + start) an opp_ci worker service.
+
+    Registration is a separate step: `opp_ci worker register` produces the
+    token, which this command consumes via --token (or the env file).
+    """
+    from opp_ci import service
+    spec = service.InstallSpec(
+        role="worker", user=user, ref=ref, name=name,
+        coordinator=coordinator, token=token,
+        poll_interval=poll_interval, heartbeat_interval=heartbeat_interval,
+        niceness=niceness,
+        enable=not no_enable, start=not no_start,
+        dry_run=dry_run, out_dir=out_dir)
+    _run_service(service.do_install, spec)
+
+
+@worker_service.command("uninstall")
+@click.option("--name", default="default", help="Worker instance to remove")
+@click.option("--purge", is_flag=True, help="Also remove this worker's env file (after confirmation)")
+@click.option("--dry-run", is_flag=True, help="Render the uninstall transcript, change nothing")
+def worker_service_uninstall(name, purge, dry_run):
+    """Remove one worker instance (its plist/env + enablement)."""
+    from opp_ci import service
+    if purge and not dry_run:
+        click.confirm(f"Purge will delete workers/{name}.env (the token). Continue?",
+                      abort=True)
+    spec = service.InstallSpec(role="worker", name=name, purge=purge, dry_run=dry_run)
+    _run_service(service.do_uninstall, spec)
+
+
+def _add_worker_lifecycle(action):
+    def _cmd(name):
+        from opp_ci import service
+        spec = service.InstallSpec(role="worker", name=name)
+        _run_service(service.do_lifecycle, spec, action)
+    _cmd.__name__ = f"worker_service_{action}"
+    _cmd.__doc__ = f"{action.capitalize()} an opp_ci worker service instance."
+    click.option("--name", default="default", help="Worker instance")(_cmd)
+    worker_service.command(action)(_cmd)
+
+
+for _waction in ("start", "stop", "restart", "status"):
+    _add_worker_lifecycle(_waction)
 
 
 # ── Token commands ─────────────────────────────────────────────────────

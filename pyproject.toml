@@ -60,7 +60,7 @@ opp_ci = "opp_ci.cli:main"
 include = ["opp_ci*"]
 
 [tool.setuptools.package-data]
-opp_ci = ["podman/*.j2", "podman/*.yml"]
+opp_ci = ["podman/*.j2", "podman/*.yml", "data/*.pem"]
 
 [tool.setuptools_scm]
 write_to = "opp_ci/_version.py"

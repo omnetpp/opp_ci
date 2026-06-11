@@ -1,323 +1,185 @@
 # Running opp_ci as a systemd service
 
-On Ubuntu (and other systemd-based distros) opp_ci can be installed as
-a system service so it starts on boot and can be managed with the usual
-`systemctl` commands. The packaging artefacts live in
-[`packaging/systemd/`](../packaging/systemd/).
+On Linux (Ubuntu and other systemd distros) opp_ci installs and manages
+itself as a system service straight from the CLI — no repo checkout, no
+venv under `/opt`. The service runs opp_ci from GitHub via
+[`uvx`](https://docs.astral.sh/uv/concepts/tools/), re-fetching the
+pinned ref on **every (re)start**, so a restart picks up the latest code
+on that ref.
 
 > On **macOS**, which has no systemd, run workers as launchd
 > LaunchDaemons instead — see [launchd.md](launchd.md). (macOS packaging
 > is worker-only; the coordinator/`serve` side stays on Linux.)
+>
+> On **NixOS**, units are owned declaratively, so `service install`
+> *renders* a NixOS module instead of mutating the system — see
+> [nixos.md](nixos.md).
 
-There is no single "opp_ci" process: the systemd layer wraps the
+There is no single "opp_ci" process: the service layer wraps the
 existing `opp_ci serve` and `opp_ci worker start` subcommands. The host
-role — coordinator, worker, or combined — is a matter of which units
-you enable.
+role — coordinator, worker, or combined — is a matter of which units you
+install.
+
+## How it runs (uvx)
+
+Each unit's `ExecStart` is a single `uvx` command, for example the serve
+unit:
+
+```
+uvx --from "opp_ci[web,postgres,client,podman] @ git+https://github.com/omnetpp/opp_ci.git@main" \
+    --with "opp_repl[all] @ git+https://github.com/omnetpp/opp_repl.git@opp_ci" \
+    --refresh-package opp_ci --refresh-package opp_repl \
+    opp_ci serve
+```
+
+- The `opp_ci[...]` extras are **role-determined**: serve gets
+  `web,postgres,client,podman`; a worker gets `client,podman`.
+- `@main` is the opp_ci GitHub ref; set it with `--ref` at install time
+  (a tag bounds surprise upgrades).
+- `opp_repl` is pulled from its **`opp_ci` branch** (it is not on PyPI).
+- `--refresh-package opp_ci opp_repl` is what delivers "latest each
+  restart": without it, `uvx` caches the first resolved commit of a
+  branch and reuses it forever.
+
+The `opp_ci serve` / `opp_ci worker start` command line carries **no**
+runtime options — all runtime config comes from env files (below).
 
 ## Units
 
 | Unit | Purpose | Multiplicity |
 |---|---|---|
 | `opp_ci-serve.service` | Runs `opp_ci serve` (web UI + API + scheduler) | Singleton |
-| `opp_ci-worker@.service` | Templated unit. Each instance runs `opp_ci worker start` for one registered worker | One per worker name |
-| `opp_ci.target` | Umbrella: pulls in whichever services are enabled on this host | Singleton |
+| `opp_ci-worker@.service` | Templated unit; each instance runs `opp_ci worker start` for one worker name | One per worker name |
+| `opp_ci.target` | Umbrella for whichever services are installed on this host | Singleton |
+| `opp_ci-serve-cert.path` + `…-cert-reload.service` | Optional TLS cert-watch auto-reload (`serve service install --tls`) | Optional |
 
 ## Install
 
-Prerequisites on the target host: `python3-venv`, `python3-pip`, `git`,
-and `rsync` (optional but recommended). The project uses
-`setuptools-scm` to derive its version from git tags, so a working
-`.git/` directory must be present in the source you install from.
+`uv`/`uvx` must be present for the **invoking** user. `service install`
+copies both binaries into the service user's `~/.local/bin/`
+(e.g. `/var/lib/opp_ci/.local/bin/`) so the same version is available to
+the daemon; the unit references that absolute path. It does **not**
+install uv for you — if uv/uvx are missing it warns and continues.
 
-From a checkout of the repo:
-
-```bash
-sudo packaging/systemd/install.sh                  # provisions local PostgreSQL
-sudo packaging/systemd/install.sh --no-postgres    # skip; e.g. for a remote DB
-```
-
-The installer is idempotent. It:
-
-- creates the `opp_ci` system user/group (home `/var/lib/opp_ci`,
-  shell `/usr/sbin/nologin`),
-- copies the source tree to `/opt/opp_ci` (excluding `.venv`, caches,
-  and any local SQLite DB; `.git/` is kept so setuptools-scm can
-  resolve the version),
-- creates `/opt/opp_ci/.venv` and `pip install -e`s opp_ci into it
-  with all runtime extras (`web`, `client`, `podman`, `postgres`),
-- by default installs PostgreSQL if missing, creates an `opp_ci` role
-  and database with peer-auth via the Unix socket, grants `ALL ON
-  SCHEMA public` to the role (required by PostgreSQL 15+), detects the
-  cluster's actual port (Ubuntu sometimes allocates 5433 instead of
-  5432), and appends a matching
-  `OPP_CI_DATABASE_URL=postgresql:///opp_ci?host=/var/run/postgresql&port=<detected>`
-  to `/etc/opp_ci/opp_ci.env` if no DB URL is already set there,
-- installs the three unit files into `/etc/systemd/system/`,
-- seeds `/etc/opp_ci/` with `opp_ci.env`, `serve.env`, and
-  `workers/default.env` from the `.example` files (only if missing —
-  existing config is preserved on re-install),
-- runs `systemctl daemon-reload`.
-
-It does **not** enable or start any unit. That is the next step.
-
-### Using a remote PostgreSQL instead
-
-Pass `--no-postgres` to skip the local provisioning, then point the
-env file at your remote DB:
+Coordinator host:
 
 ```bash
-sudo packaging/systemd/install.sh --no-postgres
-sudoedit /etc/opp_ci/opp_ci.env
-# OPP_CI_DATABASE_URL=postgresql://opp_ci:secret@db.example.com/opp_ci
+sudo uvx opp_ci serve service install --host 0.0.0.0 --port 8080
+sudo uvx opp_ci serve service install --no-postgres   # use a remote DB
 ```
 
-`psycopg2-binary` is part of the runtime extras the installer always
-pulls in, so no extra pip step is needed.
-
-## Role selection
-
-### Coordinator only
+Worker host:
 
 ```bash
-sudoedit /etc/opp_ci/opp_ci.env       # set OPP_CI_DATABASE_URL
-sudoedit /etc/opp_ci/serve.env        # set OPP_CI_COORDINATOR_URL, GitHub tokens
-sudo systemctl enable --now opp_ci-serve.service
-sudo systemctl enable opp_ci.target
+# 1. Register the worker on the coordinator to mint a token:
+opp_ci worker register --remote https://ci.example.org --name builder-1 --auto-tags
+# 2. Install + start the worker service with that token:
+sudo uvx opp_ci worker service install --name builder-1 \
+    --coordinator https://ci.example.org --token <token>
 ```
 
-### Worker only
+By default `install` **enables-on-boot and starts** the service
+(`systemctl enable --now`). Opt out with `--no-enable` / `--no-start`.
 
-Register the worker once on the coordinator (locally or via
-`--remote`):
+**Worker token guard:** if you pass no `--token` and none is already in
+the env file, auto-start is skipped with a message; set the token, then
+`opp_ci worker service start --name <name>`.
 
-```bash
-opp_ci worker register --name builder-1 --auto-tags
-# Token: <copy this>
-```
+### Install options
 
-Paste the token into a per-instance env file on the worker host:
+`serve service install`:
 
-```bash
-sudoedit /etc/opp_ci/workers/builder-1.env
-# OPP_CI_COORDINATOR_URL=https://ci.example.org
-# OPP_CI_WORKER_TOKEN=<paste here>
-sudo chown opp_ci:opp_ci /etc/opp_ci/workers/builder-1.env
-sudo chmod 0600          /etc/opp_ci/workers/builder-1.env
-sudo systemctl enable --now opp_ci-worker@builder-1.service
-sudo systemctl enable opp_ci.target
-```
+| Option | Effect |
+|---|---|
+| `--host`, `--port`, `--cert`, `--key` | → `serve.env` |
+| `--user` (default `opp_ci`) | run-as user (`User=`) |
+| `--ref` (default `main`) | opp_ci GitHub ref in the uvx command |
+| `--no-postgres` | skip local PostgreSQL provisioning |
+| `--tls` | also install the cert-watch auto-reload units |
+| `--no-enable`, `--no-start` | don't enable-on-boot / start now |
+| `--dry-run` | render + print all artifacts, change nothing |
 
-### Combined (coordinator + workers on one host)
+`worker service install`:
 
-Enable both:
+| Option | Effect |
+|---|---|
+| `--name` (default `default`) | instance → `opp_ci-worker@<name>.service` + `workers/<name>.env` |
+| `--coordinator`, `--token`, `--poll-interval`, `--heartbeat-interval`, `--niceness` | → `workers/<name>.env` |
+| `--user`, `--ref`, `--no-enable`, `--no-start`, `--dry-run` | as above |
 
-```bash
-sudo systemctl enable --now opp_ci-serve.service
-sudo systemctl enable --now opp_ci-worker@default.service
-sudo systemctl enable opp_ci.target
-```
+### What install provisions
 
-### Multiple workers on one host
+- The `--user` system account (default `opp_ci`, home `/var/lib/opp_ci`).
+- `/etc/opp_ci`, `/etc/opp_ci/workers`, `/var/lib/opp_ci`, the TLS dir.
+- uv/uvx copied to the service user (see above).
+- serve: local PostgreSQL (role + db + grant + detected port → `OPP_CI_DATABASE_URL`), unless `--no-postgres`.
+- worker: rootless podman (subuid/subgid, `enable-linger`, `podman system migrate`).
 
-Write one env file per worker name and enable one instance per file:
+## Configuration (env files)
 
-```bash
-sudoedit /etc/opp_ci/workers/podman-builder.env
-sudoedit /etc/opp_ci/workers/nix-builder.env
-sudo systemctl enable --now opp_ci-worker@podman-builder.service
-sudo systemctl enable --now opp_ci-worker@nix-builder.service
-```
+Runtime options live in env files; the command line stays generic.
 
-Each instance has its own poll loop, heartbeat, and token, but shares
-`/etc/opp_ci/opp_ci.env`.
-
-## Day-to-day operations
-
-```bash
-# Start / stop / restart
-sudo systemctl restart opp_ci-serve.service
-sudo systemctl stop    opp_ci-worker@default.service
-
-# Whole-host view
-systemctl status opp_ci.target
-
-# Logs
-journalctl -fu opp_ci-serve.service
-journalctl -fu opp_ci-worker@default.service
-
-# Apply a config change
-sudoedit /etc/opp_ci/opp_ci.env
-sudo systemctl restart opp_ci.target
-```
-
-The serve unit has `Restart=on-failure RestartSec=5s`; the worker has
-`Restart=on-failure RestartSec=10s` and `TimeoutStopSec=60s` so the
-worker has up to 60s to drain in-flight work after `SIGTERM`. Both
-honour `SIGINT`/`SIGTERM` for clean shutdown — `systemctl stop` will
-not strand in-flight jobs as long as they finish within the timeout.
-
-To use `opp_ci.target` as the umbrella on/off switch, enable and start
-it once after enabling the individual units:
-
-```bash
-sudo systemctl enable --now opp_ci.target
-sudo systemctl stop  opp_ci.target   # takes serve + all workers down (PartOf=)
-sudo systemctl start opp_ci.target   # brings them all back up
-```
-
-Without that step the target stays inactive even when serve and the
-workers are running — they're started directly, not through the
-target. The target is purely an ergonomic wrapper; nothing else
-depends on it.
-
-## Running CLI commands by hand
-
-Admin commands like `opp_ci worker register`, `opp_ci list-runs`, or
-ad-hoc queries need the same database URL as the running service. The
-config layer auto-loads `/etc/opp_ci/opp_ci.env` at startup (without
-overriding anything already in your environment), so a bare CLI
-invocation as the `opp_ci` user just works:
-
-```bash
-sudo -u opp_ci /opt/opp_ci/.venv/bin/opp_ci worker register \
-    --name local --auto-tags
-```
-
-You can also `sudo -u opp_ci -i` (if you give the user a real shell) or
-add `/opt/opp_ci/.venv/bin` to root's PATH for convenience. The
-underlying mechanism is: any process importing `opp_ci.config` overlays
-that env file as a fallback, so the same precedence applies — explicit
-env vars and systemd `EnvironmentFile=` win, the file fills the gap.
-
-## Exposing serve externally
-
-The unit binds to `127.0.0.1:8080` by default — only reachable from the
-same host. Pick one of the access patterns:
-
-- **SSH tunnel** (zero server-side changes): from your laptop, run
-  `ssh -L 8080:127.0.0.1:8080 user@host`, then open
-  `http://127.0.0.1:8080/` locally.
-- **Direct bind to all interfaces**: in `/etc/opp_ci/serve.env`, set
-  `OPP_CI_SERVE_HOST=0.0.0.0`, restart the unit. Opens port 8080 over
-  plain HTTP — fine for a private VM, **not** for the public internet
-  (no TLS, credentials and tokens in cleartext).
-- **Reverse proxy with HTTPS**: keep serve on 127.0.0.1, put Caddy or
-  nginx + Let's Encrypt in front on 443. Pick this if you also run
-  other web services on the host. See [deployment.md](deployment.md)
-  for the reverse-proxy shape.
-- **Native TLS in serve itself** (recommended for single-service
-  hosts): paste a Cloudflare Origin Certificate (or other cert) into
-  `/etc/opp_ci/tls/`, activate the shipped TLS drop-in
-  (`tls.conf.example` → `tls.conf`), uncomment the TLS block in
-  `serve.env`, enable `opp_ci-serve-cert.path` for automatic restart
-  on cert renewal. Full walkthrough in [ssl.md](ssl.md).
-
-## Environment files
-
-| File | Read by | Mode | Purpose |
+| File | Read by | Mode | Keys |
 |---|---|---|---|
-| `/etc/opp_ci/opp_ci.env` | both | 0640 root:opp_ci | Shared (`OPP_CI_DATABASE_URL`, `OPP_CI_PROJECT_DIR`, …) |
-| `/etc/opp_ci/serve.env` | serve | 0640 root:opp_ci | `OPP_CI_SERVE_HOST`, `OPP_CI_SERVE_PORT`, `OPP_CI_COORDINATOR_URL`, GitHub tokens |
-| `/etc/opp_ci/workers/<name>.env` | one worker | 0600 opp_ci:opp_ci | Per-instance `OPP_CI_COORDINATOR_URL` + `OPP_CI_WORKER_TOKEN` |
+| `/etc/opp_ci/opp_ci.env` | both | 0640 root:opp_ci | `OPP_CI_DATABASE_URL` |
+| `/etc/opp_ci/serve.env` | serve | 0640 root:opp_ci | `OPP_CI_SERVE_HOST/PORT/TLS_CERT_FILE/TLS_KEY_FILE` |
+| `/etc/opp_ci/workers/<name>.env` | one worker | 0600 opp_ci:opp_ci | `OPP_CI_COORDINATOR_URL`, `OPP_CI_WORKER_TOKEN`, `OPP_CI_WORKER_POLL_INTERVAL`, `OPP_CI_WORKER_HEARTBEAT_INTERVAL`, `OPP_CI_WORKER_NICENESS`, `OPP_CI_OPP_ENV_CMD` |
 
-`serve.env` is referenced as `EnvironmentFile=-/etc/opp_ci/serve.env`,
-so it may be absent; `opp_ci.env` is required.
+`OPP_CI_OPP_ENV_CMD` is set to `uvx --from opp-env opp_env` so the
+host-nix opp_env path runs from its own isolated venv.
 
-Every variable referenced in these files is listed in
-[`configuration.md`](configuration.md).
+To change a setting, edit the env file and restart:
+`sudo opp_ci worker service restart --name <name>`.
 
-## Prerequisites per role
-
-**Coordinator**: nothing beyond a working PostgreSQL (or just SQLite
-in `/var/lib/opp_ci/`). The serve unit has
-`After=network-online.target postgresql.service`; if your database
-lives on another host, the `postgresql.service` ordering is harmless
-(it just resolves to a no-op).
-
-**Worker**: opp_env and its toolchain (Nix and/or podman) must be
-available to the `opp_ci` user.
-
-- Nix multi-user install: `nix-daemon.service` must exist and be
-  active. The worker unit has `After=nix-daemon.service`. The `opp_ci`
-  user needs `/nix` accessible and a real `$HOME` for
-  `~/.nix-profile` (the installer points it at `/var/lib/opp_ci`).
-- Podman rootless: ensure `/etc/subuid` and `/etc/subgid` have entries
-  for `opp_ci`, e.g. `usermod --add-subuids 100000-165535
-  --add-subgids 100000-165535 opp_ci`.
-
-Skipping a toolchain just means the worker cannot pick up jobs with
-the corresponding capability tag — there is no error at startup.
-
-## Hardening
-
-The serve unit ships with strict hardening:
-
-```
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-ReadWritePaths=/var/lib/opp_ci
-```
-
-`ProtectSystem=strict` makes the entire filesystem read-only inside
-the unit's namespace, with writes allowed only under
-`ReadWritePaths=/var/lib/opp_ci`. It still permits read access and
-`connect()` to Unix sockets under `/var/run`, so the local
-PostgreSQL connection over `/var/run/postgresql` works fine. If serve
-ever needs to write outside `/var/lib/opp_ci`, add the path to
-`ReadWritePaths` via `systemctl edit opp_ci-serve.service`.
-
-The worker unit ships with hardening **commented out**, because Nix
-and podman need filesystem access that is awkward to enumerate
-generically. Tighten it on a per-host basis once the worker is known
-to work; sensible starting point:
-
-```ini
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/opp_ci /nix/var
-```
-
-## Per-worker resource caps
-
-Each templated instance can be capped independently with a drop-in:
+## Lifecycle
 
 ```bash
-sudo systemctl edit opp_ci-worker@nix-builder.service
+sudo opp_ci serve  service {start|stop|restart|status}
+sudo opp_ci worker service {start|stop|restart|status} --name <name>
 ```
 
-```ini
-[Service]
-CPUQuota=400%
-MemoryMax=8G
-```
-
-This keeps a chatty worker from starving the rest of the host.
-
-## Log retention
-
-Logs go to journald by default. To bound disk usage:
-
-```bash
-sudo journalctl --vacuum-time=14d
-```
-
-If you observe dropped lines during a verbose run, add a drop-in to
-disable rate limiting for that unit:
-
-```ini
-[Service]
-LogRateLimitIntervalSec=0
-```
+These drive `systemctl` directly. Logs:
+`journalctl -fu opp_ci-serve` / `journalctl -fu opp_ci-worker@<name>`.
 
 ## Uninstall
 
 ```bash
-sudo packaging/systemd/uninstall.sh
+sudo opp_ci serve  service uninstall            # stop + disable + remove units
+sudo opp_ci worker service uninstall --name X   # only that instance
 ```
 
-Removes the units. Leaves `/opt/opp_ci`, `/etc/opp_ci`,
-`/var/lib/opp_ci`, and the `opp_ci` user in place so a re-install does
-not lose tokens or the database.
+Conservative by default: removes the unit files and `daemon-reload`s but
+**preserves** `/etc/opp_ci` config + env files (tokens), `/var/lib/opp_ci`
+state, the database, and the service user. `--purge` additionally removes
+config + state after a confirmation prompt (never drops the database or
+deletes the user without further confirmation).
+
+A worker uninstall removes only that instance; the shared
+`opp_ci-worker@.service` template and `opp_ci.target` stay while any
+other worker remains.
+
+## No-sudo / dry-run
+
+Every `service` operation does one up-front `geteuid()==0` check. Run
+unprivileged (or pass `--dry-run`) and the CLI mutates nothing — it
+prints a complete, copy-pasteable manual transcript: every file (path,
+owner, mode, exact contents), the uv/uvx copy, user/dir creation, and
+the `systemctl` enable/start commands. `--dry-run` prints the same
+transcript even as root, for review before applying.
+
+## TLS
+
+Drop `fullchain.pem` + `privkey.pem` into `/etc/opp_ci/tls/` (use
+`opp_ci tls-selfsign` for a lab cert, or paste a Cloudflare Origin
+Certificate), set the TLS paths in `serve.env`, and install with `--tls`
+to also get the cert-watch auto-reload units. See [ssl.md](ssl.md).
+
+## Migrating from the venv-based install
+
+A re-install transparently migrates a host that used the old shell-script
+venv layout: `serve service install` overwrites the same-named unit files
+(now pointing at uvx) and `daemon-reload`s; the next restart runs the uvx
+model. It does **not** delete `/opt/opp_ci`, `/opt/opp_env`,
+`/opt/opp_repl`, or the service user's `.profile`/`setenv` shim
+(operator-owned, possibly in use) — instead it prints a note listing
+those now-unused paths for manual removal.

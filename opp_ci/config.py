@@ -124,8 +124,23 @@ WORKSPACE_ROOT = os.path.expanduser(
 # directories beyond this count (currently-locked ones are skipped).
 WORKSPACE_MAX = int(os.environ.get("OPP_CI_WORKSPACE_MAX", "10"))
 
+# Command the worker shells out to for the host-nix opp_env path. Default is
+# the bare `opp_env` on PATH; a uvx-based service install sets this to
+# "uvx --from opp-env opp_env" so opp_env runs from its own isolated venv.
+# Parsed with shlex.split at the call sites in opp_ci/executor.py.
+OPP_ENV_CMD = os.environ.get("OPP_CI_OPP_ENV_CMD", "opp_env")
+
+# Absolute path to the `uvx` binary baked into generated service units. Empty
+# → the service installer resolves/copies uvx for the service user and writes
+# the absolute path into the unit. Set to override (e.g. a Nix-store path).
+UVX = os.environ.get("OPP_CI_UVX", "")
+
 WORKER_POLL_INTERVAL = int(os.environ.get("OPP_CI_WORKER_POLL_INTERVAL", "10"))
 WORKER_HEARTBEAT_INTERVAL = int(os.environ.get("OPP_CI_WORKER_HEARTBEAT_INTERVAL", "30"))
+# Default nice level for `worker start` (and its build/test subprocesses) so
+# CI work yields to interactive use. Expressible via the worker env file so a
+# service install can persist it. Higher = lower priority; 0 = normal.
+WORKER_NICENESS = int(os.environ.get("OPP_CI_WORKER_NICENESS", "10"))
 WORKER_HEARTBEAT_TIMEOUT = int(os.environ.get("OPP_CI_WORKER_HEARTBEAT_TIMEOUT", "120"))
 
 # How often the coordinator sweeps for workers that have gone silent past

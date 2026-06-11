@@ -427,7 +427,7 @@ def install_project(project, git_ref=None, *, isolation="none", toolchain="none"
     # passed as positional projects so opp_env builds those exact versions
     # rather than resolving each to its latest.
     pins = _opp_env_pin_args(resolved_deps)
-    argv = ["opp_env", "install", "--init"]
+    argv = _opp_env_cmd() + ["install", "--init"]
     if toolchain == "none":
         argv.append("--nixless-workspace")
     argv += pins + [effective_project]
@@ -476,6 +476,18 @@ def run_test(project, kind, *, isolation=None, toolchain=None, recorder=None, **
     # _run_test_direct had no version-aware provider and is no longer dispatched.
     return _run_test_via_opp_env(project, kind, recorder=recorder,
                                  toolchain=toolchain, **kwargs)
+
+
+def _opp_env_cmd():
+    """The argv prefix for invoking opp_env on the host-nix path.
+
+    Reads OPP_CI_OPP_ENV_CMD (default ``opp_env``) and shlex-splits it, so a
+    uvx-based service install can set ``uvx --from opp-env opp_env`` to run
+    opp_env from its own isolated venv. Read at call time so an env-file
+    override applied after import still takes effect.
+    """
+    from opp_ci import config as cfg
+    return shlex.split(cfg.OPP_ENV_CMD)
 
 
 def _opp_env_pin_args(resolved_deps):
@@ -1569,7 +1581,7 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
 
     def _opp_env_run(inner):
         return run_external(
-            ["opp_env", "run", "-w", ws, *pins, effective_project, "-c", inner],
+            _opp_env_cmd() + ["run", "-w", ws, *pins, effective_project, "-c", inner],
             label=f"opp_env:{effective_project}", env=env, cwd=run_cwd,
             stream=True, on_output=recorder.output if recorder else None)
 

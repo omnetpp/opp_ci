@@ -50,9 +50,11 @@ individual runs or matrices, or set it as the matrix default.
 opp_ci serve --host 0.0.0.0 --port 8080
 ```
 
-For long-running deployments, run `serve` (and `worker start`) under
-systemd instead of a bare shell — see [systemd.md](systemd.md) for the
-unit files, install script, and per-role configuration.
+For long-running deployments, install `serve` (and workers) as a managed
+service straight from the CLI — `opp_ci serve service install` /
+`opp_ci worker service install`. These run opp_ci from GitHub via `uvx`
+(refreshing on each restart). See [systemd.md](systemd.md) (Linux),
+[launchd.md](launchd.md) (macOS workers), and [nixos.md](nixos.md).
 
 The web UI requires login. Before the first start, set
 `OPP_CI_SESSION_SECRET` to a random value and create a bootstrap
@@ -65,8 +67,9 @@ Serve HTTPS one of two ways:
 
 - **Native TLS in `opp_ci serve`** (recommended for single-service
   hosts) — paste a Cloudflare Origin Certificate (or Let's Encrypt
-  files) into `/etc/opp_ci/tls/` and activate the shipped systemd
-  drop-in. End-to-end TLS, no extra processes. See [ssl.md](ssl.md).
+  files) into `/etc/opp_ci/tls/` and install serve with `--tls` for the
+  cert-watch auto-reload units. End-to-end TLS, no extra processes. See
+  [ssl.md](ssl.md).
 - **Reverse proxy with HTTPS** (Caddy or nginx + Let's Encrypt) — keep
   serve on `127.0.0.1:8080` and put the proxy in front on 443. Right
   call if you host other services on the same VM.

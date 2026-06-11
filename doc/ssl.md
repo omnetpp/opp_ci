@@ -91,8 +91,8 @@ No `CA_BUNDLE` config needed, and the edge's DDoS protections apply to
 worker traffic.
 
 The shipped `/etc/opp_ci/tls/cloudflare-origin-ca.pem` is a bundle of
-both Cloudflare Origin CA roots (RSA + ECC), installed by
-`packaging/systemd/install.sh`. Refresh it from
+both Cloudflare Origin CA roots (RSA + ECC), written by
+`opp_ci serve service install`. Refresh it from
 <https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/>
 if Cloudflare rotates the root (rare).
 

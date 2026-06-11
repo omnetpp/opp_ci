@@ -1,8 +1,0 @@
-[Unit]
-Description=opp_ci (coordinator and/or workers)
-Documentation=https://github.com/omnetpp/opp_ci
-# Wants= entries for the units you actually enable on this host
-# are added via drop-ins (see packaging/systemd/install.sh).
-
-[Install]
-WantedBy=multi-user.target
