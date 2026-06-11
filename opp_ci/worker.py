@@ -25,6 +25,67 @@ from opp_ci.executor import install_project, run_test
 _logger = logging.getLogger(__name__)
 
 
+class _RunOutputStreamer:
+    """Ships a running test's output lines to the coordinator for live view.
+
+    The executor calls :py:meth:`append` with each output line (from its
+    stream-pump threads, or the in-process tee). A background thread flushes
+    the accumulated lines to ``/api/runs/{id}/output-append`` every flush
+    interval, so the run-detail page sees output within a couple of seconds
+    rather than only at completion. Best-effort: a failed POST drops that
+    batch — the full, authoritative stdout/stderr is still reported when the
+    run finishes, so the live view is purely a convenience.
+
+    Uses its own session; the flush thread is the only one that posts (the
+    final flush in :py:meth:`stop` runs after the thread is joined), so the
+    session is never used concurrently.
+    """
+
+    def __init__(self, session, coordinator_url, run_id):
+        self._session = session
+        self._url = f"{coordinator_url.rstrip('/')}/api/runs/{run_id}/output-append"
+        self._run_id = run_id
+        self._pending = []
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = None
+
+    def append(self, line):
+        with self._lock:
+            self._pending.append(line)
+
+    def start(self):
+        self._thread = threading.Thread(
+            target=self._loop, name=f"opp_ci-runout-{self._run_id}", daemon=True)
+        self._thread.start()
+
+    def _drain(self):
+        with self._lock:
+            batch, self._pending = self._pending, []
+        return batch
+
+    def _flush(self):
+        batch = self._drain()
+        if not batch:
+            return
+        try:
+            self._session.post(self._url, json={"lines": batch}, timeout=10)
+        except requests.RequestException as e:
+            # Dropped on purpose — _report_result still sends the full output.
+            _logger.debug("Run #%d output ship failed: %s", self._run_id, e)
+
+    def _loop(self):
+        from opp_ci import config as cfg
+        while not self._stop.wait(cfg.RUN_OUTPUT_FLUSH_INTERVAL):
+            self._flush()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        self._flush()  # ship whatever's left
+
+
 class WorkerAgent:
     """
     Long-running worker that polls the coordinator for jobs and executes them.
@@ -267,34 +328,43 @@ class WorkerAgent:
         except Exception as e:
             _logger.warning("Snapshot capture failed for run #%d: %s", run_id, e)
 
+        # Stream the test command's output to the coordinator while it runs so
+        # the run-detail page can live-tail it (best-effort; the full output is
+        # still reported at completion). Its own session, stopped on every exit
+        # path via the finally below.
+        streamer = _RunOutputStreamer(self._make_session(), self.coordinator_url, run_id)
+        streamer.start()
         try:
-            install_project(project, git_ref=git_ref,
-                            isolation=isolation, toolchain=toolchain,
-                            resolved_deps=run_kwargs["resolved_deps"],
-                            compiler=run_kwargs["compiler"],
-                            compiler_version=run_kwargs["compiler_version"])
-        except RuntimeError as e:
-            _logger.error("Install failed for run #%d: %s", run_id, e)
-            self._report_result(run_id, "ERROR", stderr=str(e))
-            return
+            try:
+                install_project(project, git_ref=git_ref,
+                                isolation=isolation, toolchain=toolchain,
+                                resolved_deps=run_kwargs["resolved_deps"],
+                                compiler=run_kwargs["compiler"],
+                                compiler_version=run_kwargs["compiler_version"])
+            except RuntimeError as e:
+                _logger.error("Install failed for run #%d: %s", run_id, e)
+                self._report_result(run_id, "ERROR", stderr=str(e))
+                return
 
-        try:
-            outcome = run_test(project, kind, **run_kwargs)
-        except Exception as e:
-            _logger.error("Test execution failed for run #%d: %s", run_id, e)
-            self._report_result(run_id, "ERROR", stderr=str(e))
-            return
+            try:
+                outcome = run_test(project, kind, on_output=streamer.append, **run_kwargs)
+            except Exception as e:
+                _logger.error("Test execution failed for run #%d: %s", run_id, e)
+                self._report_result(run_id, "ERROR", stderr=str(e))
+                return
 
-        self._report_result(
-            run_id,
-            outcome["result_code"],
-            test_exec_seconds=outcome["test_exec_seconds"],
-            commit_sha=outcome.get("commit_sha"),
-            stdout=outcome["stdout"],
-            stderr=outcome["stderr"],
-            details=outcome.get("details"),
-        )
-        _logger.info("Run #%d completed: %s (%.1fs)", run_id, outcome["result_code"], outcome["test_exec_seconds"])
+            self._report_result(
+                run_id,
+                outcome["result_code"],
+                test_exec_seconds=outcome["test_exec_seconds"],
+                commit_sha=outcome.get("commit_sha"),
+                stdout=outcome["stdout"],
+                stderr=outcome["stderr"],
+                details=outcome.get("details"),
+            )
+            _logger.info("Run #%d completed: %s (%.1fs)", run_id, outcome["result_code"], outcome["test_exec_seconds"])
+        finally:
+            streamer.stop()
 
     def _report_snapshot(self, run_id, snapshot):
         try:

@@ -1093,6 +1093,39 @@ def run_detail(request: Request, run_id: int, current_user: User = Depends(requi
         session.close()
 
 
+@web_router.get("/test-runs/{run_id}/output/tail")
+def run_output_tail(request: Request, run_id: int, cursor: str = Query(default=None),
+                    current_user: User = Depends(require_user())):
+    """Live test-output tail for the run-detail page.
+
+    Serves lines the worker streamed while the run executes. `done` flips true
+    once the run reaches a terminal lifecycle, telling the page to reload and
+    show the full stored stdout/stderr instead.
+    """
+    from opp_ci.run_output import STORE
+    session = SessionLocal()
+    try:
+        run = session.execute(
+            select(TestRun).where(TestRun.id == run_id)
+        ).scalar_one_or_none()
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
+        lifecycle = run.lifecycle.value if run.lifecycle else None
+    finally:
+        session.close()
+    try:
+        after = int(cursor) if cursor else 0
+    except (TypeError, ValueError):
+        after = 0
+    entries, last_seq = STORE.since(run_id, after)
+    return JSONResponse({
+        "available": True, "reason": None,
+        "done": lifecycle not in ("queued", "running"),
+        "entries": _render_output_entries(entries),
+        "cursor": str(last_seq) if last_seq else "",
+    })
+
+
 @web_router.post("/tests/{test_id}/rename", dependencies=[Depends(require_csrf)])
 def test_rename(test_id: int,
                 current_user: User = Depends(require_user("submitter")),
@@ -2385,6 +2418,11 @@ def _shipped_tail_response(worker_id, cursor):
     return JSONResponse({"available": True, "reason": None,
                          "entries": _render_shipped_entries(entries),
                          "cursor": str(last_seq) if last_seq else ""})
+
+
+def _render_output_entries(entries):
+    """Live run-output lines → rows with escaped, ANSI-rendered html."""
+    return [{"html": str(_ansi_to_html(e.get("text") or ""))} for e in entries]
 
 
 def _worker_or_404(session, worker_id):

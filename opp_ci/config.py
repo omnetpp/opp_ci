@@ -84,6 +84,14 @@ WORKER_LOG_RING = int(os.environ.get("OPP_CI_WORKER_LOG_RING", "2000"))
 WORKER_LOG_BATCH = int(os.environ.get("OPP_CI_WORKER_LOG_BATCH", "500"))
 SERVE_WORKER_LOG_RING = int(os.environ.get("OPP_CI_SERVE_WORKER_LOG_RING", "2000"))
 
+# Live per-run test output (streamed to the run-detail page while a run runs).
+# The worker batches output lines and ships them every FLUSH_INTERVAL seconds;
+# the coordinator keeps the last SERVE_RUN_OUTPUT_RING lines for each of at
+# most SERVE_RUN_OUTPUT_MAX_RUNS in-flight runs (LRU). All in-memory.
+RUN_OUTPUT_FLUSH_INTERVAL = float(os.environ.get("OPP_CI_RUN_OUTPUT_FLUSH_INTERVAL", "2"))
+SERVE_RUN_OUTPUT_RING = int(os.environ.get("OPP_CI_SERVE_RUN_OUTPUT_RING", "5000"))
+SERVE_RUN_OUTPUT_MAX_RUNS = int(os.environ.get("OPP_CI_SERVE_RUN_OUTPUT_MAX_RUNS", "64"))
+
 # ── TLS ───────────────────────────────────────────────────────────────
 #
 # Native TLS termination in `opp_ci serve`. Empty pair → plain HTTP, the

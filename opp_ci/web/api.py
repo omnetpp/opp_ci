@@ -105,6 +105,9 @@ class WorkerResultRequest(BaseModel):
     stderr: str | None = None
     details: dict | None = None
 
+class RunOutputAppendRequest(BaseModel):
+    lines: list[str]
+
 class CreateTokenRequest(BaseModel):
     name: str
     role: str = "readonly"
@@ -688,6 +691,38 @@ async def worker_report_snapshot(
         session.close()
 
 
+@router.post("/runs/{run_id}/output-append")
+async def worker_append_run_output(
+    run_id: int,
+    req: RunOutputAppendRequest,
+    worker_info: dict = Depends(require_worker_token()),
+):
+    """Worker streams a running test's output lines for the live run-detail view.
+
+    Best-effort and transient: lines land in an in-memory buffer the
+    run-detail page tails, never in the DB (the full output arrives via
+    /workers/result at completion). Only the run's currently-assigned worker
+    may append; a reclaimed run's stale chunks are dropped with a benign 200,
+    mirroring the snapshot/result endpoints.
+    """
+    session = SessionLocal()
+    try:
+        run = session.execute(
+            select(TestRun).where(TestRun.id == run_id)
+        ).scalar_one_or_none()
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
+        owner = run.worker_id
+    finally:
+        session.close()
+    if owner != worker_info["worker_id"]:
+        return {"status": "dropped", "reason": "reclaimed"}
+    if req.lines:
+        from opp_ci.run_output import STORE
+        STORE.append(run_id, req.lines)
+    return {"status": "ok"}
+
+
 @router.post("/workers/result")
 async def worker_report_result(
     req: WorkerResultRequest,
@@ -752,6 +787,11 @@ async def worker_report_result(
         session.commit()
         _logger.info("Run #%d result: %s (worker '%s')", run.id, req.result_code,
                      worker_info["worker_name"])
+
+        # Free the live-output buffer; the run-detail page now renders the
+        # full stdout/stderr from the row instead.
+        from opp_ci.run_output import STORE as _run_output_store
+        _run_output_store.drop(run.id)
 
         try:
             from opp_ci.github.status import update_github_status

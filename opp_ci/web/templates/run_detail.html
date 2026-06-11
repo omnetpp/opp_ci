@@ -78,6 +78,93 @@
     </table>
 </div>
 
+{% if run.lifecycle.value == "running" %}
+<div class="card">
+    <style>
+        .ro-pane {
+            background: #1e1e1e; color: #d4d4d4; border-radius: 6px;
+            padding: 0.75rem 1rem; font-family: monospace; font-size: 0.8rem;
+            line-height: 1.45; height: 60vh; overflow-y: auto; white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .ro-line { display: block; }
+        .ro-toolbar { display: flex; align-items: center; gap: 1rem; margin: 0.4rem 0 0.6rem;
+                      font-size: 0.85rem; color: var(--muted); flex-wrap: wrap; }
+        .ro-toolbar label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+        .ro-status { margin-left: auto; }
+    </style>
+    <h2>Live output <span class="derived-tag" title="streamed from the worker while the test runs; replaced by the full stdout/stderr once it finishes">live</span></h2>
+    <div class="ro-toolbar">
+        <label><input type="checkbox" id="ro-follow" checked> Follow tail</label>
+        <button id="ro-pause" class="btn btn-sm btn-secondary">Pause</button>
+        <span class="ro-status" id="ro-status">connecting…</span>
+    </div>
+    <div class="ro-pane" id="ro-pane"></div>
+</div>
+<script>
+(function () {
+    const TAIL_URL = {{ ("/test-runs/" ~ run.id ~ "/output/tail") | tojson }};
+    const POLL_MS = 2000;
+    const pane = document.getElementById("ro-pane");
+    const followBox = document.getElementById("ro-follow");
+    const pauseBtn = document.getElementById("ro-pause");
+    const statusEl = document.getElementById("ro-status");
+    let cursor = null, paused = false, timer = null;
+
+    function atBottom() { return pane.scrollHeight - pane.scrollTop - pane.clientHeight < 24; }
+
+    function append(entries) {
+        if (!entries.length) return;
+        const stick = followBox.checked;
+        const frag = document.createDocumentFragment();
+        for (const e of entries) {
+            const line = document.createElement("span");
+            line.className = "ro-line";
+            const msg = document.createElement("span");
+            msg.innerHTML = e.html;           // server-escaped + ANSI-rendered
+            line.appendChild(msg);
+            line.appendChild(document.createTextNode("\n"));
+            frag.appendChild(line);
+        }
+        pane.appendChild(frag);
+        if (stick) pane.scrollTop = pane.scrollHeight;
+    }
+
+    function setStatus(t) { statusEl.textContent = t; }
+
+    async function poll() {
+        try {
+            const url = cursor ? TAIL_URL + "?cursor=" + encodeURIComponent(cursor) : TAIL_URL;
+            const resp = await fetch(url, { headers: { "Accept": "application/json" } });
+            if (!resp.ok) throw new Error("HTTP " + resp.status);
+            const data = await resp.json();
+            append(data.entries);
+            if (data.cursor) cursor = data.cursor;
+            if (data.done) { setStatus("finished — loading full output…"); location.reload(); return; }
+            setStatus("live · " + new Date().toLocaleTimeString());
+        } catch (err) {
+            setStatus("error: " + err.message);
+        } finally {
+            if (!paused) timer = setTimeout(poll, POLL_MS);
+        }
+    }
+
+    pauseBtn.addEventListener("click", function () {
+        paused = !paused;
+        pauseBtn.textContent = paused ? "Resume" : "Pause";
+        if (paused) { clearTimeout(timer); setStatus("paused"); }
+        else { setStatus("resuming…"); poll(); }
+    });
+    pane.addEventListener("scroll", function () {
+        if (!atBottom() && followBox.checked) followBox.checked = false;
+        else if (atBottom() && !followBox.checked) followBox.checked = true;
+    });
+
+    poll();
+})();
+</script>
+{% endif %}
+
 {% if run.result_code %}
 <div class="card">
     <h2>Result: {{ run.result_code.value }}</h2>

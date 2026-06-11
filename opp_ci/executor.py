@@ -33,6 +33,32 @@ def _log_captured_output(label, result, level):
     _logger.log(level, "[%s] stderr:\n%s", label, _tail(result.stderr))
 
 
+class _CallbackStringIO(io.StringIO):
+    """StringIO that also forwards each completed line to ``on_output``.
+
+    Used for the in-process test path (`_run_test_direct`), where output is
+    captured by redirecting stdout/stderr into a buffer rather than read from
+    a subprocess. Subclassing StringIO keeps ``getvalue()`` working, so the
+    final captured output is unchanged; the callback just gets a live copy.
+    """
+
+    def __init__(self, on_output):
+        super().__init__()
+        self._on_output = on_output
+        self._pending = ""
+
+    def write(self, s):
+        n = super().write(s)
+        self._pending += s
+        while "\n" in self._pending:
+            line, self._pending = self._pending.split("\n", 1)
+            try:
+                self._on_output(line)
+            except Exception:  # noqa: BLE001 — live streaming is best-effort
+                pass
+        return n
+
+
 def _pump_stream(stream, sink, emit):
     """Read *stream* line by line, append each line to *sink* and pass it to
     *emit*. Runs on its own thread so stdout and stderr can be teed
@@ -45,7 +71,7 @@ def _pump_stream(stream, sink, emit):
         stream.close()
 
 
-def _run_external_streaming(args, *, label, timeout, env, cwd, start):
+def _run_external_streaming(args, *, label, timeout, env, cwd, start, on_output=None):
     """Popen variant of :py:func:`run_external` that logs the child's output
     line by line *as it is produced* (each line at INFO, prefixed with
     *label*), so a long ``podman build`` or ``opp_env`` compile shows live
@@ -60,7 +86,17 @@ def _run_external_streaming(args, *, label, timeout, env, cwd, start):
         text=True, bufsize=1, env=env, cwd=cwd,
     )
     out_lines, err_lines = [], []
-    emit = lambda line: _logger.info("[%s] %s", label, line)
+
+    def emit(line):
+        _logger.info("[%s] %s", label, line)
+        # Tee to the live per-run output stream when the caller wants it.
+        # Called from both pump threads, so on_output must be thread-safe;
+        # never let a streaming hiccup break the test run.
+        if on_output is not None:
+            try:
+                on_output(line)
+            except Exception:  # noqa: BLE001
+                pass
     threads = [
         threading.Thread(target=_pump_stream, args=(proc.stdout, out_lines, emit)),
         threading.Thread(target=_pump_stream, args=(proc.stderr, err_lines, emit)),
@@ -90,7 +126,8 @@ def _run_external_streaming(args, *, label, timeout, env, cwd, start):
     )
 
 
-def run_external(args, *, label, timeout=None, env=None, cwd=None, stream=False):
+def run_external(args, *, label, timeout=None, env=None, cwd=None, stream=False,
+                 on_output=None):
     """subprocess.run + structured logging.
 
     Always logs the command at INFO and the exit code + elapsed time. On a
@@ -114,6 +151,7 @@ def run_external(args, *, label, timeout=None, env=None, cwd=None, stream=False)
     if stream:
         return _run_external_streaming(
             args, label=label, timeout=timeout, env=env, cwd=cwd, start=start,
+            on_output=on_output,
         )
     result = subprocess.run(
         args, capture_output=True, text=True,
@@ -361,7 +399,7 @@ def install_project(project, git_ref=None, *, isolation="none", toolchain="none"
     _logger.info("Installation of %s complete in %s", effective_project, ws)
 
 
-def run_test(project, kind, *, isolation=None, toolchain=None, **kwargs):
+def run_test(project, kind, *, isolation=None, toolchain=None, on_output=None, **kwargs):
     """
     Run a test for the given project, dispatching on isolation × toolchain.
 
@@ -372,16 +410,21 @@ def run_test(project, kind, *, isolation=None, toolchain=None, **kwargs):
     Extra kwargs (git_ref, opp_file, mode, os, os_version, compiler,
     compiler_version) are passed through; helpers extract what they need.
 
+    ``on_output(line)``, when given, is called with each output line of the
+    test command as it is produced (best-effort, for the live run-detail
+    view). It does not affect the returned stdout/stderr.
+
     Returns a dict with keys: result_code, test_exec_seconds, stdout, stderr,
     details, commit_sha.
     """
     isolation = isolation or "none"
     toolchain = toolchain or "none"
     if isolation == "podman":
-        return _run_test_in_podman(project, kind, toolchain=toolchain, **kwargs)
+        return _run_test_in_podman(project, kind, toolchain=toolchain,
+                                   on_output=on_output, **kwargs)
     if toolchain == "nix":
-        return _run_test_via_opp_env(project, kind, **kwargs)
-    return _run_test_direct(project, kind, **kwargs)
+        return _run_test_via_opp_env(project, kind, on_output=on_output, **kwargs)
+    return _run_test_direct(project, kind, on_output=on_output, **kwargs)
 
 
 def _opp_cache_root():
@@ -1022,7 +1065,7 @@ def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler
     )
 
 
-def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
+def _run_test_in_podman(project, kind, *, toolchain="none", on_output=None, **kwargs):
     """Run a test inside a Podman container.
 
     Two flavours, distinguished by whether the matrix has an opp_file:
@@ -1183,7 +1226,8 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
 
     start = time.time()
     try:
-        result = run_external(podman_cmd, label=f"podman:{image}", stream=True)
+        result = run_external(podman_cmd, label=f"podman:{image}", stream=True,
+                              on_output=on_output)
         duration = time.time() - start
     finally:
         if worktree_path:
@@ -1203,7 +1247,7 @@ def _run_test_in_podman(project, kind, *, toolchain="none", **kwargs):
     }
 
 
-def _run_test_via_opp_env(project, kind, **kwargs):
+def _run_test_via_opp_env(project, kind, on_output=None, **kwargs):
     """Run a test via opp_env subprocess (Nix environment on the host)."""
     git_ref = kwargs.get("git_ref")
     mode = kwargs.get("mode")
@@ -1235,7 +1279,7 @@ def _run_test_via_opp_env(project, kind, **kwargs):
     start = time.time()
     with _workspace_lock(ws):
         result = run_external(args, label=f"opp_env:{effective_project}",
-                              env=env, cwd=ws, stream=True)
+                              env=env, cwd=ws, stream=True, on_output=on_output)
     duration = time.time() - start
 
     result_code = "PASS" if result.returncode == 0 else "FAIL"
@@ -1249,7 +1293,8 @@ def _run_test_via_opp_env(project, kind, **kwargs):
     }
 
 
-def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None, **_unused):
+def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
+                     on_output=None, **_unused):
     """Run a test by calling opp_repl functions directly (no subprocess).
 
     When *git_ref* is set, an isolated git worktree is created for that
@@ -1280,8 +1325,8 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None, *
     ensure_logging_initialized("DEBUG", "DEBUG", None)
 
     _logger.info("Running %s test for %s (direct mode)", kind, project)
-    stdout_buf = io.StringIO()
-    stderr_buf = io.StringIO()
+    stdout_buf = _CallbackStringIO(on_output) if on_output else io.StringIO()
+    stderr_buf = _CallbackStringIO(on_output) if on_output else io.StringIO()
     start = time.time()
     try:
         call_kwargs = {"simulation_project": simulation_project, "build": "task", "build_mode": "task"}
