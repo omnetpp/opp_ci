@@ -249,8 +249,15 @@
         .rs-line { display:block; }
         .rs-line.err { background:rgba(220,53,69,.12); border-left:2px solid rgba(220,53,69,.5); }
         .rs-cmd { display:block; color:#7ee787; font-weight:600; }
+        #rs-stages.commands-only .rs-line { display:none; }
+        .rs-toolbar { display:flex; align-items:center; gap:1rem; margin:.2rem 0 .7rem; font-size:.85rem; color:var(--muted); }
+        .rs-toolbar label { display:inline-flex; align-items:center; gap:.35rem; cursor:pointer; }
     </style>
     <h2>Stages</h2>
+    <div class="rs-toolbar">
+        <label><input type="checkbox" id="rs-cmdonly"> Commands only</label>
+    </div>
+    <div id="rs-stages">
     {% for st in run.stages %}
     <details class="rs-stage"{% if st.status == 'failed' %} open{% endif %}>
         <summary>
@@ -261,7 +268,19 @@
         <div class="rs-pane">{% if st.command %}<span class="rs-cmd">$ {{ st.command }}</span>{% endif %}{% for line in st.output or [] %}<span class="rs-line{{ ' err' if line.stream == 'err' else '' }}">{{ line.text | ansi_to_html }}</span>{% endfor %}</div>
     </details>
     {% endfor %}
+    </div>
 </div>
+<script>
+(function () {
+    var box = document.getElementById("rs-cmdonly");
+    var stages = document.getElementById("rs-stages");
+    if (box && stages) {
+        box.addEventListener("change", function () {
+            stages.classList.toggle("commands-only", box.checked);
+        });
+    }
+})();
+</script>
 {% endif %}
 
 {% if run.result_code %}

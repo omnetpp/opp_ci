@@ -22,15 +22,19 @@ import time
 
 
 class Stage:
-    """Canonical stage names, in display order (see STAGE_ORDER)."""
+    """Canonical stage names, in display order (see STAGE_ORDER).
 
-    CONTAINER_PREPARE = "container.prepare"
-    RUNNER_BOOTSTRAP = "runner.bootstrap"
-    CHECKOUT = "checkout"
-    DEPS_INSTALL = "deps.install"
-    PROJECT_BUILD = "project.build"
-    TEST_RUN = "test.run"
-    CLEANUP = "cleanup"
+    The value is the human label shown in the UI (stepper, badges), so keep
+    it short and clean — no namespacing dots.
+    """
+
+    CONTAINER_PREPARE = "Prepare"
+    RUNNER_BOOTSTRAP = "Bootstrap"
+    CHECKOUT = "Checkout"
+    DEPS_INSTALL = "Install"
+    PROJECT_BUILD = "Build"
+    TEST_RUN = "Test"
+    CLEANUP = "Cleanup"
 
 
 STAGE_ORDER = [
