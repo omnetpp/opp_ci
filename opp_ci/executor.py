@@ -930,7 +930,8 @@ def _label_args(labels, flag):
 
 def _build_nix_runner_image(final_tag, slug, os_name, os_version,
                             compiler, compiler_version, *, distro, distro_version,
-                            flavor, flavor_version, omnetpp_version, push):
+                            flavor, flavor_version, omnetpp_version, push,
+                            on_output=None):
     """Bake a per-omnetpp nix runner image via run+commit.
 
     A Containerfile RUN cannot write into the *runtime* /nix named volume, so
@@ -964,7 +965,7 @@ def _build_nix_runner_image(final_tag, slug, os_name, os_version,
         result = run_external(
             ["podman", "build", "-t", base_tag, *_label_args(base_labels, "--label"),
              "-f", os.path.join(tmp, "Containerfile"), tmp],
-            label=f"podman build {base_tag}", stream=True,
+            label=f"podman build {base_tag}", stream=True, on_output=on_output,
         )
         if result.returncode != 0:
             raise RuntimeError(f"podman build {base_tag} failed (exit {result.returncode})")
@@ -987,6 +988,7 @@ def _build_nix_runner_image(final_tag, slug, os_name, os_version,
              "-v", f"{_NIX_STORE_VOLUME}:/nix",
              base_tag, "install", f"omnetpp-{omnetpp_version}"],
             label=f"bake omnetpp-{omnetpp_version} into {final_tag}", stream=True,
+            on_output=on_output,
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -1010,7 +1012,7 @@ def _build_nix_runner_image(final_tag, slug, os_name, os_version,
 def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version,
                        *, distro=None, distro_version=None,
                        flavor=None, flavor_version=None,
-                       omnetpp_version=None, push=False):
+                       omnetpp_version=None, push=False, on_output=None):
     """Build (and optionally push) one opp-ci-runner image.
 
     *omnetpp_version* is required for both toolchains — it is baked in so the
@@ -1027,7 +1029,7 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
             tag, slug, os_name, os_version, compiler, compiler_version,
             distro=distro, distro_version=distro_version,
             flavor=flavor, flavor_version=flavor_version,
-            omnetpp_version=omnetpp_version, push=push,
+            omnetpp_version=omnetpp_version, push=push, on_output=on_output,
         )
         return
 
@@ -1047,7 +1049,7 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
             ["podman", "build", "-t", tag, *_label_args(labels, "--label"),
              "-f", containerfile_path, tmp],
             label=f"podman build {tag}",
-            stream=True,
+            stream=True, on_output=on_output,
         )
         if result.returncode != 0:
             raise RuntimeError(f"podman build {tag} failed (exit {result.returncode})")
@@ -1058,7 +1060,7 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
 def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version,
                          *, distro=None, distro_version=None,
                          flavor=None, flavor_version=None,
-                         omnetpp_version=None):
+                         omnetpp_version=None, on_output=None):
     """Invoke 'podman build' for the image so podman's layer cache picks up
     any changes — new pinned SHAs from an upstream push, edits to the
     Containerfile template, a different compiler package, a different OMNeT++
@@ -1073,7 +1075,7 @@ def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler
         tag, toolchain, os_name, os_version, compiler, compiler_version,
         distro=distro, distro_version=distro_version,
         flavor=flavor, flavor_version=flavor_version,
-        omnetpp_version=omnetpp_version,
+        omnetpp_version=omnetpp_version, on_output=on_output,
     )
 
 
@@ -1123,12 +1125,26 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         flavor=flavor, flavor_version=flavor_version,
         omnetpp_version=omnetpp_version,
     )
-    _ensure_runner_image(
-        image, toolchain, os_name, os_version, compiler, compiler_version,
-        distro=distro, distro_version=distro_version,
-        flavor=flavor, flavor_version=flavor_version,
-        omnetpp_version=omnetpp_version,
-    )
+    # container.prepare: build/refresh (and, for nix, bake) the runner image.
+    # Cheap and near-silent when everything is layer-cached; the slow first
+    # build streams into this stage. A build failure fails the stage and
+    # propagates (the worker reports ERROR).
+    if recorder is not None:
+        recorder.begin(Stage.CONTAINER_PREPARE, command=f"ensure runner image {image}")
+    try:
+        _ensure_runner_image(
+            image, toolchain, os_name, os_version, compiler, compiler_version,
+            distro=distro, distro_version=distro_version,
+            flavor=flavor, flavor_version=flavor_version,
+            omnetpp_version=omnetpp_version,
+            on_output=recorder.output if recorder else None,
+        )
+    except Exception:
+        if recorder is not None:
+            recorder.end(1, status="failed")
+        raise
+    if recorder is not None:
+        recorder.end(0)
 
     is_catalog = not opp_file
     worktree_path = None

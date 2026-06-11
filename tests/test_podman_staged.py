@@ -130,5 +130,44 @@ class PodmanStagedTests(unittest.TestCase):
         self.assertTrue(any(c[:3] == ["podman", "rm", "-f"] for c in calls))
 
 
+class ContainerPrepareStageTests(unittest.TestCase):
+    """_run_test_in_podman records container.prepare around the image build."""
+
+    _STAGED_OK = {"result_code": "PASS", "test_exec_seconds": 1.0,
+                  "stdout": "", "stderr": "", "details": None, "commit_sha": None}
+
+    def test_prepare_is_first_stage_and_nix_splits_build_test(self):
+        rec = StageRecorder()
+        with mock.patch("opp_ci.executor._podman_image_tag", return_value="img"), \
+             mock.patch("opp_ci.executor.tempfile.mkdtemp", return_value="/tmp/fake"), \
+             mock.patch("opp_ci.executor._ensure_runner_image") as ensure, \
+             mock.patch("opp_ci.executor.resolve_opp_env_id", return_value=("mm1k-latest", None)), \
+             mock.patch("opp_ci.executor._run_podman_staged",
+                        return_value=self._STAGED_OK) as staged:
+            executor._run_test_in_podman(
+                "mm1k", "smoke", toolchain="nix", recorder=rec,
+                resolved_deps={"omnetpp": "6.2.0"})
+        ensure.assert_called_once()
+        self.assertEqual(rec.stages[0]["name"], Stage.CONTAINER_PREPARE)
+        self.assertEqual(rec.stages[0]["status"], PASSED)
+        # nix hands two run stages (build, test) to the staged runner
+        run_stages = staged.call_args.kwargs["run_stages"]
+        self.assertEqual([s[0] for s in run_stages],
+                         [Stage.PROJECT_BUILD, Stage.TEST_RUN])
+
+    def test_prepare_failure_recorded_and_raised(self):
+        rec = StageRecorder()
+        with mock.patch("opp_ci.executor._podman_image_tag", return_value="img"), \
+             mock.patch("opp_ci.executor._ensure_runner_image",
+                        side_effect=RuntimeError("build failed")), \
+             mock.patch("opp_ci.executor.resolve_opp_env_id", return_value=("mm1k-latest", None)):
+            with self.assertRaises(RuntimeError):
+                executor._run_test_in_podman(
+                    "mm1k", "smoke", toolchain="nix", recorder=rec,
+                    resolved_deps={"omnetpp": "6.2.0"})
+        self.assertEqual(rec.stages[0]["name"], Stage.CONTAINER_PREPARE)
+        self.assertEqual(rec.stages[0]["status"], FAILED)
+
+
 if __name__ == "__main__":
     unittest.main()
