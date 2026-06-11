@@ -89,6 +89,10 @@ def _compute_role_from_github(token, login):
         if not in_org:
             return "readonly" if cfg.GITHUB_ALLOW_EXTERNAL else None
 
+        # Org members named explicitly are admins regardless of teams.
+        if login and login.lower() in cfg.GITHUB_ADMIN_USERS:
+            return "admin"
+
         # User is in the org. Check team membership for stricter roles.
         # Admin teams take precedence over submitter teams.
         r = client.get(f"{cfg.GITHUB_BASE_URL}/user/teams", headers=headers)

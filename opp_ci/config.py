@@ -158,6 +158,9 @@ GITHUB_OAUTH_CLIENT_SECRET_FILE = os.environ.get(
 # `OPP_CI_GITHUB_SUBMITTER_TEAMS` == "*" → any member of the org gets
 # `submitter`; else only listed team slugs do.
 GITHUB_ORG = os.environ.get("OPP_CI_GITHUB_ORG", "")
+# Org members whose login is listed here always resolve to `admin`,
+# regardless of team membership. Comma-separated GitHub logins.
+GITHUB_ADMIN_USERS = [s.strip().lower() for s in os.environ.get("OPP_CI_GITHUB_ADMIN_USERS", "").split(",") if s.strip()]
 GITHUB_ADMIN_TEAMS = [s.strip() for s in os.environ.get("OPP_CI_GITHUB_ADMIN_TEAMS", "").split(",") if s.strip()]
 GITHUB_SUBMITTER_TEAMS = [s.strip() for s in os.environ.get("OPP_CI_GITHUB_SUBMITTER_TEAMS", "*").split(",") if s.strip()]
 GITHUB_ALLOW_EXTERNAL = os.environ.get("OPP_CI_GITHUB_ALLOW_EXTERNAL", "1") == "1"

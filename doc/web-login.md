@@ -109,6 +109,7 @@ config vars (set in `serve.env`):
 | Env var | Meaning | Default |
 |---|---|---|
 | `OPP_CI_GITHUB_ORG` | GitHub org to check membership against | empty → no check, every GitHub user → `readonly` |
+| `OPP_CI_GITHUB_ADMIN_USERS` | comma-separated GitHub logins (org members) who always get `admin`, regardless of team | empty |
 | `OPP_CI_GITHUB_ADMIN_TEAMS` | comma-separated team slugs whose members get `admin` | empty |
 | `OPP_CI_GITHUB_SUBMITTER_TEAMS` | team slugs that get `submitter`. Special value `*` = any member of the org | `*` |
 | `OPP_CI_GITHUB_ALLOW_EXTERNAL` | `1`: non-org GitHub users sign in as `readonly`. `0`: rejected | `1` |
@@ -117,6 +118,7 @@ Example for an OMNeT++-style open-source project:
 
 ```ini
 OPP_CI_GITHUB_ORG=omnetpp
+OPP_CI_GITHUB_ADMIN_USERS=rhornig
 OPP_CI_GITHUB_ADMIN_TEAMS=admins
 OPP_CI_GITHUB_SUBMITTER_TEAMS=*
 OPP_CI_GITHUB_ALLOW_EXTERNAL=1
@@ -124,6 +126,7 @@ OPP_CI_GITHUB_ALLOW_EXTERNAL=1
 
 Result:
 
+- The org member `rhornig` → `admin` (named explicitly)
 - Members of `omnetpp/admins` → `admin`
 - Other `omnetpp` org members → `submitter`
 - Anyone else with a GitHub account → `readonly` (can see PR build
