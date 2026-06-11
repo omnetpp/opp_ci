@@ -2494,6 +2494,7 @@ def _detect_capability_tags():
       - flavor:<id>-<version>                Linux only when a flavor marker
                                              (VARIANT_ID or kubuntu-desktop)
                                              is recognised
+      - arch:<arch>                          amd64/aarch64 from platform.machine()
       - compiler:<name>-<major>              for each of gcc, clang on PATH
       - podman                               if "podman --version" succeeds
       - nix                                  if both nix and opp_env are on PATH
@@ -2539,6 +2540,16 @@ def _detect_capability_tags():
         ver = _platform.mac_ver()[0]
         if ver:
             tags.append(f"os:macos-{ver}")
+
+    # Normalise platform.machine() to the matrix 'arch' vocabulary
+    # (matrices pin e.g. amd64/aarch64; the matcher requires arch:<arch>
+    # whenever a run sets one).
+    arch = {
+        "x86_64": "amd64", "amd64": "amd64",
+        "arm64": "aarch64", "aarch64": "aarch64",
+    }.get(_platform.machine().lower())
+    if arch:
+        tags.append(f"arch:{arch}")
 
     for compiler in ("gcc", "clang"):
         if not shutil.which(compiler):
