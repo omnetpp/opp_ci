@@ -106,7 +106,7 @@ class WorkerResultRequest(BaseModel):
     details: dict | None = None
 
 class RunOutputAppendRequest(BaseModel):
-    lines: list[str]
+    events: list[dict]
 
 class CreateTokenRequest(BaseModel):
     name: str
@@ -697,12 +697,12 @@ async def worker_append_run_output(
     req: RunOutputAppendRequest,
     worker_info: dict = Depends(require_worker_token()),
 ):
-    """Worker streams a running test's output lines for the live run-detail view.
+    """Worker streams a running test's stage events for the live run-detail view.
 
-    Best-effort and transient: lines land in an in-memory buffer the
+    Best-effort and transient: events land in an in-memory buffer the
     run-detail page tails, never in the DB (the full output arrives via
     /workers/result at completion). Only the run's currently-assigned worker
-    may append; a reclaimed run's stale chunks are dropped with a benign 200,
+    may append; a reclaimed run's stale events are dropped with a benign 200,
     mirroring the snapshot/result endpoints.
     """
     session = SessionLocal()
@@ -717,9 +717,9 @@ async def worker_append_run_output(
         session.close()
     if owner != worker_info["worker_id"]:
         return {"status": "dropped", "reason": "reclaimed"}
-    if req.lines:
+    if req.events:
         from opp_ci.run_output import STORE
-        STORE.append(run_id, req.lines)
+        STORE.append(run_id, req.events)
     return {"status": "ok"}
 
 

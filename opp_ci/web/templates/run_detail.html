@@ -81,56 +81,124 @@
 {% if run.lifecycle.value == "running" %}
 <div class="card">
     <style>
-        .ro-pane {
-            background: #1e1e1e; color: #d4d4d4; border-radius: 6px;
-            padding: 0.75rem 1rem; font-family: monospace; font-size: 0.8rem;
-            line-height: 1.45; height: 60vh; overflow-y: auto; white-space: pre-wrap;
-            word-break: break-word;
-        }
-        .ro-line { display: block; }
-        .ro-toolbar { display: flex; align-items: center; gap: 1rem; margin: 0.4rem 0 0.6rem;
-                      font-size: 0.85rem; color: var(--muted); flex-wrap: wrap; }
-        .ro-toolbar label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
-        .ro-status { margin-left: auto; }
+        .ro-stepper { display:flex; flex-wrap:wrap; gap:.3rem; margin:.4rem 0 .8rem; }
+        .ro-step { padding:.15rem .55rem; border-radius:4px; font-size:.76rem; background:#333; color:#ccc; cursor:pointer; }
+        .ro-step.running { background:#1f6feb; color:#fff; }
+        .ro-step.passed  { background:#238636; color:#fff; }
+        .ro-step.failed  { background:#da3633; color:#fff; }
+        .ro-step.skipped { background:#555; color:#bbb; }
+        .ro-toolbar { display:flex; align-items:center; gap:1rem; margin:.4rem 0 .6rem; font-size:.85rem; color:var(--muted); flex-wrap:wrap; }
+        .ro-toolbar label { display:inline-flex; align-items:center; gap:.35rem; cursor:pointer; }
+        .ro-status { margin-left:auto; }
+        .ro-stage { border:1px solid #333; border-radius:6px; margin-bottom:.5rem; overflow:hidden; }
+        .ro-stage > summary { cursor:pointer; padding:.45rem .7rem; display:flex; align-items:center; gap:.6rem; font-weight:600; list-style:none; }
+        .ro-stage > summary::-webkit-details-marker { display:none; }
+        .ro-badge { font-size:.7rem; padding:.05rem .5rem; border-radius:10px; }
+        .ro-badge.running{background:#1f6feb;color:#fff}.ro-badge.passed{background:#238636;color:#fff}
+        .ro-badge.failed{background:#da3633;color:#fff}.ro-badge.skipped{background:#555;color:#ddd}
+        .ro-meta { margin-left:auto; font-weight:400; color:var(--muted); font-size:.8rem; }
+        .ro-pane { background:#1e1e1e; color:#d4d4d4; padding:.6rem .8rem; font-family:monospace; font-size:.8rem;
+                   line-height:1.45; max-height:55vh; overflow-y:auto; white-space:pre-wrap; word-break:break-word; border-top:1px solid #333; }
+        .ro-line { display:block; }
+        .ro-line.err { background:rgba(220,53,69,.12); border-left:2px solid rgba(220,53,69,.5); }
+        .ro-cmd { display:block; color:#7ee787; font-weight:600; }
+        .commands-only .ro-line { display:none; }
     </style>
-    <h2>Live output <span class="derived-tag" title="streamed from the worker while the test runs; replaced by the full stdout/stderr once it finishes">live</span></h2>
+    <h2>Live output <span class="derived-tag" title="streamed from the worker while the test runs, organised into stages; replaced by the full stdout/stderr once it finishes">live · staged</span></h2>
+    <div class="ro-stepper" id="ro-stepper"></div>
     <div class="ro-toolbar">
         <label><input type="checkbox" id="ro-follow" checked> Follow tail</label>
+        <label><input type="checkbox" id="ro-cmdonly"> Commands only</label>
         <button id="ro-pause" class="btn btn-sm btn-secondary">Pause</button>
         <span class="ro-status" id="ro-status">connecting…</span>
     </div>
-    <div class="ro-pane" id="ro-pane"></div>
+    <div id="ro-stages"></div>
 </div>
 <script>
 (function () {
     const TAIL_URL = {{ ("/test-runs/" ~ run.id ~ "/output/tail") | tojson }};
     const POLL_MS = 2000;
-    const pane = document.getElementById("ro-pane");
+    const stepperEl = document.getElementById("ro-stepper");
+    const stagesEl = document.getElementById("ro-stages");
     const followBox = document.getElementById("ro-follow");
+    const cmdOnlyBox = document.getElementById("ro-cmdonly");
     const pauseBtn = document.getElementById("ro-pause");
     const statusEl = document.getElementById("ro-status");
-    let cursor = null, paused = false, timer = null;
-
-    function atBottom() { return pane.scrollHeight - pane.scrollTop - pane.clientHeight < 24; }
-
-    function append(entries) {
-        if (!entries.length) return;
-        const stick = followBox.checked;
-        const frag = document.createDocumentFragment();
-        for (const e of entries) {
-            const line = document.createElement("span");
-            line.className = "ro-line";
-            const msg = document.createElement("span");
-            msg.innerHTML = e.html;           // server-escaped + ANSI-rendered
-            line.appendChild(msg);
-            line.appendChild(document.createTextNode("\n"));
-            frag.appendChild(line);
-        }
-        pane.appendChild(frag);
-        if (stick) pane.scrollTop = pane.scrollHeight;
-    }
+    let cursor = null, paused = false, timer = null, runningOrdinal = null;
+    const sections = {};      // ordinal -> {details, badge, meta, pane}
+    const lastStatus = {};    // ordinal -> status (to auto-open only on change)
 
     function setStatus(t) { statusEl.textContent = t; }
+
+    function ensureStage(s) {
+        let sec = sections[s.ordinal];
+        if (!sec) {
+            const details = document.createElement("details");
+            details.className = "ro-stage";
+            const summary = document.createElement("summary");
+            const badge = document.createElement("span");
+            badge.className = "ro-badge";
+            const name = document.createElement("span");
+            name.textContent = s.name || ("stage " + s.ordinal);
+            const meta = document.createElement("span");
+            meta.className = "ro-meta";
+            summary.append(badge, name, meta);
+            const pane = document.createElement("div");
+            pane.className = "ro-pane";
+            if (s.command) {
+                const cmd = document.createElement("span");
+                cmd.className = "ro-cmd";
+                cmd.textContent = "$ " + s.command;
+                pane.appendChild(cmd);
+                pane.appendChild(document.createTextNode("\n"));
+            }
+            details.append(summary, pane);
+            stagesEl.appendChild(details);   // ordinals arrive in order
+            sec = sections[s.ordinal] = { details, badge, meta, pane };
+        }
+        sec.badge.className = "ro-badge " + (s.status || "running");
+        sec.badge.textContent = s.status || "running";
+        sec.meta.textContent = (s.exit === null || s.exit === undefined) ? "" : ("exit " + s.exit);
+        if (lastStatus[s.ordinal] !== s.status) {
+            sec.details.open = (s.status === "running" || s.status === "failed");
+            lastStatus[s.ordinal] = s.status;
+        }
+        if (s.status === "running") runningOrdinal = s.ordinal;
+        return sec;
+    }
+
+    function renderStepper(stages) {
+        stepperEl.innerHTML = "";
+        for (const s of stages) {
+            const step = document.createElement("span");
+            step.className = "ro-step " + (s.status || "");
+            step.textContent = s.name || ("stage " + s.ordinal);
+            step.addEventListener("click", function () {
+                const sec = sections[s.ordinal];
+                if (sec) { sec.details.open = true; sec.details.scrollIntoView({block:"nearest"}); }
+            });
+            stepperEl.appendChild(step);
+        }
+    }
+
+    function appendLines(lines) {
+        const stick = followBox.checked;
+        for (const l of lines) {
+            const sec = sections[l.ordinal];
+            if (!sec) continue;
+            const line = document.createElement("span");
+            line.className = "ro-line" + (l.stream === "err" ? " err" : "");
+            const msg = document.createElement("span");
+            msg.innerHTML = l.html;           // server-escaped + ANSI-rendered
+            line.appendChild(msg);
+            line.appendChild(document.createTextNode("\n"));
+            sec.pane.appendChild(line);
+        }
+        if (stick && runningOrdinal !== null && sections[runningOrdinal]) {
+            const p = sections[runningOrdinal].pane;
+            p.scrollTop = p.scrollHeight;
+        }
+    }
 
     async function poll() {
         try {
@@ -138,7 +206,9 @@
             const resp = await fetch(url, { headers: { "Accept": "application/json" } });
             if (!resp.ok) throw new Error("HTTP " + resp.status);
             const data = await resp.json();
-            append(data.entries);
+            (data.stages || []).forEach(ensureStage);
+            renderStepper(data.stages || []);
+            appendLines(data.lines || []);
             if (data.cursor) cursor = data.cursor;
             if (data.done) { setStatus("finished — loading full output…"); location.reload(); return; }
             setStatus("live · " + new Date().toLocaleTimeString());
@@ -149,15 +219,14 @@
         }
     }
 
+    cmdOnlyBox.addEventListener("change", function () {
+        stagesEl.classList.toggle("commands-only", cmdOnlyBox.checked);
+    });
     pauseBtn.addEventListener("click", function () {
         paused = !paused;
         pauseBtn.textContent = paused ? "Resume" : "Pause";
         if (paused) { clearTimeout(timer); setStatus("paused"); }
         else { setStatus("resuming…"); poll(); }
-    });
-    pane.addEventListener("scroll", function () {
-        if (!atBottom() && followBox.checked) followBox.checked = false;
-        else if (atBottom() && !followBox.checked) followBox.checked = true;
     });
 
     poll();

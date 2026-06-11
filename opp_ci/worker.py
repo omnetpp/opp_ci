@@ -26,15 +26,15 @@ _logger = logging.getLogger(__name__)
 
 
 class _RunOutputStreamer:
-    """Ships a running test's output lines to the coordinator for live view.
+    """Ships a running test's stage events to the coordinator for live view.
 
-    The executor calls :py:meth:`append` with each output line (from its
-    stream-pump threads, or the in-process tee). A background thread flushes
-    the accumulated lines to ``/api/runs/{id}/output-append`` every flush
-    interval, so the run-detail page sees output within a couple of seconds
-    rather than only at completion. Best-effort: a failed POST drops that
-    batch — the full, authoritative stdout/stderr is still reported when the
-    run finishes, so the live view is purely a convenience.
+    The :py:class:`~opp_ci.stages.StageRecorder` calls :py:meth:`append` with
+    each stage event (stage_begin / output / stage_end). A background thread
+    flushes the accumulated events to ``/api/runs/{id}/output-append`` every
+    flush interval, so the run-detail page sees stages and output within a
+    couple of seconds rather than only at completion. Best-effort: a failed
+    POST drops that batch — the full, authoritative stdout/stderr is still
+    reported when the run finishes, so the live view is purely a convenience.
 
     Uses its own session; the flush thread is the only one that posts (the
     final flush in :py:meth:`stop` runs after the thread is joined), so the
@@ -50,9 +50,11 @@ class _RunOutputStreamer:
         self._stop = threading.Event()
         self._thread = None
 
-    def append(self, line):
+    def append(self, event):
+        """Queue one stage event (dict). Called from the executor, including
+        its stream-pump threads, so it must stay cheap and thread-safe."""
         with self._lock:
-            self._pending.append(line)
+            self._pending.append(event)
 
     def start(self):
         self._thread = threading.Thread(
@@ -69,7 +71,7 @@ class _RunOutputStreamer:
         if not batch:
             return
         try:
-            self._session.post(self._url, json={"lines": batch}, timeout=10)
+            self._session.post(self._url, json={"events": batch}, timeout=10)
         except requests.RequestException as e:
             # Dropped on purpose — _report_result still sends the full output.
             _logger.debug("Run #%d output ship failed: %s", self._run_id, e)
@@ -328,26 +330,30 @@ class WorkerAgent:
         except Exception as e:
             _logger.warning("Snapshot capture failed for run #%d: %s", run_id, e)
 
-        # Stream the test command's output to the coordinator while it runs so
-        # the run-detail page can live-tail it (best-effort; the full output is
-        # still reported at completion). Its own session, stopped on every exit
-        # path via the finally below.
+        # Capture the run as ordered stages (deps.install, project.build,
+        # test.run, …) and stream their events live to the coordinator so the
+        # run-detail page can watch progress (best-effort; the full output is
+        # still reported at completion). The streamer has its own session and
+        # is stopped on every exit path via the finally below.
+        from opp_ci.stages import StageRecorder
         streamer = _RunOutputStreamer(self._make_session(), self.coordinator_url, run_id)
         streamer.start()
+        recorder = StageRecorder(on_event=streamer.append)
         try:
             try:
                 install_project(project, git_ref=git_ref,
                                 isolation=isolation, toolchain=toolchain,
                                 resolved_deps=run_kwargs["resolved_deps"],
                                 compiler=run_kwargs["compiler"],
-                                compiler_version=run_kwargs["compiler_version"])
+                                compiler_version=run_kwargs["compiler_version"],
+                                recorder=recorder)
             except RuntimeError as e:
                 _logger.error("Install failed for run #%d: %s", run_id, e)
                 self._report_result(run_id, "ERROR", stderr=str(e))
                 return
 
             try:
-                outcome = run_test(project, kind, on_output=streamer.append, **run_kwargs)
+                outcome = run_test(project, kind, recorder=recorder, **run_kwargs)
             except Exception as e:
                 _logger.error("Test execution failed for run #%d: %s", run_id, e)
                 self._report_result(run_id, "ERROR", stderr=str(e))

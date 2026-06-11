@@ -1096,9 +1096,10 @@ def run_detail(request: Request, run_id: int, current_user: User = Depends(requi
 @web_router.get("/test-runs/{run_id}/output/tail")
 def run_output_tail(request: Request, run_id: int, cursor: str = Query(default=None),
                     current_user: User = Depends(require_user())):
-    """Live test-output tail for the run-detail page.
+    """Live staged-output tail for the run-detail page.
 
-    Serves lines the worker streamed while the run executes. `done` flips true
+    Returns the run's stages (always in full — small) plus output lines newer
+    than `cursor`, each attributed to its stage's ordinal. `done` flips true
     once the run reaches a terminal lifecycle, telling the page to reload and
     show the full stored stdout/stderr instead.
     """
@@ -1117,11 +1118,12 @@ def run_output_tail(request: Request, run_id: int, cursor: str = Query(default=N
         after = int(cursor) if cursor else 0
     except (TypeError, ValueError):
         after = 0
-    entries, last_seq = STORE.since(run_id, after)
+    stages, lines, last_seq = STORE.snapshot(run_id, after)
     return JSONResponse({
         "available": True, "reason": None,
         "done": lifecycle not in ("queued", "running"),
-        "entries": _render_output_entries(entries),
+        "stages": [_render_stage(s) for s in stages],
+        "lines": _render_output_lines(lines),
         "cursor": str(last_seq) if last_seq else "",
     })
 
@@ -2420,9 +2422,23 @@ def _shipped_tail_response(worker_id, cursor):
                          "cursor": str(last_seq) if last_seq else ""})
 
 
-def _render_output_entries(entries):
-    """Live run-output lines → rows with escaped, ANSI-rendered html."""
-    return [{"html": str(_ansi_to_html(e.get("text") or ""))} for e in entries]
+def _render_output_lines(lines):
+    """Live stage output lines → rows with escaped, ANSI-rendered html, kept
+    tagged with their stage ordinal and stream so the UI can place + mark them."""
+    return [{"ordinal": l.get("ordinal"), "stream": l.get("stream", "out"),
+             "html": str(_ansi_to_html(l.get("text") or ""))} for l in lines]
+
+
+def _render_stage(stage):
+    """Stage summary for the run-detail view (command stays plain text — the
+    UI sets it via textContent, so no escaping needed here)."""
+    return {
+        "ordinal": stage.get("ordinal"),
+        "name": stage.get("name"),
+        "command": stage.get("command"),
+        "status": stage.get("status"),
+        "exit": stage.get("exit"),
+    }
 
 
 def _worker_or_404(session, worker_id):

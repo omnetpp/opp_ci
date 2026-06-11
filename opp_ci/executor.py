@@ -12,6 +12,8 @@ import threading
 import time
 import uuid
 
+from opp_ci.stages import Stage
+
 _logger = logging.getLogger(__name__)
 
 
@@ -59,14 +61,15 @@ class _CallbackStringIO(io.StringIO):
         return n
 
 
-def _pump_stream(stream, sink, emit):
+def _pump_stream(stream, sink, emit, stream_name):
     """Read *stream* line by line, append each line to *sink* and pass it to
-    *emit*. Runs on its own thread so stdout and stderr can be teed
-    concurrently without one blocking the other."""
+    *emit* tagged with *stream_name* ("out"/"err"). Runs on its own thread so
+    stdout and stderr can be teed concurrently without one blocking the
+    other."""
     try:
         for line in iter(stream.readline, ""):
             sink.append(line)
-            emit(line.rstrip("\n"))
+            emit(line.rstrip("\n"), stream_name)
     finally:
         stream.close()
 
@@ -87,19 +90,19 @@ def _run_external_streaming(args, *, label, timeout, env, cwd, start, on_output=
     )
     out_lines, err_lines = [], []
 
-    def emit(line):
+    def emit(line, stream_name):
         _logger.info("[%s] %s", label, line)
-        # Tee to the live per-run output stream when the caller wants it.
-        # Called from both pump threads, so on_output must be thread-safe;
-        # never let a streaming hiccup break the test run.
+        # Tee to the live per-run output stream when the caller wants it,
+        # tagged with the stream it came from. Called from both pump threads,
+        # so on_output must be thread-safe; never let a hiccup break the run.
         if on_output is not None:
             try:
-                on_output(line)
+                on_output(stream_name, line)
             except Exception:  # noqa: BLE001
                 pass
     threads = [
-        threading.Thread(target=_pump_stream, args=(proc.stdout, out_lines, emit)),
-        threading.Thread(target=_pump_stream, args=(proc.stderr, err_lines, emit)),
+        threading.Thread(target=_pump_stream, args=(proc.stdout, out_lines, emit, "out")),
+        threading.Thread(target=_pump_stream, args=(proc.stderr, err_lines, emit, "err")),
     ]
     for t in threads:
         t.start()
@@ -363,7 +366,8 @@ def resolve_commit_sha(project, opp_file=None):
 
 
 def install_project(project, git_ref=None, *, isolation="none", toolchain="none",
-                    resolved_deps=None, compiler=None, compiler_version=None):
+                    resolved_deps=None, compiler=None, compiler_version=None,
+                    recorder=None):
     """Install a project via opp_env on the worker's host.
 
     Only meaningful when ``isolation=none`` and ``toolchain=nix``:
@@ -375,6 +379,9 @@ def install_project(project, git_ref=None, *, isolation="none", toolchain="none"
     coordinate that picks the per-coordinate workspace; they must match the
     axes the run step passes to :py:func:`_opp_env_workspace` so install and
     run land in the *same* directory (omnetpp built once, reused by the run).
+
+    When ``recorder`` is given and the install actually runs (host-nix), it is
+    captured as a ``deps.install`` stage; on the no-op paths no stage is added.
     """
     if isolation != "none" or toolchain != "nix":
         _logger.info("Skipping install (isolation=%s, toolchain=%s)", isolation, toolchain)
@@ -388,18 +395,22 @@ def install_project(project, git_ref=None, *, isolation="none", toolchain="none"
     _gc_workspaces()
     # --init marks the workspace on first use (same flag the host Containerfile
     # uses); it is a no-op once the workspace exists, so reuse is idempotent.
+    argv = ["opp_env", "install", "--init", effective_project]
+    if recorder is not None:
+        recorder.begin(Stage.DEPS_INSTALL, command=_format_argv(argv))
     with _workspace_lock(ws):
         result = run_external(
-            ["opp_env", "install", "--init", effective_project],
-            label=f"opp_env install {effective_project}",
-            cwd=ws,
+            argv, label=f"opp_env install {effective_project}", cwd=ws,
+            stream=True, on_output=recorder.output if recorder else None,
         )
+    if recorder is not None:
+        recorder.end(result.returncode)
     if result.returncode != 0:
         raise RuntimeError(f"opp_env install {effective_project} failed (exit code {result.returncode})")
     _logger.info("Installation of %s complete in %s", effective_project, ws)
 
 
-def run_test(project, kind, *, isolation=None, toolchain=None, on_output=None, **kwargs):
+def run_test(project, kind, *, isolation=None, toolchain=None, recorder=None, **kwargs):
     """
     Run a test for the given project, dispatching on isolation × toolchain.
 
@@ -410,9 +421,10 @@ def run_test(project, kind, *, isolation=None, toolchain=None, on_output=None, *
     Extra kwargs (git_ref, opp_file, mode, os, os_version, compiler,
     compiler_version) are passed through; helpers extract what they need.
 
-    ``on_output(line)``, when given, is called with each output line of the
-    test command as it is produced (best-effort, for the live run-detail
-    view). It does not affect the returned stdout/stderr.
+    ``recorder``, when given, is a :py:class:`opp_ci.stages.StageRecorder` the
+    helpers drive to capture the run as ordered stages (project.build,
+    test.run, …) and stream live events. It does not affect the returned
+    stdout/stderr.
 
     Returns a dict with keys: result_code, test_exec_seconds, stdout, stderr,
     details, commit_sha.
@@ -421,10 +433,10 @@ def run_test(project, kind, *, isolation=None, toolchain=None, on_output=None, *
     toolchain = toolchain or "none"
     if isolation == "podman":
         return _run_test_in_podman(project, kind, toolchain=toolchain,
-                                   on_output=on_output, **kwargs)
+                                   recorder=recorder, **kwargs)
     if toolchain == "nix":
-        return _run_test_via_opp_env(project, kind, on_output=on_output, **kwargs)
-    return _run_test_direct(project, kind, on_output=on_output, **kwargs)
+        return _run_test_via_opp_env(project, kind, recorder=recorder, **kwargs)
+    return _run_test_direct(project, kind, recorder=recorder, **kwargs)
 
 
 def _opp_cache_root():
@@ -1065,7 +1077,7 @@ def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler
     )
 
 
-def _run_test_in_podman(project, kind, *, toolchain="none", on_output=None, **kwargs):
+def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwargs):
     """Run a test inside a Podman container.
 
     Two flavours, distinguished by whether the matrix has an opp_file:
@@ -1224,11 +1236,15 @@ def _run_test_in_podman(project, kind, *, toolchain="none", on_output=None, **kw
     podman_cmd.append(image)
     podman_cmd += container_args
 
+    if recorder is not None:
+        recorder.begin(Stage.TEST_RUN, command=_format_argv(podman_cmd))
     start = time.time()
     try:
         result = run_external(podman_cmd, label=f"podman:{image}", stream=True,
-                              on_output=on_output)
+                              on_output=recorder.output if recorder else None)
         duration = time.time() - start
+        if recorder is not None:
+            recorder.end(result.returncode)
     finally:
         if worktree_path:
             _remove_git_worktree(worktree_path)
@@ -1247,23 +1263,31 @@ def _run_test_in_podman(project, kind, *, toolchain="none", on_output=None, **kw
     }
 
 
-def _run_test_via_opp_env(project, kind, on_output=None, **kwargs):
-    """Run a test via opp_env subprocess (Nix environment on the host)."""
+def _run_test_via_opp_env(project, kind, recorder=None, **kwargs):
+    """Run a test via opp_env subprocess (Nix environment on the host).
+
+    Compilation and the test run as two opp_env invocations — a
+    ``project.build`` stage (``opp_build_project``) then a ``test.run`` stage
+    (the test command with ``--no-build``) — so each is captured separately
+    and a compile failure is attributed to the build stage instead of being
+    buried in the test output. Both share the per-coordinate workspace, so the
+    build's artifacts are reused by the test (no rebuild).
+    """
     git_ref = kwargs.get("git_ref")
     mode = kwargs.get("mode")
 
-    cmd = COMMAND_MAP.get(kind)
-    if cmd is None:
+    test_command = COMMAND_MAP.get(kind)
+    if test_command is None:
         raise ValueError(f"Unknown test kind: {kind!r}. Supported: {list(COMMAND_MAP.keys())}")
 
-    if mode:
-        cmd += f" --mode {mode}"
+    mode_suffix = f" --mode {mode}" if mode else ""
+    build_inner = "opp_build_project" + mode_suffix
+    test_inner = test_command + mode_suffix + " --no-build"
 
     env = os.environ.copy()
     effective_project, effective_ref = resolve_opp_env_id(project, git_ref, toolchain="nix")
     if effective_ref:
         env["OPP_ENV_GIT_REF"] = effective_ref
-    args = ["opp_env", "run", effective_project, "-c", cmd]
 
     # Resolve the same per-coordinate workspace the install step created and
     # run from it (opp_env auto-detects the workspace from cwd). The axes must
@@ -1276,32 +1300,63 @@ def _run_test_via_opp_env(project, kind, on_output=None, **kwargs):
         compiler_version=kwargs.get("compiler_version"), git_ref=git_ref,
     )
 
-    start = time.time()
+    def _opp_env_run(inner):
+        return run_external(
+            ["opp_env", "run", effective_project, "-c", inner],
+            label=f"opp_env:{effective_project}", env=env, cwd=ws,
+            stream=True, on_output=recorder.output if recorder else None)
+
     with _workspace_lock(ws):
-        result = run_external(args, label=f"opp_env:{effective_project}",
-                              env=env, cwd=ws, stream=True, on_output=on_output)
-    duration = time.time() - start
+        # ── project.build ─────────────────────────────────────────────
+        if recorder is not None:
+            recorder.begin(Stage.PROJECT_BUILD,
+                           command=f"opp_env run {effective_project} -c {build_inner!r}")
+        build = _opp_env_run(build_inner)
+        if recorder is not None:
+            recorder.end(build.returncode)
+        if build.returncode != 0:
+            if recorder is not None:
+                recorder.skip(Stage.TEST_RUN, reason="skipped: build failed")
+            return {
+                "result_code": "FAIL",
+                "test_exec_seconds": 0.0,
+                "stdout": build.stdout,
+                "stderr": build.stderr,
+                "details": None,
+                "commit_sha": None,
+            }
+        # ── test.run ──────────────────────────────────────────────────
+        if recorder is not None:
+            recorder.begin(Stage.TEST_RUN,
+                           command=f"opp_env run {effective_project} -c {test_inner!r}")
+        start = time.time()
+        result = _opp_env_run(test_inner)
+        duration = time.time() - start
+        if recorder is not None:
+            recorder.end(result.returncode)
 
     result_code = "PASS" if result.returncode == 0 else "FAIL"
     return {
         "result_code": result_code,
         "test_exec_seconds": duration,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
+        "stdout": (build.stdout or "") + (result.stdout or ""),
+        "stderr": (build.stderr or "") + (result.stderr or ""),
         "details": None,
         "commit_sha": None,
     }
 
 
 def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
-                     on_output=None, **_unused):
+                     recorder=None, **_unused):
     """Run a test by calling opp_repl functions directly (no subprocess).
 
     When *git_ref* is set, an isolated git worktree is created for that
     commit and removed after the test completes.
 
     Extra kwargs (e.g. os, compiler) are accepted-and-ignored so this can
-    sit downstream of the run_test dispatcher.
+    sit downstream of the run_test dispatcher. The whole run is captured as a
+    single ``test.run`` stage when a ``recorder`` is given (this in-process
+    path doesn't split build out yet — that's the opp_env/podman paths).
     """
     test_functions = _get_test_functions()
     func = test_functions.get(kind)
@@ -1325,8 +1380,12 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
     ensure_logging_initialized("DEBUG", "DEBUG", None)
 
     _logger.info("Running %s test for %s (direct mode)", kind, project)
-    stdout_buf = _CallbackStringIO(on_output) if on_output else io.StringIO()
-    stderr_buf = _CallbackStringIO(on_output) if on_output else io.StringIO()
+    out_cb = (lambda text: recorder.output("out", text)) if recorder else None
+    err_cb = (lambda text: recorder.output("err", text)) if recorder else None
+    stdout_buf = _CallbackStringIO(out_cb) if out_cb else io.StringIO()
+    stderr_buf = _CallbackStringIO(err_cb) if err_cb else io.StringIO()
+    if recorder is not None:
+        recorder.begin(Stage.TEST_RUN, command=f"{func.__name__} (direct)")
     start = time.time()
     try:
         call_kwargs = {"simulation_project": simulation_project, "build": "task", "build_mode": "task"}
@@ -1353,6 +1412,9 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
     except Exception as e:
         duration = time.time() - start
         _logger.error("Test %s raised exception: %s", kind, e)
+        if recorder is not None:
+            recorder.output("err", repr(e))
+            recorder.end(1, status="failed")
         return {
             "result_code": "ERROR",
             "test_exec_seconds": duration,
@@ -1365,6 +1427,8 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
         if worktree_path:
             _remove_git_worktree(worktree_path)
 
+    if recorder is not None:
+        recorder.end(0 if result_code == "PASS" else 1)
     commit_sha = git_ref or resolve_commit_sha(project, opp_file=opp_file)
     _logger.info("Test finished: %s (%.1fs)", result_code, duration)
     return {
