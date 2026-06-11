@@ -2523,8 +2523,8 @@ def _detect_capability_tags():
       - os:windows-<ver> | os:macos-<ver>    Windows/MacOS only
       - distro:<id>-<version>                Linux only (from /etc/os-release)
       - flavor:<id>-<version>                Linux only when a flavor marker
-                                             (VARIANT_ID or kubuntu-desktop)
-                                             is recognised
+                                             (VARIANT_ID, or a desktop-session
+                                             binary on Ubuntu) is recognised
       - arch:<arch>                          amd64/aarch64 from platform.machine()
       - compiler:<name>-<major>              for each of gcc, clang on PATH
       - podman                               if "podman --version" succeeds
