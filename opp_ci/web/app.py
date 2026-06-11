@@ -55,11 +55,17 @@ _DEFAULT_ARCH_SUGGESTIONS = ("amd64", "aarch64")
 
 
 def _arch_suggestions(os_entries):
-    """Return a sorted, de-duplicated list of arch values for datalist hints."""
+    """Return a sorted, de-duplicated list of arch values for datalist hints.
+
+    Values are folded to the canonical matrix vocabulary (amd64/aarch64) so an
+    OS row carrying an alias spelling (e.g. x86_64) doesn't surface a second,
+    unmatchable choice alongside its canonical name.
+    """
+    from opp_ci import platforms
     values = set(_DEFAULT_ARCH_SUGGESTIONS)
     for entry in os_entries or ():
         if entry.arch:
-            values.add(entry.arch)
+            values.add(platforms.canonical_arch(entry.arch))
     return sorted(values)
 
 

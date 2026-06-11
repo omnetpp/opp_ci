@@ -33,6 +33,29 @@ FLAVORS = {
     "lubuntu":  {"distro": "ubuntu"},
 }
 
+# The matrix/worker arch vocabulary is amd64 / aarch64. Host- and OS-table
+# spellings (x86_64, arm64) are aliases that must fold to the canonical name,
+# or a Test pinning the alias gets an unmatchable required tag (workers
+# auto-detect the canonical form).
+ARCH_ALIASES = {
+    "x86_64": "amd64", "amd64": "amd64",
+    "arm64": "aarch64", "aarch64": "aarch64",
+}
+
+
+def canonical_arch(name):
+    """Fold an arch spelling to the canonical matrix vocabulary.
+
+    Known aliases (``x86_64`` → ``amd64``, ``arm64`` → ``aarch64``) map to
+    their canonical name; an unrecognised value is returned lower-cased and
+    stripped (so a novel CPU still produces a stable tag rather than being
+    dropped). Returns None for an empty input.
+    """
+    folded = _fold(name)
+    if folded is None:
+        return None
+    return ARCH_ALIASES.get(folded, folded)
+
 
 def _fold(name):
     return name.strip().lower() if isinstance(name, str) and name.strip() else None

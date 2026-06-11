@@ -2582,16 +2582,12 @@ def _detect_capability_tags():
         ver = _platform.mac_ver()[0]
         tags.append(f"os:macos-{ver}" if ver else "os:macos")
 
-    # Normalise platform.machine() to the matrix 'arch' vocabulary (matrices
-    # pin e.g. amd64/aarch64). arch is mandatory on every test and the matcher
-    # requires arch:<arch> exactly, so always emit one — fall back to the raw
+    # Fold platform.machine() to the matrix 'arch' vocabulary (amd64/aarch64).
+    # arch is mandatory on every test and the matcher requires arch:<arch>
+    # exactly, so always emit one — canonical_arch falls back to the raw
     # machine string for an unrecognised CPU rather than leaving the worker
     # arch-less (which would make it unable to claim any job).
-    machine = _platform.machine().lower()
-    arch = {
-        "x86_64": "amd64", "amd64": "amd64",
-        "arm64": "aarch64", "aarch64": "aarch64",
-    }.get(machine, machine or None)
+    arch = _platforms.canonical_arch(_platform.machine())
     if arch:
         tags.append(f"arch:{arch}")
 

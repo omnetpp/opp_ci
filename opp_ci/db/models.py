@@ -47,7 +47,7 @@ class OS(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     version = Column(String, nullable=True)
-    arch = Column(String, default="x86_64")
+    arch = Column(String, default="amd64")
 
     def __repr__(self):
         return f"<OS({self.name} {self.version or ''} {self.arch})>"
