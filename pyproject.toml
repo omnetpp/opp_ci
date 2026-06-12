@@ -27,6 +27,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+
 postgres = [
     "psycopg2-binary",
 ]
@@ -48,6 +49,10 @@ podman = [
     "jinja2",
     "pyyaml",
 ]
+all = [
+    "opp_ci[postgres,web,client,podman]",
+]
+
 
 [project.urls]
 Repository = "https://github.com/omnetpp/opp_ci"
