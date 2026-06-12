@@ -397,6 +397,51 @@ def _resolve_ref_range(project_name, range_str):
         session.close()
 
 
+def resolve_source_commit(project_name, git_ref):
+    """Resolve a single ref (branch / tag / SHA) to a concrete commit SHA.
+
+    The source half of "pinned all the way down" for single-run submits
+    (Phase 2b). **Strict** (decision #7): a non-None ref that can't be pinned to
+    a real commit — no GitHub repo configured, unknown ref, GitHub unreachable —
+    raises ValueError rather than leaving the source unpinned. Returns None when
+    `git_ref` is None (no source axis to pin) and the SHA unchanged when it is
+    already a full 40-hex SHA.
+    """
+    if not git_ref:
+        return None
+    if _is_full_sha(git_ref):
+        return git_ref.lower()
+
+    from opp_ci.db.connection import SessionLocal
+    from opp_ci.db.models import Project
+    from opp_ci.github.client import GitHubClient
+    from sqlalchemy import select
+
+    session = SessionLocal()
+    try:
+        proj = session.execute(
+            select(Project).where(Project.name == project_name)
+        ).scalar_one_or_none()
+        if proj is None or not proj.github_owner or not proj.github_repo:
+            raise ValueError(
+                f"Cannot pin ref {git_ref!r}: project {project_name!r} has no "
+                f"GitHub repo configured, so the source can't be resolved to a "
+                f"commit (a run must be pinned to a concrete commit).")
+        client = GitHubClient()
+        if not client.is_configured:
+            raise ValueError(
+                f"Cannot pin ref {git_ref!r}: the GitHub client is not "
+                f"configured on the coordinator.")
+        for ref_path in (f"heads/{git_ref}", f"tags/{git_ref}", git_ref):
+            sha = client.resolve_ref(proj.github_owner, proj.github_repo, ref_path)
+            if sha:
+                return sha
+        raise ValueError(
+            f"Could not resolve ref {git_ref!r} to a commit for {project_name}.")
+    finally:
+        session.close()
+
+
 def _resolve_refs_axis(project, config):
     """Resolve the ``refs`` axis into ``(git_ref, commit_sha)`` pairs.
 

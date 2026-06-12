@@ -193,11 +193,15 @@ async def submit_run(
                 "resolved_deps": resolved_deps,
             }
             # Pin any loose coordinate axis (compiler / arch / mode) against the
-            # fleet before validating — lets a caller submit an underspecified
-            # coordinate and have it resolved to what the workers actually offer.
+            # fleet, and pin the source ref to a concrete commit, before
+            # validating: a caller may submit an underspecified coordinate and a
+            # moving ref, and both are resolved into the Test's identity. Source
+            # resolution is strict — an unpinnable ref is rejected (decision #7).
             from opp_ci.fleet import fleet_tags, resolve_loose_axes
+            from opp_ci.scheduler import resolve_source_commit
             try:
                 resolve_loose_axes(coord, fleet_tags(session))
+                coord["commit_sha"] = resolve_source_commit(req.project, req.git_ref)
                 validate_test_coord(coord)
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
@@ -214,6 +218,7 @@ async def submit_run(
         run = create_test_run(
             session,
             test_id=test.id,
+            commit_sha=test.commit_sha,
             git_ref=req.git_ref,
             version=req.version,
             resolved_deps=resolved_deps,
