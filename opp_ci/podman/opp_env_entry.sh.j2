@@ -53,6 +53,7 @@ esac
 
 # opp_env's -w is a per-subcommand option, not a top-level flag, so cd
 # into the workspace and let opp_env auto-detect it from cwd.
+# No command marker: the Compile/Run-tests stage already shows a clean
+# headline, and the raw `opp_env run … -c "…"` would just duplicate it.
 cd /opt/opp_env_workspace
-printf '@@oppci:cmd@@ opp_env %s\n' "$*"
 exec opp_env -l ERROR "$@"

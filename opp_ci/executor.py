@@ -1453,8 +1453,10 @@ def _run_podman_staged(*, image, run_stages, entry_script, run_flags,
 
         # ── runner.bootstrap ──────────────────────────────────────────
         if recorder is not None:
-            recorder.begin(Stage.RUNNER_BOOTSTRAP,
-                           command=f"{entry_script} --bootstrap-only")
+            # No headline: bootstrap runs several real sub-commands (git clone,
+            # pip install) that the entry script echoes via run_cmd as cmd
+            # lines — a "--bootstrap-only" headline would just be noise above them.
+            recorder.begin(Stage.RUNNER_BOOTSTRAP, command=None)
         boot = _exec([entry_script, "--bootstrap-only"],
                      label=f"podman:{container}:bootstrap")
         if recorder is not None:

@@ -63,8 +63,12 @@ parse_projects() {
 # $OPP_CI_PIN_DEPS pins dependency versions (e.g. omnetpp-6.2.0) so opp_env
 # builds the exact versions the run requested and reuses the baked omnetpp.
 do_deps_install() {
+    # No run_cmd marker here: the Install dependencies stage already shows a
+    # clean "$ opp_env install <project>" headline, so marking the full command
+    # would just duplicate it. (run_cmd is for bootstrap, which has several
+    # real sub-commands and no single headline.)
     for p in $EXTRA_PROJECTS; do
-        run_cmd opp_env -l ERROR install -w /opt/opp_env_workspace "$p" $OPP_CI_PIN_DEPS
+        opp_env -l ERROR install -w /opt/opp_env_workspace "$p" $OPP_CI_PIN_DEPS
     done
 }
 
