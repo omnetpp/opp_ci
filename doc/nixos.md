@@ -1,103 +1,207 @@
 # Running opp_ci on NixOS
 
-NixOS owns systemd units, users, and packages **declaratively** from the
-system configuration. Imperative writes to `/etc/systemd/system`,
-`useradd`, copying binaries into a home dir, `systemctl enable`, and
-imperative PostgreSQL/podman setup either don't survive `nixos-rebuild`
-or fight the Nix model. So on NixOS the `service` commands split:
+On NixOS, opp_ci is configured **fully declaratively** in your
+`configuration.nix`. Every runtime parameter is a NixOS module option;
+there are **no imperative config files** to hand-write. The only thing
+that can't live in the Nix config is secret *values* (the Nix store is
+world-readable) — those are delivered by file path via `environmentFiles`
+and managed with sops-nix / agenix, so even they end up declared in your
+config.
 
-- **`install` / `uninstall` are render-only** — they make **no** system
-  mutation (even as root) and emit a **NixOS module** + flake + env-file
-  bodies + apply instructions. You import the module and apply it with
-  `sudo nixos-rebuild switch`.
-- **`start` / `stop` / `restart` / `status` work normally** via
-  `systemctl` once the module is applied — the units
-  `opp_ci-coordinator.service` / `opp_ci-worker@<name>.service` exist exactly
-  as on a generic systemd host, so lifecycle commands and the web UI log
-  viewer are unchanged.
+Like other platforms, the service runs from GitHub via `uvx`, re-fetching
+the pinned ref on every restart (see
+[systemd.md](systemd.md#how-it-runs-uvx)).
 
-NixOS is detected via `/etc/NIXOS`, `/run/current-system/nixos-version`,
-or `ID=nixos` in `/etc/os-release` (any one). Detection takes precedence
-over the generic systemd path, and the render-only path is taken
-**regardless of privilege**.
+## The modules
 
-## Render the module
+opp_ci ships two NixOS modules:
+
+- `services.opp_ci.coordinator` — the web UI + API + scheduler →
+  `opp_ci-coordinator.service`.
+- `services.opp_ci.worker` — one or more worker instances, each →
+  `opp_ci-worker-<name>.service`.
+
+Get the module files with the CLI (it renders nothing imperative on
+NixOS — it just copies the modules out and prints an example):
 
 ```bash
-opp_ci coordinator service install --host 0.0.0.0 --port 8080 --out ./opp_ci-nix
-opp_ci worker service install --name builder-1 \
-    --coordinator https://ci.example.org --token <token> --out ./opp_ci-nix
+opp_ci coordinator service install --host 0.0.0.0 --out /etc/nixos/opp_ci
+opp_ci worker      service install --name builder-1 \
+    --coordinator https://ci.example.org --out /etc/nixos/opp_ci
 ```
 
-With `--out DIR` the artifacts are written there; without it they print
-to stdout. The bundle:
+The `--out` dir gets `lib.nix`, `coordinator.nix`, `worker.nix`,
+`flake.nix`, a `configuration-example.nix` built from your flags, and
+`APPLY.txt`. Detection is automatic (`/etc/NIXOS`,
+`/run/current-system/nixos-version`, or `ID=nixos`); the render-only path
+is taken regardless of privilege.
 
-| File | Purpose |
-|---|---|
-| `opp_ci.nix` | standalone NixOS module (user/group, the systemd service with the uvx `ExecStart`, `systemd.tmpfiles` dirs, declarative PostgreSQL for the coordinator, `pkgs.uv` on the unit `path`) |
-| `flake.nix` | exposes `nixosModules.{opp_ci-coordinator, opp_ci-worker, default}` for flake-based configs |
-| `opp_ci.env`, `coordinator.env` / `<name>.env` | env-file **bodies** to write imperatively at `/etc/opp_ci/…` |
-| `APPLY.txt` | where to drop the files, the import line, the enable toggle, and the `nixos-rebuild` step |
+## Coordinator
 
-`pkgs.uv` **replaces** the binary copy used on other distros — nixpkgs'
-uv is patched for NixOS, so `uvx`/`uv` resolve from the Nix store and no
-copy or `OPP_CI_UVX` override is needed.
+```nix
+{ config, ... }:
+{
+  imports = [ ./opp_ci/coordinator.nix ./opp_ci/worker.nix ];
 
-## Apply
+  services.opp_ci.coordinator = {
+    enable = true;
+    host = "0.0.0.0";
+    port = 8080;
+    ref = "main";                       # or a tag to bound upgrades
+    publicUrl = "https://ci.example.org";
+    github.org = "omnetpp";
+    github.oauthClientId = "Iv1.abc123";
+    # Secrets by path (see "Secrets" below):
+    environmentFiles = [ config.age.secrets.opp_ci-coord.path ];
+  };
+}
+```
 
-1. Drop `opp_ci.nix` next to your `configuration.nix` (or use the flake).
-2. Write the env-file bodies imperatively (secrets stay **out** of the
-   world-readable Nix store):
-   - `/etc/opp_ci/opp_ci.env` (0640 root:opp_ci)
-   - coordinator: `/etc/opp_ci/coordinator.env` (0640 root:opp_ci)
-   - worker: `/etc/opp_ci/workers/<name>.env` (0600 opp_ci:opp_ci)
-3. In `configuration.nix`:
-   ```nix
-   imports = [ ./opp_ci.nix ];
-   services.opp_ci.coordinator.enable = true;     # or .worker.enable
-   # services.opp_ci.coordinator.ref = "v1.2";    # override the pinned ref
-   ```
-4. `sudo nixos-rebuild switch`.
+Common options (each maps to an `OPP_CI_*` env var on the unit):
+`enable`, `ref`, `user`, `uvPackage`, `host`, `port`, `publicUrl`,
+`postgres.enable` (default true → declarative `services.postgresql`),
+`tls.{enable,certFile,keyFile,keyPasswordFile}`,
+`github.{org,oauthClientId,submitterTeams}`, and the raw-value secret
+paths `github.{tokenFile,oauthClientSecretFile,actionsTokenFile}`.
 
-The module options stay minimal (parity with the env-file-only rule):
-`enable`, `ref`, `user`, `uvPackage`, `postgres.enable`, `tls.enable`,
-and the `environmentFile` path(s). All runtime config (`--host`,
-`--coordinator`, …) lives in the rendered env-file bodies, not in Nix
-options.
+Everything the named options don't cover is reachable through the
+freeform `settings` attrset (the long tail of ~50 `OPP_CI_*` vars):
+
+```nix
+services.opp_ci.coordinator.settings = {
+  OPP_CI_WORKER_HEARTBEAT_TIMEOUT = 180;
+  OPP_CI_GITHUB_ALLOW_EXTERNAL = false;     # bool → "0"
+  OPP_CI_GITHUB_ADMIN_USERS = "alice,bob";
+};
+```
+
+`settings` is merged into the unit's `environment` **after** the typed
+options, so it can override them. Put **non-secret** values only here —
+anything in `settings` lands in the world-readable Nix store.
+
+## Workers
+
+Each worker is a named instance; the module creates one
+`opp_ci-worker-<name>.service` per entry:
+
+```nix
+{ config, ... }:
+{
+  imports = [ ./opp_ci/coordinator.nix ./opp_ci/worker.nix ];
+
+  services.opp_ci.worker = {
+    ref = "main";
+    instances.builder-1 = {
+      coordinatorUrl = "https://ci.example.org";
+      niceness = 5;
+      environmentFiles = [ config.age.secrets.opp_ci-builder-1.path ];
+    };
+    instances.nix-1 = {
+      coordinatorUrl = "https://ci.example.org";
+      pollInterval = 5;
+      environmentFiles = [ config.age.secrets.opp_ci-nix-1.path ];
+    };
+  };
+}
+```
+
+Per-instance options: `enable` (default true), `coordinatorUrl`,
+`pollInterval`, `heartbeatInterval`, `niceness`, `oppEnvCmd` (defaults to
+`uvx --from opp-env opp_env`), `settings`, and `environmentFiles` (carries
+the worker token). The worker module enables rootless podman
+(`virtualisation.podman.enable`).
+
+**Log viewer coupling:** workers are named `opp_ci-worker-<name>.service`,
+so the coordinator module sets
+`OPP_CI_WORKER_UNIT_TEMPLATE = "opp_ci-worker-{instance}.service"` by
+default, which is what the web UI's Logs pages use to find each worker's
+journal. Override it via `coordinator.settings` only if you rename the
+units.
 
 ## Secrets (sops-nix / agenix)
 
-The module only `EnvironmentFile=`-references the env files, so managed
-secrets work without hand-writing them. Point the reference at a decrypted
-secret path, e.g. with sops-nix:
+Secret *values* cannot be declarative — the Nix store is world-readable.
+Each module takes an `environmentFiles` list of **paths** to KEY=value
+files that systemd reads via `EnvironmentFile=`. Manage those files with
+sops-nix or agenix so the *encrypted* secret is what lives in your repo.
 
-```nix
-sops.secrets."opp_ci/worker-token" = { owner = "opp_ci"; };
-services.opp_ci.worker.environmentFile =
-  config.sops.secrets."opp_ci/worker-token".path;
+Coordinator secret file (`OPP_CI_*` lines):
+
+```
+OPP_CI_DATABASE_URL=postgresql:///opp_ci?host=/run/postgresql
+OPP_CI_SESSION_SECRET=<random>
+OPP_CI_GITHUB_WEBHOOK_SECRET=<webhook secret>
 ```
 
-(or the agenix equivalent). Never inline a token into `opp_ci.nix` — the
-Nix store is world-readable.
+Worker secret file:
 
-## Freshness still works
+```
+OPP_CI_WORKER_TOKEN=<token from `opp_ci worker register`>
+```
 
-The uvx `ExecStart` (with `--refresh-package`) is baked into the store at
-rebuild time, but it is the *same* refreshing command, so each service
-(re)start still re-fetches the latest `@<ref>` code. Only changing
-`--ref` / extras / `uvPackage` requires a `nixos-rebuild`.
+Wire it with agenix:
+
+```nix
+age.secrets.opp_ci-coord.file  = ../secrets/opp_ci-coord.age;
+age.secrets.opp_ci-coord.owner = "opp_ci";
+
+services.opp_ci.coordinator.environmentFiles =
+  [ config.age.secrets.opp_ci-coord.path ];
+```
+
+or sops-nix (`config.sops.secrets."opp_ci-coord".path`) — the option takes
+a path, so both backends drop in unchanged. The four GitHub/TLS secrets
+the app reads from a *raw-value* file
+(`github.tokenFile`, `github.oauthClientSecretFile`,
+`github.actionsTokenFile`, `tls.keyPasswordFile`) take a path to a file
+containing just the secret (no `KEY=` wrapping).
+
+## Flake usage
+
+`flake.nix` exposes `nixosModules.{coordinator, worker, default}`:
+
+```nix
+{
+  inputs.opp_ci.url = "path:/etc/nixos/opp_ci";   # or a git URL
+  outputs = { nixpkgs, opp_ci, ... }: {
+    nixosConfigurations.ci = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [ opp_ci.nixosModules.default ./configuration.nix ];
+    };
+  };
+}
+```
+
+## Apply
+
+1. Put the `*.nix` module files under `/etc/nixos/opp_ci/`.
+2. Merge the example into `configuration.nix` (imports + the option block).
+3. Create the secret files with sops-nix / agenix and reference them via
+   `environmentFiles`.
+4. `sudo nixos-rebuild switch`.
+
+Lifecycle afterwards is normal: `opp_ci coordinator service
+{start,stop,restart,status}` and `opp_ci worker service … --name <name>`
+drive `systemctl` against the units the module created, and the web UI log
+viewer works unchanged.
 
 ## Uninstall
 
-`uninstall` mutates nothing: it renders instructions to remove the module
-import / flake reference and run `nixos-rebuild switch` (no
-`systemctl disable` — boot enablement is owned by the module). With
-`--purge` it also lists the imperative env/state paths to delete by hand.
+`opp_ci … service uninstall` on NixOS mutates nothing: remove the module
+import / option block from `configuration.nix` and run
+`nixos-rebuild switch` (boot enablement is owned by the module, so there is
+no `systemctl disable` step). Delete the secret files separately if you
+want them gone.
 
-## Caveats
+## Freshness & caveats
 
+- The uvx `ExecStart` (with `--refresh-package`) is baked into the store at
+  rebuild time, but it is the *same* refreshing command, so each
+  (re)start re-fetches the latest `@<ref>` code. Only changing
+  `ref`/`uvPackage` (or any option) needs a `nixos-rebuild`.
 - Wheels uv downloads with native deps are non-FHS binaries that may fail
-  to load on NixOS without `programs.nix-ld.enable = true;` (or an FHS
-  wrapper). Enable nix-ld if a job fails with a loader error.
-- `--ref` / extras live in the store and change only on `nixos-rebuild`;
-  per-restart freshness still works via `--refresh-package`.
+  to load without `programs.nix-ld.enable = true;` — enable nix-ld if a job
+  fails with a loader error.
+- Never put a secret *value* in a module option or `settings` — it would
+  land in the world-readable Nix store. Use `environmentFiles` / the
+  `*File` options.

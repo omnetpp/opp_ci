@@ -1225,6 +1225,8 @@ def coordinator_service():
 @click.option("--port", default=None, type=int, help="Bind port → OPP_CI_COORDINATOR_PORT")
 @click.option("--cert", default=None, help="TLS cert file → OPP_CI_COORDINATOR_TLS_CERT_FILE")
 @click.option("--key", default=None, help="TLS key file → OPP_CI_COORDINATOR_TLS_KEY_FILE")
+@click.option("--public-url", default=None, help="Public origin → OPP_CI_PUBLIC_URL")
+@click.option("--github-org", default=None, help="GitHub org → OPP_CI_GITHUB_ORG")
 @click.option("--user", default="opp_ci", help="Run-as service user (User= in the unit)")
 @click.option("--ref", default="main", help="opp_ci GitHub ref baked into the uvx command")
 @click.option("--no-postgres", is_flag=True, help="Skip local PostgreSQL provisioning (remote DB)")
@@ -1232,15 +1234,17 @@ def coordinator_service():
 @click.option("--no-enable", is_flag=True, help="Don't enable-on-boot")
 @click.option("--no-start", is_flag=True, help="Don't start now")
 @click.option("--out", "out_dir", default=None,
-              help="NixOS: write the rendered module/flake/env bodies to this dir")
+              help="NixOS: write the rendered module + example config to this dir")
 @click.option("--dry-run", is_flag=True, help="Render + print all artifacts, change nothing")
-def coordinator_service_install(host, port, cert, key, user, ref, no_postgres, tls,
+def coordinator_service_install(host, port, cert, key, public_url, github_org,
+                                user, ref, no_postgres, tls,
                                 no_enable, no_start, out_dir, dry_run):
     """Install (and by default enable + start) the opp_ci-coordinator service."""
     from opp_ci import service
     spec = service.InstallSpec(
         role="coordinator", user=user, ref=ref,
         host=host, port=port, cert=cert, key=key,
+        public_url=public_url, github_org=github_org,
         postgres=not no_postgres, tls=tls,
         enable=not no_enable, start=not no_start,
         dry_run=dry_run, out_dir=out_dir)
@@ -3005,7 +3009,7 @@ def worker_service():
 @click.option("--no-enable", is_flag=True, help="Don't enable-on-boot")
 @click.option("--no-start", is_flag=True, help="Don't start now")
 @click.option("--out", "out_dir", default=None,
-              help="NixOS: write the rendered module/flake/env bodies to this dir")
+              help="NixOS: write the rendered module + example config to this dir")
 @click.option("--dry-run", is_flag=True, help="Render + print all artifacts, change nothing")
 def worker_service_install(name, coordinator, token, poll_interval,
                            heartbeat_interval, niceness, user, ref,

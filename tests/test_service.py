@@ -191,44 +191,116 @@ class NixosDetectorTest(unittest.TestCase):
             service.do_install(spec, echo=out.append)
         apply_mock.assert_not_called()
         text = "\n".join(out)
-        self.assertIn("opp_ci.nix", text)
+        self.assertIn("coordinator.nix", text)
         self.assertIn("nixos-rebuild", text)
 
 
-class NixosRenderTest(unittest.TestCase):
-    def test_coordinator_module(self):
-        spec = coordinator_spec(os_kind="nixos", host="0.0.0.0", port=8080, ref="main")
-        mod = service.render_nixos_module(spec)
-        # pkgs.uv on the path, store-resolved uvx in ExecStart.
-        self.assertIn("path = [ cfg.uvPackage ]", mod)
-        self.assertIn("${cfg.uvPackage}/bin/uvx", mod)
-        self.assertIn("--refresh-package opp_ci --refresh-package opp_repl", mod)
-        self.assertIn('EnvironmentFile = cfg.environmentFiles', mod)
-        self.assertIn("default = pkgs.uv", mod)
-        self.assertIn("services.postgresql", mod)
+def _nix_instantiate():
+    """Path to nix-instantiate, or None if Nix isn't installed."""
+    import shutil as _sh
+    return _sh.which("nix-instantiate")
 
-    def test_worker_module_template_and_no_secret(self):
-        spec = worker_spec(os_kind="nixos", name="b1",
-                           coordinator="https://c", token="SUPER-SECRET", ref="main")
-        mod = service.render_nixos_module(spec)
-        self.assertIn('systemd.services."opp_ci-worker@"', mod)
-        self.assertIn("/etc/opp_ci/workers/%i.env", mod)
-        self.assertIn("virtualisation.podman", mod)
-        # Secret must NOT enter the world-readable Nix store.
-        self.assertNotIn("SUPER-SECRET", mod)
+
+class NixosRenderTest(unittest.TestCase):
+    def test_module_files_are_static_and_declarative(self):
+        files = dict(service.read_nixos_module_files())
+        self.assertEqual(set(files), {"lib.nix", "coordinator.nix",
+                                      "worker.nix", "flake.nix"})
+        coord = files["coordinator.nix"]
+        # Fully declarative: typed options render into `environment`, uvx from
+        # the store, the worker-unit-template coupling, secrets by reference.
+        # (Whitespace-tolerant: the module aligns the `=` columns.)
+        import re
+        self.assertRegex(coord, r"OPP_CI_COORDINATOR_HOST\s*=\s*cfg\.host;")
+        self.assertRegex(coord, r"OPP_CI_COORDINATOR_PORT\s*=\s*toString cfg\.port;")
+        self.assertIn("path = [ cfg.uvPackage ];", coord)
+        self.assertIn("${cfg.uvPackage}/bin/uvx", coord)
+        self.assertIn("--refresh-package opp_ci --refresh-package opp_repl", coord)
+        self.assertIn("opp_ci coordinator start", coord)
+        self.assertIn("EnvironmentFile = cfg.environmentFiles;", coord)
+        self.assertIn("services.postgresql", coord)
+        self.assertIn("opp_ci-worker-{instance}.service", coord)
+        worker = files["worker.nix"]
+        self.assertIn("attrsOf (lib.types.submodule instanceModule)", worker)
+        self.assertIn("opp_ci-worker-${name}", worker)
+        self.assertIn("OPP_CI_WORKER_TOKEN", worker)  # documented, not a value
+        self.assertIn("virtualisation.podman", worker)
+
+    def test_coordinator_example_reflects_flags(self):
+        spec = coordinator_spec(os_kind="nixos", host="0.0.0.0", port=8080, ref="main",
+                          public_url="https://ci.example.org", github_org="omnetpp")
+        ex = service.render_coordinator_config_example(spec)
+        self.assertIn("services.opp_ci.coordinator = {", ex)
+        self.assertIn("enable = true;", ex)
+        self.assertIn('host = "0.0.0.0";', ex)
+        self.assertIn("port = 8080;", ex)
+        self.assertIn('publicUrl = "https://ci.example.org";', ex)
+        self.assertIn('github.org = "omnetpp";', ex)
+        # sops/agenix secret guidance present; no inline secret value.
+        self.assertIn("environmentFiles", ex)
+
+    def test_worker_example_uses_instances_no_token_value(self):
+        spec = worker_spec(os_kind="nixos", name="builder-1",
+                           coordinator="https://ci.example.org",
+                           token="SUPER-SECRET", ref="v1.2", niceness=5)
+        ex = service.render_worker_config_example(spec)
+        self.assertIn("instances.builder-1 = {", ex)
+        self.assertIn('coordinatorUrl = "https://ci.example.org";', ex)
+        self.assertIn("niceness = 5;", ex)
+        self.assertIn("environmentFiles", ex)
+        self.assertNotIn("SUPER-SECRET", ex)
 
     def test_flake_exposes_modules(self):
-        flake = service.render_nixos_flake(coordinator_spec(os_kind="nixos"))
-        self.assertIn("nixosModules.opp_ci-coordinator", flake)
-        self.assertIn("nixosModules.opp_ci-worker", flake)
+        flake = dict(service.read_nixos_module_files())["flake.nix"]
+        self.assertIn("nixosModules.coordinator", flake)
+        self.assertIn("nixosModules.worker", flake)
         self.assertIn("nixosModules.default", flake)
 
-    def test_bundle_separates_env_bodies(self):
-        spec = worker_spec(os_kind="nixos", name="b1", token="TK")
+    def test_bundle_ships_static_files_and_no_env_bodies(self):
+        spec = worker_spec(os_kind="nixos", name="b1",
+                           coordinator="https://c", token="TK")
         names = [n for n, _ in service.render_nixos_bundle(spec)]
-        self.assertIn("opp_ci.nix", names)
-        self.assertIn("flake.nix", names)
-        self.assertIn("b1.env", names)
+        for expected in ("lib.nix", "coordinator.nix", "worker.nix", "flake.nix",
+                         "configuration-example.nix", "APPLY.txt"):
+            self.assertIn(expected, names)
+        # No imperative env-file bodies anymore.
+        self.assertFalse([n for n in names if n.endswith(".env")])
+
+    def test_no_secret_value_in_any_artifact(self):
+        """The full secret-leak guard: a worker-token secret value must appear
+        in NONE of the emitted NixOS artifacts (only paths may)."""
+        secret = "tok-DEADBEEF-secret"
+        spec = worker_spec(os_kind="nixos", name="w1", coordinator="https://c",
+                           token=secret)
+        for _name, content in service.render_nixos_bundle(spec):
+            self.assertNotIn(secret, content)
+
+    @unittest.skipUnless(_nix_instantiate(), "nix-instantiate not installed")
+    def test_static_modules_parse(self):
+        import subprocess
+        nix = _nix_instantiate()
+        for name in service.NIXOS_MODULE_FILES:
+            path = os.path.join(service.NIXOS_DATA_DIR, name)
+            r = subprocess.run([nix, "--parse", path],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0,
+                             f"{name} failed to parse:\n{r.stderr}")
+
+    @unittest.skipUnless(_nix_instantiate(), "nix-instantiate not installed")
+    def test_generated_example_parses(self):
+        import subprocess
+        import tempfile
+        spec = coordinator_spec(os_kind="nixos", host="0.0.0.0", port=8080)
+        ex = service.render_coordinator_config_example(spec)
+        with tempfile.NamedTemporaryFile("w", suffix=".nix", delete=False) as f:
+            f.write(ex)
+            path = f.name
+        try:
+            r = subprocess.run([_nix_instantiate(), "--parse", path],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+        finally:
+            os.unlink(path)
 
 
 class MacosCoordinatorRefusalTest(unittest.TestCase):
