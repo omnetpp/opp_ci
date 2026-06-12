@@ -24,17 +24,19 @@ import time
 class Stage:
     """Canonical stage names, in display order (see STAGE_ORDER).
 
-    The value is the human label shown in the UI (stepper, badges), so keep
-    it short and clean — no namespacing dots.
+    The value is the human label shown in the UI (stepper, badges): a short
+    but descriptive phrase for what the step does. Keep it path-neutral (the
+    same stage means slightly different work on host-nix vs podman) and free
+    of namespacing dots.
     """
 
-    CONTAINER_PREPARE = "Prepare"
-    RUNNER_BOOTSTRAP = "Bootstrap"
-    CHECKOUT = "Checkout"
-    DEPS_INSTALL = "Install"
-    PROJECT_BUILD = "Build"
-    TEST_RUN = "Test"
-    CLEANUP = "Cleanup"
+    CONTAINER_PREPARE = "Prepare runner image"
+    RUNNER_BOOTSTRAP = "Set up runner tools"
+    CHECKOUT = "Check out source"
+    DEPS_INSTALL = "Install dependencies"
+    PROJECT_BUILD = "Compile project"
+    TEST_RUN = "Run tests"
+    CLEANUP = "Clean up"
 
 
 STAGE_ORDER = [
