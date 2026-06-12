@@ -12,7 +12,7 @@ or fight the Nix model. So on NixOS the `service` commands split:
   `sudo nixos-rebuild switch`.
 - **`start` / `stop` / `restart` / `status` work normally** via
   `systemctl` once the module is applied — the units
-  `opp_ci-serve.service` / `opp_ci-worker@<name>.service` exist exactly
+  `opp_ci-coordinator.service` / `opp_ci-worker@<name>.service` exist exactly
   as on a generic systemd host, so lifecycle commands and the web UI log
   viewer are unchanged.
 
@@ -24,7 +24,7 @@ over the generic systemd path, and the render-only path is taken
 ## Render the module
 
 ```bash
-opp_ci serve  service install --host 0.0.0.0 --port 8080 --out ./opp_ci-nix
+opp_ci coordinator service install --host 0.0.0.0 --port 8080 --out ./opp_ci-nix
 opp_ci worker service install --name builder-1 \
     --coordinator https://ci.example.org --token <token> --out ./opp_ci-nix
 ```
@@ -34,9 +34,9 @@ to stdout. The bundle:
 
 | File | Purpose |
 |---|---|
-| `opp_ci.nix` | standalone NixOS module (user/group, the systemd service with the uvx `ExecStart`, `systemd.tmpfiles` dirs, declarative PostgreSQL for serve, `pkgs.uv` on the unit `path`) |
-| `flake.nix` | exposes `nixosModules.{opp_ci-serve, opp_ci-worker, default}` for flake-based configs |
-| `opp_ci.env`, `serve.env` / `<name>.env` | env-file **bodies** to write imperatively at `/etc/opp_ci/…` |
+| `opp_ci.nix` | standalone NixOS module (user/group, the systemd service with the uvx `ExecStart`, `systemd.tmpfiles` dirs, declarative PostgreSQL for the coordinator, `pkgs.uv` on the unit `path`) |
+| `flake.nix` | exposes `nixosModules.{opp_ci-coordinator, opp_ci-worker, default}` for flake-based configs |
+| `opp_ci.env`, `coordinator.env` / `<name>.env` | env-file **bodies** to write imperatively at `/etc/opp_ci/…` |
 | `APPLY.txt` | where to drop the files, the import line, the enable toggle, and the `nixos-rebuild` step |
 
 `pkgs.uv` **replaces** the binary copy used on other distros — nixpkgs'
@@ -49,13 +49,13 @@ copy or `OPP_CI_UVX` override is needed.
 2. Write the env-file bodies imperatively (secrets stay **out** of the
    world-readable Nix store):
    - `/etc/opp_ci/opp_ci.env` (0640 root:opp_ci)
-   - serve: `/etc/opp_ci/serve.env` (0640 root:opp_ci)
+   - coordinator: `/etc/opp_ci/coordinator.env` (0640 root:opp_ci)
    - worker: `/etc/opp_ci/workers/<name>.env` (0600 opp_ci:opp_ci)
 3. In `configuration.nix`:
    ```nix
    imports = [ ./opp_ci.nix ];
-   services.opp_ci.serve.enable = true;     # or .worker.enable
-   # services.opp_ci.serve.ref = "v1.2";    # override the pinned ref
+   services.opp_ci.coordinator.enable = true;     # or .worker.enable
+   # services.opp_ci.coordinator.ref = "v1.2";    # override the pinned ref
    ```
 4. `sudo nixos-rebuild switch`.
 

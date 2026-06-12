@@ -64,7 +64,7 @@ class ReadUnitTests(unittest.TestCase):
     def _run_with(self, proc, **kw):
         with mock.patch("opp_ci.journal.shutil.which", return_value="/usr/bin/journalctl"), \
              mock.patch("opp_ci.journal.subprocess.run", return_value=proc) as run:
-            result = journal.read_unit("opp_ci-serve.service", **kw)
+            result = journal.read_unit("opp_ci-coordinator.service", **kw)
         return result, run
 
     def test_initial_load_uses_lines(self):
@@ -104,7 +104,7 @@ class ReadUnitTests(unittest.TestCase):
     def test_missing_journalctl_raises(self):
         with mock.patch("opp_ci.journal.shutil.which", return_value=None):
             with self.assertRaises(journal.JournalUnavailable):
-                journal.read_unit("opp_ci-serve.service")
+                journal.read_unit("opp_ci-coordinator.service")
 
 
 class LogRouteTests(unittest.TestCase):
@@ -147,14 +147,14 @@ class LogRouteTests(unittest.TestCase):
         type(self).role = "admin"
 
     # ── pages ──────────────────────────────────────────────────────────
-    def test_hub_lists_serve_and_worker(self):
+    def test_hub_lists_coordinator_and_worker(self):
         r = self.client.get("/logs")
         self.assertEqual(r.status_code, 200)
-        self.assertIn("Serve", r.text)
+        self.assertIn("Coordinator", r.text)
         self.assertIn("local", r.text)
 
-    def test_serve_and_worker_viewers_render(self):
-        self.assertEqual(self.client.get("/logs/serve").status_code, 200)
+    def test_coordinator_and_worker_viewers_render(self):
+        self.assertEqual(self.client.get("/logs/coordinator").status_code, 200)
         self.assertEqual(self.client.get("/logs/worker/8005").status_code, 200)
 
     def test_unknown_worker_404(self):
@@ -166,7 +166,7 @@ class LogRouteTests(unittest.TestCase):
         canned = ([{"ts": None, "priority": 6,
                     "message": "<b>hi</b>", "cursor": "cZ"}], "cZ")
         with mock.patch("opp_ci.journal.read_unit", return_value=canned):
-            r = self.client.get("/logs/serve/tail")
+            r = self.client.get("/logs/coordinator/tail")
         self.assertEqual(r.status_code, 200)
         data = r.json()
         self.assertTrue(data["available"])
@@ -178,7 +178,7 @@ class LogRouteTests(unittest.TestCase):
     def test_tail_unavailable_reports_reason(self):
         with mock.patch("opp_ci.journal.read_unit",
                         side_effect=journal.JournalUnavailable("no access")):
-            r = self.client.get("/logs/serve/tail")
+            r = self.client.get("/logs/coordinator/tail")
         data = r.json()
         self.assertFalse(data["available"])
         self.assertEqual(data["reason"], "no access")
@@ -200,15 +200,15 @@ class LogRouteTests(unittest.TestCase):
     def test_readonly_forbidden(self):
         type(self).role = "readonly"
         self.assertEqual(self.client.get("/logs").status_code, 403)
-        self.assertEqual(self.client.get("/logs/serve").status_code, 403)
-        self.assertEqual(self.client.get("/logs/serve/tail").status_code, 403)
+        self.assertEqual(self.client.get("/logs/coordinator").status_code, 403)
+        self.assertEqual(self.client.get("/logs/coordinator/tail").status_code, 403)
 
     def test_submitter_allowed(self):
         type(self).role = "submitter"
         self.assertEqual(self.client.get("/logs").status_code, 200)
-        self.assertEqual(self.client.get("/logs/serve").status_code, 200)
+        self.assertEqual(self.client.get("/logs/coordinator").status_code, 200)
         with mock.patch("opp_ci.journal.read_unit", return_value=([], None)):
-            self.assertEqual(self.client.get("/logs/serve/tail").status_code, 200)
+            self.assertEqual(self.client.get("/logs/coordinator/tail").status_code, 200)
 
 
 if __name__ == "__main__":

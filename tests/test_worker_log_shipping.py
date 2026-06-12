@@ -93,7 +93,7 @@ class RingBufferHandlerTests(unittest.TestCase):
 
 
 class WorkerLogStoreTests(unittest.TestCase):
-    def test_append_assigns_serve_seqs(self):
+    def test_append_assigns_coordinator_seqs(self):
         s = WorkerLogStore(capacity=10)
         s.append(1, [{"ts": 1.0, "level": 20, "msg": "x"},
                      {"ts": 2.0, "level": 20, "msg": "y"}])

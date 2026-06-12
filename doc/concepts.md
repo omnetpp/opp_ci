@@ -29,7 +29,7 @@ either in opp_env's recipe or in the matrix config.
 
 ### Coordinator
 
-The single `opp_ci serve` instance that owns the database. Exposes the
+The single `opp_ci coordinator start` instance that owns the database. Exposes the
 REST API at `/api/*` and the web UI. Workers and `--remote` CLI clients
 all talk to one coordinator. Identified by `OPP_CI_COORDINATOR_URL`.
 

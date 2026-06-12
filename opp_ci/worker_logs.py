@@ -4,7 +4,7 @@ In-memory per-worker log buffers on the coordinator.
 Remote workers ship their recent log lines on each heartbeat (see
 opp_ci.logbuffer / opp_ci.worker); this holds them so the web UI's
 per-worker log view can serve workers whose systemd journal lives on
-another host. Purely in-memory and bounded per worker — lost on a `serve`
+another host. Purely in-memory and bounded per worker — lost on a coordinator
 restart, which is acceptable: the next heartbeat refills from the worker's
 own ring.
 
@@ -30,7 +30,7 @@ class WorkerLogStore:
         self._lock = threading.Lock()
 
     def append(self, worker_id, entries):
-        """Append shipped ``{ts, level, msg}`` entries, stamping serve seqs."""
+        """Append shipped ``{ts, level, msg}`` entries, stamping coordinator seqs."""
         if not entries:
             return
         with self._lock:
@@ -69,5 +69,5 @@ class WorkerLogStore:
             return bool(self._buffers.get(worker_id))
 
 
-# Process-wide store used by the serve process. Sized from config at import.
-STORE = WorkerLogStore(cfg.SERVE_WORKER_LOG_RING)
+# Process-wide store used by the coordinator process. Sized from config at import.
+STORE = WorkerLogStore(cfg.COORDINATOR_WORKER_LOG_RING)

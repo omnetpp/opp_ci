@@ -54,22 +54,22 @@ API_TOKEN = os.environ.get("OPP_CI_API_TOKEN", "")
 
 # Default for the top-level `--remote` flag. Operators who only ever
 # drive a coordinator from their laptop can set OPP_CI_REMOTE=1 once and
-# drop `--remote` from every invocation. Host-local commands (serve,
-# init-db, worker start, …) ignore it.
+# drop `--remote` from every invocation. Host-local commands (coordinator
+# start, init-db, worker start, …) ignore it.
 REMOTE = os.environ.get("OPP_CI_REMOTE", "0") == "1"
 
 REFERENCE_PLATFORM = os.environ.get("OPP_CI_REFERENCE_PLATFORM", "Ubuntu 24.04/gcc-13")
 
-SERVE_HOST = os.environ.get("OPP_CI_SERVE_HOST", "127.0.0.1")
-SERVE_PORT = int(os.environ.get("OPP_CI_SERVE_PORT", "8080"))
+COORDINATOR_HOST = os.environ.get("OPP_CI_COORDINATOR_HOST", "127.0.0.1")
+COORDINATOR_PORT = int(os.environ.get("OPP_CI_COORDINATOR_PORT", "8080"))
 
 # ── Log viewer ────────────────────────────────────────────────────────
 #
 # The web UI's Logs pages read process logs straight from systemd-journald
-# (the serve and worker units). These name the units to query; override
+# (the coordinator and worker units). These name the units to query; override
 # only for a non-standard install. `{instance}` in the worker template is
 # the worker's registered name (used verbatim as the systemd instance).
-SERVE_UNIT = os.environ.get("OPP_CI_SERVE_UNIT", "opp_ci-serve.service")
+COORDINATOR_UNIT = os.environ.get("OPP_CI_COORDINATOR_UNIT", "opp_ci-coordinator.service")
 WORKER_UNIT_TEMPLATE = os.environ.get(
     "OPP_CI_WORKER_UNIT_TEMPLATE", "opp_ci-worker@{instance}.service")
 # Lines to fetch on the initial (cursor-less) tail load.
@@ -78,29 +78,29 @@ LOG_TAIL_LINES = int(os.environ.get("OPP_CI_LOG_TAIL_LINES", "1000"))
 # Per-worker log shipping (for workers running on a different host than the
 # coordinator, whose journal the coordinator can't read). The worker keeps
 # the last WORKER_LOG_RING records in memory and ships up to WORKER_LOG_BATCH
-# new ones per heartbeat; the coordinator keeps the last SERVE_WORKER_LOG_RING
+# new ones per heartbeat; the coordinator keeps the last COORDINATOR_WORKER_LOG_RING
 # per worker for the log view. All in-memory — dropped on restart.
 WORKER_LOG_RING = int(os.environ.get("OPP_CI_WORKER_LOG_RING", "2000"))
 WORKER_LOG_BATCH = int(os.environ.get("OPP_CI_WORKER_LOG_BATCH", "500"))
-SERVE_WORKER_LOG_RING = int(os.environ.get("OPP_CI_SERVE_WORKER_LOG_RING", "2000"))
+COORDINATOR_WORKER_LOG_RING = int(os.environ.get("OPP_CI_COORDINATOR_WORKER_LOG_RING", "2000"))
 
 # Live per-run test output (streamed to the run-detail page while a run runs).
 # The worker batches output lines and ships them every FLUSH_INTERVAL seconds;
-# the coordinator keeps the last SERVE_RUN_OUTPUT_RING lines for each of at
-# most SERVE_RUN_OUTPUT_MAX_RUNS in-flight runs (LRU). All in-memory.
+# the coordinator keeps the last COORDINATOR_RUN_OUTPUT_RING lines for each of
+# at most COORDINATOR_RUN_OUTPUT_MAX_RUNS in-flight runs (LRU). All in-memory.
 RUN_OUTPUT_FLUSH_INTERVAL = float(os.environ.get("OPP_CI_RUN_OUTPUT_FLUSH_INTERVAL", "2"))
-SERVE_RUN_OUTPUT_RING = int(os.environ.get("OPP_CI_SERVE_RUN_OUTPUT_RING", "5000"))
-SERVE_RUN_OUTPUT_MAX_RUNS = int(os.environ.get("OPP_CI_SERVE_RUN_OUTPUT_MAX_RUNS", "64"))
+COORDINATOR_RUN_OUTPUT_RING = int(os.environ.get("OPP_CI_COORDINATOR_RUN_OUTPUT_RING", "5000"))
+COORDINATOR_RUN_OUTPUT_MAX_RUNS = int(os.environ.get("OPP_CI_COORDINATOR_RUN_OUTPUT_MAX_RUNS", "64"))
 
 # ── TLS ───────────────────────────────────────────────────────────────
 #
-# Native TLS termination in `opp_ci serve`. Empty pair → plain HTTP, the
+# Native TLS termination in `opp_ci coordinator start`. Empty pair → plain HTTP, the
 # default. Setting only one of CERT_FILE / KEY_FILE is a startup error.
 # When TLS is enabled, SESSION_COOKIE_SECURE is auto-flipped on at
 # startup, and OAuth callback requires OPP_CI_PUBLIC_URL.
-SERVE_TLS_CERT_FILE = os.environ.get("OPP_CI_SERVE_TLS_CERT_FILE", "")
-SERVE_TLS_KEY_FILE = os.environ.get("OPP_CI_SERVE_TLS_KEY_FILE", "")
-SERVE_TLS_KEY_PASSWORD_FILE = os.environ.get("OPP_CI_SERVE_TLS_KEY_PASSWORD_FILE", "")
+COORDINATOR_TLS_CERT_FILE = os.environ.get("OPP_CI_COORDINATOR_TLS_CERT_FILE", "")
+COORDINATOR_TLS_KEY_FILE = os.environ.get("OPP_CI_COORDINATOR_TLS_KEY_FILE", "")
+COORDINATOR_TLS_KEY_PASSWORD_FILE = os.environ.get("OPP_CI_COORDINATOR_TLS_KEY_PASSWORD_FILE", "")
 
 # Outbound TLS verification, used by the worker and the Python client when
 # the coordinator presents a non-public-CA cert (self-signed, Cloudflare
@@ -177,7 +177,7 @@ GITHUB_BASE_URL = os.environ.get("OPP_CI_GITHUB_BASE_URL", "https://api.github.c
 #
 # The session secret signs session cookies. Empty by default so a
 # misconfigured deploy fails closed at startup rather than handing out
-# unsigned-but-look-signed cookies. For development, `opp_ci serve` will
+# unsigned-but-look-signed cookies. For development, `opp_ci coordinator start` will
 # refuse to start without a value.
 SESSION_SECRET = os.environ.get("OPP_CI_SESSION_SECRET", "")
 SESSION_COOKIE_SECURE = os.environ.get("OPP_CI_SESSION_COOKIE_SECURE", "0") == "1"
@@ -210,13 +210,13 @@ GITHUB_ALLOW_EXTERNAL = os.environ.get("OPP_CI_GITHUB_ALLOW_EXTERNAL", "1") == "
 
 def get_tls_key_password():
     """Read the TLS key passphrase from file (or env override). Empty if not set."""
-    pw = os.environ.get("OPP_CI_SERVE_TLS_KEY_PASSWORD", "")
+    pw = os.environ.get("OPP_CI_COORDINATOR_TLS_KEY_PASSWORD", "")
     if pw:
         return pw
-    if not SERVE_TLS_KEY_PASSWORD_FILE:
+    if not COORDINATOR_TLS_KEY_PASSWORD_FILE:
         return ""
     try:
-        with open(SERVE_TLS_KEY_PASSWORD_FILE) as f:
+        with open(COORDINATOR_TLS_KEY_PASSWORD_FILE) as f:
             return f.read().strip()
     except (OSError, FileNotFoundError):
         return ""

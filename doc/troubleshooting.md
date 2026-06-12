@@ -140,14 +140,14 @@ Alembic under `opp_ci/db/migrations/`.
 
 ## Web UI and API
 
-### `opp_ci serve` starts but the page is unreachable
+### `opp_ci coordinator start` starts but the page is unreachable
 
 The default bind is `127.0.0.1:8080` — only reachable from the same
 host. For cloud deployments use `--host 0.0.0.0` and put a reverse
 proxy with TLS in front:
 
 ```bash
-opp_ci serve --host 0.0.0.0 --port 8080
+opp_ci coordinator start --host 0.0.0.0 --port 8080
 ```
 
 The HTML routes carry no auth — bind to localhost or front with

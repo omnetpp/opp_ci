@@ -113,5 +113,5 @@ class RunOutputStore:
             self._runs.pop(run_id, None)
 
 
-# Process-wide store used by the serve process. Sized from config at import.
-STORE = RunOutputStore(cfg.SERVE_RUN_OUTPUT_RING, cfg.SERVE_RUN_OUTPUT_MAX_RUNS)
+# Process-wide store used by the coordinator process. Sized from config at import.
+STORE = RunOutputStore(cfg.COORDINATOR_RUN_OUTPUT_RING, cfg.COORDINATOR_RUN_OUTPUT_MAX_RUNS)

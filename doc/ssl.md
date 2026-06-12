@@ -1,6 +1,6 @@
 # TLS / HTTPS for opp_ci
 
-`opp_ci serve` is a regular uvicorn app. There are three ways to put
+`opp_ci coordinator start` is a regular uvicorn app. There are three ways to put
 HTTPS in front of it; this doc covers all three and points you at the
 right one for your situation.
 
@@ -43,25 +43,25 @@ sudo install -m 0640 -o root -g opp_ci /dev/stdin /etc/opp_ci/tls/privkey.pem   
 sudo install -m 0640 -o root -g opp_ci /dev/stdin /etc/opp_ci/tls/fullchain.pem  <<< '...cert PEM...'
 ```
 
-Edit `/etc/opp_ci/serve.env` — uncomment:
+Edit `/etc/opp_ci/coordinator.env` — uncomment:
 
 ```
-OPP_CI_SERVE_TLS_CERT_FILE=/etc/opp_ci/tls/fullchain.pem
-OPP_CI_SERVE_TLS_KEY_FILE=/etc/opp_ci/tls/privkey.pem
+OPP_CI_COORDINATOR_TLS_CERT_FILE=/etc/opp_ci/tls/fullchain.pem
+OPP_CI_COORDINATOR_TLS_KEY_FILE=/etc/opp_ci/tls/privkey.pem
 OPP_CI_PUBLIC_URL=https://ci.omnetpp.org
-OPP_CI_SERVE_HOST=0.0.0.0
-OPP_CI_SERVE_PORT=443
+OPP_CI_COORDINATOR_HOST=0.0.0.0
+OPP_CI_COORDINATOR_PORT=443
 ```
 
 Activate the systemd drop-in (it grants `CAP_NET_BIND_SERVICE` for
 port 443) and the cert-watching `.path` unit:
 
 ```bash
-sudo mv /etc/systemd/system/opp_ci-serve.service.d/tls.conf.example \
-        /etc/systemd/system/opp_ci-serve.service.d/tls.conf
+sudo mv /etc/systemd/system/opp_ci-coordinator.service.d/tls.conf.example \
+        /etc/systemd/system/opp_ci-coordinator.service.d/tls.conf
 sudo systemctl daemon-reload
-sudo systemctl enable --now opp_ci-serve-cert.path
-sudo systemctl restart opp_ci-serve.service
+sudo systemctl enable --now opp_ci-coordinator-cert.path
+sudo systemctl restart opp_ci-coordinator.service
 ```
 
 Verify:
@@ -92,7 +92,7 @@ worker traffic.
 
 The shipped `/etc/opp_ci/tls/cloudflare-origin-ca.pem` is a bundle of
 both Cloudflare Origin CA roots (RSA + ECC), written by
-`opp_ci serve service install`. Refresh it from
+`opp_ci coordinator service install`. Refresh it from
 <https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/>
 if Cloudflare rotates the root (rare).
 
@@ -127,16 +127,16 @@ flow is:
 2. Overwrite `/etc/opp_ci/tls/privkey.pem` *first*, then
    `/etc/opp_ci/tls/fullchain.pem`. (Order matters — see "Renewal
    edge case" below.)
-3. The shipped `opp_ci-serve-cert.path` unit notices and triggers
-   `opp_ci-serve-cert-reload.service`, which runs
-   `systemctl restart opp_ci-serve.service`.
+3. The shipped `opp_ci-coordinator-cert.path` unit notices and triggers
+   `opp_ci-coordinator-cert-reload.service`, which runs
+   `systemctl restart opp_ci-coordinator.service`.
 
 Active HTTP sessions get one TLS reconnect (~ms). Workers retry on the
 next poll. No manual `systemctl restart` needed.
 
 ## Alternative: reverse proxy with HTTPS
 
-Run Caddy or nginx + Let's Encrypt on the same host, keep `opp_ci serve`
+Run Caddy or nginx + Let's Encrypt on the same host, keep `opp_ci coordinator start`
 on `127.0.0.1:8080`. The proxy terminates TLS and forwards plain HTTP
 on loopback.
 
@@ -151,7 +151,7 @@ ci.example.org {
 }
 ```
 
-In this shape, leave the TLS env vars in `serve.env` **unset** and
+In this shape, leave the TLS env vars in `coordinator.env` **unset** and
 leave the drop-in as `.example`. Just set
 `OPP_CI_PUBLIC_URL=https://ci.example.org` (so OAuth callbacks point
 at the public hostname) and
@@ -166,7 +166,7 @@ aren't behind Cloudflare and don't want a reverse proxy.
 Same env-var + drop-in setup as the Cloudflare path above; the
 difference is where the cert files come from. After the initial
 issuance, ACME clients renew automatically. The shipped
-`opp_ci-serve-cert.path` unit handles the restart-on-renewal step,
+`opp_ci-coordinator-cert.path` unit handles the restart-on-renewal step,
 *provided* the renewed file ends up at
 `/etc/opp_ci/tls/fullchain.pem` (and `privkey.pem`) as a regular file,
 not a symlink.
@@ -235,7 +235,7 @@ default, and browsers show a warning every time.
 
 ## Key handling: option A vs option B
 
-The shipped drop-in (`/etc/systemd/system/opp_ci-serve.service.d/tls.conf`)
+The shipped drop-in (`/etc/systemd/system/opp_ci-coordinator.service.d/tls.conf`)
 supports two key-protection modes:
 
 **Option A (default).** `/etc/opp_ci/tls/privkey.pem` is mode `0640`,
@@ -252,13 +252,13 @@ To enable option B:
    ```
    LoadCredential=privkey.pem:/etc/opp_ci/tls/privkey.pem
    ```
-2. In `serve.env`, change:
+2. In `coordinator.env`, change:
    ```
-   OPP_CI_SERVE_TLS_KEY_FILE=${CREDENTIALS_DIRECTORY}/privkey.pem
+   OPP_CI_COORDINATOR_TLS_KEY_FILE=${CREDENTIALS_DIRECTORY}/privkey.pem
    ```
 3. Tighten the key file: `sudo chmod 0600 /etc/opp_ci/tls/privkey.pem
    && sudo chown root:root /etc/opp_ci/tls/privkey.pem`.
-4. `sudo systemctl daemon-reload && sudo systemctl restart opp_ci-serve.service`.
+4. `sudo systemctl daemon-reload && sudo systemctl restart opp_ci-coordinator.service`.
 
 Ubuntu 22.04 ships systemd 249 (no `LoadCredential=`); use option A
 there. Ubuntu 24.04+ has it.
@@ -279,10 +279,10 @@ For poking at the TLS code paths on your dev machine:
 
 ```bash
 sudo opp_ci tls-selfsign --host localhost --out /etc/opp_ci/tls
-export OPP_CI_SERVE_TLS_CERT_FILE=/etc/opp_ci/tls/fullchain.pem
-export OPP_CI_SERVE_TLS_KEY_FILE=/etc/opp_ci/tls/privkey.pem
+export OPP_CI_COORDINATOR_TLS_CERT_FILE=/etc/opp_ci/tls/fullchain.pem
+export OPP_CI_COORDINATOR_TLS_KEY_FILE=/etc/opp_ci/tls/privkey.pem
 export OPP_CI_TLS_INSECURE=1   # for the worker / Python client
-opp_ci serve --host 127.0.0.1 --port 8443
+opp_ci coordinator start --host 127.0.0.1 --port 8443
 ```
 
 Then `curl --insecure https://127.0.0.1:8443/` or, with verification:

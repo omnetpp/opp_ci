@@ -20,7 +20,7 @@ coordinator's REST API; without it, it runs against the local database.
 Read commands need a `readonly` token, submission needs `submitter`, and
 management (`delete-*`, `seed-*`, `user`, `token`, `worker register`,
 `rule`) needs `admin`. Host-local commands (`init-db`, `reset-db`,
-`serve`, `tls-selfsign`, `worker start`, `worker detect-tags`,
+`coordinator start`, `tls-selfsign`, `worker start`, `worker detect-tags`,
 `image build`, `internal run-direct`) refuse `--remote` with a non-zero
 exit. See [Remote CLI Control](remote_cli.md) for the full matrix,
 role mapping, and notes (e.g. `run-matrix --remote` is named-matrix-only;
@@ -158,7 +158,7 @@ See [github_integration.md](github_integration.md).
 
 | Command | Purpose |
 |---|---|
-| `opp_ci serve` | Start the FastAPI server. Options: `--host` (default `127.0.0.1`), `--port` (default `8080` — matches the default `OPP_CI_COORDINATOR_URL`). |
+| `opp_ci coordinator start` | Start the FastAPI server. Options: `--host` (default `127.0.0.1`), `--port` (default `8080` — matches the default `OPP_CI_COORDINATOR_URL`). |
 
 See [web_ui.md](web_ui.md).
 
@@ -181,7 +181,7 @@ The CLI reads its configuration from environment variables. See
 ```bash
 opp_ci init-db
 opp_ci run --project fifo --kind smoke --skip-install
-opp_ci serve  # browse at http://localhost:8080
+opp_ci coordinator start  # browse at http://localhost:8080
 ```
 
 ### Local matrix

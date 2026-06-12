@@ -9,30 +9,30 @@ on that ref.
 
 > On **macOS**, which has no systemd, run workers as launchd
 > LaunchDaemons instead — see [launchd.md](launchd.md). (macOS packaging
-> is worker-only; the coordinator/`serve` side stays on Linux.)
+> is worker-only; the coordinator side stays on Linux.)
 >
 > On **NixOS**, units are owned declaratively, so `service install`
 > *renders* a NixOS module instead of mutating the system — see
 > [nixos.md](nixos.md).
 
 There is no single "opp_ci" process: the service layer wraps the
-existing `opp_ci serve` and `opp_ci worker start` subcommands. The host
+existing `opp_ci coordinator start` and `opp_ci worker start` subcommands. The host
 role — coordinator, worker, or combined — is a matter of which units you
 install.
 
 ## How it runs (uvx)
 
-Each unit's `ExecStart` is a single `uvx` command, for example the serve
+Each unit's `ExecStart` is a single `uvx` command, for example the coordinator
 unit:
 
 ```
 uvx --from "opp_ci[web,postgres,client,podman] @ git+https://github.com/omnetpp/opp_ci.git@main" \
     --with "opp_repl[all] @ git+https://github.com/omnetpp/opp_repl.git@opp_ci" \
     --refresh-package opp_ci --refresh-package opp_repl \
-    opp_ci serve
+    opp_ci coordinator start
 ```
 
-- The `opp_ci[...]` extras are **role-determined**: serve gets
+- The `opp_ci[...]` extras are **role-determined**: the coordinator gets
   `web,postgres,client,podman`; a worker gets `client,podman`.
 - `@main` is the opp_ci GitHub ref; set it with `--ref` at install time
   (a tag bounds surprise upgrades).
@@ -41,17 +41,17 @@ uvx --from "opp_ci[web,postgres,client,podman] @ git+https://github.com/omnetpp/
   restart": without it, `uvx` caches the first resolved commit of a
   branch and reuses it forever.
 
-The `opp_ci serve` / `opp_ci worker start` command line carries **no**
+The `opp_ci coordinator start` / `opp_ci worker start` command line carries **no**
 runtime options — all runtime config comes from env files (below).
 
 ## Units
 
 | Unit | Purpose | Multiplicity |
 |---|---|---|
-| `opp_ci-serve.service` | Runs `opp_ci serve` (web UI + API + scheduler) | Singleton |
+| `opp_ci-coordinator.service` | Runs `opp_ci coordinator start` (web UI + API + scheduler) | Singleton |
 | `opp_ci-worker@.service` | Templated unit; each instance runs `opp_ci worker start` for one worker name | One per worker name |
 | `opp_ci.target` | Umbrella for whichever services are installed on this host | Singleton |
-| `opp_ci-serve-cert.path` + `…-cert-reload.service` | Optional TLS cert-watch auto-reload (`serve service install --tls`) | Optional |
+| `opp_ci-coordinator-cert.path` + `…-cert-reload.service` | Optional TLS cert-watch auto-reload (`coordinator service install --tls`) | Optional |
 
 ## Install
 
@@ -64,8 +64,8 @@ install uv for you — if uv/uvx are missing it warns and continues.
 Coordinator host:
 
 ```bash
-sudo uvx opp_ci serve service install --host 0.0.0.0 --port 8080
-sudo uvx opp_ci serve service install --no-postgres   # use a remote DB
+sudo uvx opp_ci coordinator service install --host 0.0.0.0 --port 8080
+sudo uvx opp_ci coordinator service install --no-postgres   # use a remote DB
 ```
 
 Worker host:
@@ -87,11 +87,11 @@ the env file, auto-start is skipped with a message; set the token, then
 
 ### Install options
 
-`serve service install`:
+`coordinator service install`:
 
 | Option | Effect |
 |---|---|
-| `--host`, `--port`, `--cert`, `--key` | → `serve.env` |
+| `--host`, `--port`, `--cert`, `--key` | → `coordinator.env` |
 | `--user` (default `opp_ci`) | run-as user (`User=`) |
 | `--ref` (default `main`) | opp_ci GitHub ref in the uvx command |
 | `--no-postgres` | skip local PostgreSQL provisioning |
@@ -112,7 +112,7 @@ the env file, auto-start is skipped with a message; set the token, then
 - The `--user` system account (default `opp_ci`, home `/var/lib/opp_ci`).
 - `/etc/opp_ci`, `/etc/opp_ci/workers`, `/var/lib/opp_ci`, the TLS dir.
 - uv/uvx copied to the service user (see above).
-- serve: local PostgreSQL (role + db + grant + detected port → `OPP_CI_DATABASE_URL`), unless `--no-postgres`.
+- coordinator: local PostgreSQL (role + db + grant + detected port → `OPP_CI_DATABASE_URL`), unless `--no-postgres`.
 - worker: rootless podman (subuid/subgid, `enable-linger`, `podman system migrate`).
 
 ## Configuration (env files)
@@ -122,7 +122,7 @@ Runtime options live in env files; the command line stays generic.
 | File | Read by | Mode | Keys |
 |---|---|---|---|
 | `/etc/opp_ci/opp_ci.env` | both | 0640 root:opp_ci | `OPP_CI_DATABASE_URL` |
-| `/etc/opp_ci/serve.env` | serve | 0640 root:opp_ci | `OPP_CI_SERVE_HOST/PORT/TLS_CERT_FILE/TLS_KEY_FILE` |
+| `/etc/opp_ci/coordinator.env` | coordinator | 0640 root:opp_ci | `OPP_CI_COORDINATOR_HOST/PORT/TLS_CERT_FILE/TLS_KEY_FILE` |
 | `/etc/opp_ci/workers/<name>.env` | one worker | 0600 opp_ci:opp_ci | `OPP_CI_COORDINATOR_URL`, `OPP_CI_WORKER_TOKEN`, `OPP_CI_WORKER_POLL_INTERVAL`, `OPP_CI_WORKER_HEARTBEAT_INTERVAL`, `OPP_CI_WORKER_NICENESS`, `OPP_CI_OPP_ENV_CMD` |
 
 `OPP_CI_OPP_ENV_CMD` is set to `uvx --from opp-env opp_env` so the
@@ -134,17 +134,17 @@ To change a setting, edit the env file and restart:
 ## Lifecycle
 
 ```bash
-sudo opp_ci serve  service {start|stop|restart|status}
+sudo opp_ci coordinator service {start|stop|restart|status}
 sudo opp_ci worker service {start|stop|restart|status} --name <name>
 ```
 
 These drive `systemctl` directly. Logs:
-`journalctl -fu opp_ci-serve` / `journalctl -fu opp_ci-worker@<name>`.
+`journalctl -fu opp_ci-coordinator` / `journalctl -fu opp_ci-worker@<name>`.
 
 ## Uninstall
 
 ```bash
-sudo opp_ci serve  service uninstall            # stop + disable + remove units
+sudo opp_ci coordinator service uninstall            # stop + disable + remove units
 sudo opp_ci worker service uninstall --name X   # only that instance
 ```
 
@@ -171,13 +171,13 @@ transcript even as root, for review before applying.
 
 Drop `fullchain.pem` + `privkey.pem` into `/etc/opp_ci/tls/` (use
 `opp_ci tls-selfsign` for a lab cert, or paste a Cloudflare Origin
-Certificate), set the TLS paths in `serve.env`, and install with `--tls`
+Certificate), set the TLS paths in `coordinator.env`, and install with `--tls`
 to also get the cert-watch auto-reload units. See [ssl.md](ssl.md).
 
 ## Migrating from the venv-based install
 
 A re-install transparently migrates a host that used the old shell-script
-venv layout: `serve service install` overwrites the same-named unit files
+venv layout: `coordinator service install` overwrites the same-named unit files
 (now pointing at uvx) and `daemon-reload`s; the next restart runs the uvx
 model. It does **not** delete `/opt/opp_ci`, `/opt/opp_env`,
 `/opt/opp_repl`, or the service user's `.profile`/`setenv` shim

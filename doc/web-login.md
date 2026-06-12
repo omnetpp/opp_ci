@@ -1,6 +1,6 @@
 # Web UI login
 
-The `opp_ci serve` web UI requires every visitor to be authenticated.
+The `opp_ci coordinator start` web UI requires every visitor to be authenticated.
 Anonymous requests are redirected to `/login`. Two login paths are
 supported, and you can run with one or both enabled:
 
@@ -26,11 +26,11 @@ opp_ci user create --username root --role admin
 ```
 
 Then set `OPP_CI_SESSION_SECRET` (any random ≥32-byte string) and start
-`opp_ci serve`. `serve` refuses to start if the secret is empty.
+`opp_ci coordinator start`. The coordinator refuses to start if the secret is empty.
 
 ```bash
 export OPP_CI_SESSION_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-opp_ci serve
+opp_ci coordinator start
 ```
 
 Log in at `/login` as `root` and use the **Admin → Manage users**
@@ -66,7 +66,7 @@ sudo install -o opp_ci -g opp_ci -m 0600 /dev/stdin \
 
 ### 3. Set the env vars
 
-Add to `/etc/opp_ci/serve.env` (or your equivalent):
+Add to `/etc/opp_ci/coordinator.env` (or your equivalent):
 
 ```ini
 OPP_CI_SESSION_SECRET=<random-string-from-bootstrap>
@@ -79,17 +79,17 @@ OPP_CI_GITHUB_OAUTH_CLIENT_SECRET_FILE=/etc/opp_ci/github_oauth_secret
 
 `OPP_CI_PUBLIC_URL` is **required** when OAuth is on — the callback URL
 sent to GitHub is built from it, and deriving it from a `Host:` header
-breaks behind a reverse proxy. `serve` refuses to start with OAuth
+breaks behind a reverse proxy. The coordinator refuses to start with OAuth
 enabled and `PUBLIC_URL` empty.
 
-If you've also enabled native TLS in `opp_ci serve` itself (see
-[ssl.md](ssl.md)), `OPP_CI_PUBLIC_URL` **must use `https://`** — `serve`
+If you've also enabled native TLS in `opp_ci coordinator start` itself (see
+[ssl.md](ssl.md)), `OPP_CI_PUBLIC_URL` **must use `https://`** — the coordinator
 checks this at startup. For Cloudflare-fronted deploys, set it to the
 Cloudflare-fronted hostname (e.g. `https://ci.omnetpp.org`), not the
 origin IP — the GitHub OAuth callback redirects the user's browser, which
 must hit Cloudflare's edge, not the origin direct.
 
-Restart `opp_ci-serve.service`; the "Sign in with GitHub" button now
+Restart `opp_ci-coordinator.service`; the "Sign in with GitHub" button now
 appears on the login page.
 
 ## Authorization policy: who gets which role?
@@ -104,7 +104,7 @@ do*. Roles, low → high:
 | `admin`     | ✓ | ✓ | ✓ |
 
 When a user logs in via GitHub, their role is computed from these
-config vars (set in `serve.env`):
+config vars (set in `coordinator.env`):
 
 | Env var | Meaning | Default |
 |---|---|---|
@@ -190,11 +190,11 @@ configure.
 - **`/login` says "Your GitHub account is not authorized"** — the
   user isn't in `OPP_CI_GITHUB_ORG` and `OPP_CI_GITHUB_ALLOW_EXTERNAL=0`.
 
-- **`serve` refuses to start** — `OPP_CI_SESSION_SECRET` is empty, or
+- **coordinator refuses to start** — `OPP_CI_SESSION_SECRET` is empty, or
   `OPP_CI_GITHUB_OAUTH_CLIENT_ID` is set without `OPP_CI_PUBLIC_URL`.
   Both are deliberate fail-closed checks; set the missing var.
 
 - **Locked out (no admin account exists)** — SSH to the host and run
   `opp_ci user create --username rescue --role admin
-  --update-password`. The CLI talks to the same DB as `serve` and
+  --update-password`. The CLI talks to the same DB as the coordinator and
   doesn't need the web UI.

@@ -1,4 +1,4 @@
-"""Service lifecycle management for opp_ci (serve + worker).
+"""Service lifecycle management for opp_ci (coordinator + worker).
 
 This module folds the old ``packaging/systemd`` and ``packaging/launchd``
 shell installers into the CLI. It generates and applies the unit / plist
@@ -36,7 +36,7 @@ OPP_CI_GIT = "git+https://github.com/omnetpp/opp_ci.git"
 OPP_REPL_GIT = "git+https://github.com/omnetpp/opp_repl.git"
 OPP_REPL_REF = "opp_ci"  # opp_repl is pulled from this branch, not PyPI.
 
-SERVE_EXTRAS = "web,postgres,client,podman"
+COORDINATOR_EXTRAS = "web,postgres,client,podman"
 WORKER_EXTRAS = "client,podman"
 
 DEFAULT_USER = "opp_ci"
@@ -58,13 +58,13 @@ LAUNCHD_DIR = "/Library/LaunchDaemons"
 LAUNCHD_LABEL_PREFIX = "org.omnetpp.opp_ci.worker"
 NEWSYSLOG_DROPIN = "/etc/newsyslog.d/opp_ci.conf"
 
-# Unit / label names. Kept in sync with config.SERVE_UNIT /
+# Unit / label names. Kept in sync with config.COORDINATOR_UNIT /
 # WORKER_UNIT_TEMPLATE so the web UI log viewer keeps working.
-SERVE_UNIT = "opp_ci-serve.service"
+COORDINATOR_UNIT = "opp_ci-coordinator.service"
 WORKER_UNIT_TEMPLATE = "opp_ci-worker@{name}.service"
 TARGET_UNIT = "opp_ci.target"
-CERT_PATH_UNIT = "opp_ci-serve-cert.path"
-CERT_RELOAD_UNIT = "opp_ci-serve-cert-reload.service"
+CERT_PATH_UNIT = "opp_ci-coordinator-cert.path"
+CERT_RELOAD_UNIT = "opp_ci-coordinator-cert-reload.service"
 
 PEM_PACKAGE_FILE = os.path.join(os.path.dirname(__file__), "data",
                                 "cloudflare-origin-ca.pem")
@@ -116,11 +116,11 @@ def state_dir_for(os_kind):
 
 
 class InstallSpec:
-    """Resolved parameters for one serve/worker install, shared by all
+    """Resolved parameters for one coordinator/worker install, shared by all
     renderers and the apply layer. Constructed from CLI options."""
 
     def __init__(self, *, role, os_kind=None, user=DEFAULT_USER, ref=DEFAULT_REF,
-                 # serve
+                 # coordinator
                  host=None, port=None, cert=None, key=None,
                  postgres=True, tls=False,
                  # worker
@@ -128,7 +128,7 @@ class InstallSpec:
                  poll_interval=None, heartbeat_interval=None, niceness=None,
                  # lifecycle / output
                  enable=True, start=True, dry_run=False, out_dir=None, purge=False):
-        if role not in ("serve", "worker"):
+        if role not in ("coordinator", "worker"):
             raise ValueError(f"unknown role {role!r}")
         self.role = role
         self.os_kind = os_kind or detect_os()
@@ -168,7 +168,7 @@ class InstallSpec:
 
     @property
     def extras(self):
-        return SERVE_EXTRAS if self.role == "serve" else WORKER_EXTRAS
+        return COORDINATOR_EXTRAS if self.role == "coordinator" else WORKER_EXTRAS
 
     def uvx_path(self):
         """Absolute uvx path baked into the unit (OPP_CI_UVX override wins)."""
@@ -208,7 +208,8 @@ def uvx_argv(spec, *, uvx=None):
     uvx = uvx or spec.uvx_path()
     from_spec = f"opp_ci[{spec.extras}] @ {OPP_CI_GIT}@{spec.ref}"
     with_spec = f"opp_repl[all] @ {OPP_REPL_GIT}@{OPP_REPL_REF}"
-    subcommand = ["serve"] if spec.role == "serve" else ["worker", "start"]
+    subcommand = (["coordinator", "start"] if spec.role == "coordinator"
+                  else ["worker", "start"])
     return [
         uvx,
         "--from", from_spec,
@@ -242,23 +243,23 @@ def _render_env(pairs, *, header):
 
 
 def render_shared_env(spec, *, database_url=None):
-    """``/etc/opp_ci/opp_ci.env`` — shared by serve and workers."""
+    """``/etc/opp_ci/opp_ci.env`` — shared by coordinator and workers."""
     return _render_env(
         [("OPP_CI_DATABASE_URL", database_url)],
         header="/etc/opp_ci/opp_ci.env — shared opp_ci environment (0640 root:opp_ci)",
     )
 
 
-def render_serve_env(spec):
-    """``/etc/opp_ci/serve.env`` — serve runtime options."""
+def render_coordinator_env(spec):
+    """``/etc/opp_ci/coordinator.env`` — coordinator runtime options."""
     return _render_env(
         [
-            ("OPP_CI_SERVE_HOST", spec.host),
-            ("OPP_CI_SERVE_PORT", spec.port),
-            ("OPP_CI_SERVE_TLS_CERT_FILE", spec.cert),
-            ("OPP_CI_SERVE_TLS_KEY_FILE", spec.key),
+            ("OPP_CI_COORDINATOR_HOST", spec.host),
+            ("OPP_CI_COORDINATOR_PORT", spec.port),
+            ("OPP_CI_COORDINATOR_TLS_CERT_FILE", spec.cert),
+            ("OPP_CI_COORDINATOR_TLS_KEY_FILE", spec.key),
         ],
-        header="/etc/opp_ci/serve.env — opp_ci-serve options (0640 root:opp_ci)",
+        header="/etc/opp_ci/coordinator.env — opp_ci-coordinator options (0640 root:opp_ci)",
     )
 
 
@@ -288,7 +289,7 @@ def _path_env(spec):
             "/usr/sbin:/usr/bin:/sbin:/bin")
 
 
-def render_serve_unit(spec, *, uvx=None):
+def render_coordinator_unit(spec, *, uvx=None):
     return f"""\
 [Unit]
 Description=opp_ci coordinator (web UI + API + scheduler)
@@ -302,19 +303,19 @@ Type=simple
 User={spec.user}
 Group={spec.group}
 # Read access to the system journal so the web UI's Logs pages can tail the
-# serve and worker units (`journalctl -u …`). Scoped to this process.
+# coordinator and worker units (`journalctl -u …`). Scoped to this process.
 SupplementaryGroups=systemd-journal
 WorkingDirectory={spec.state_dir}
 Environment=HOME={spec.home}
 EnvironmentFile={CONFIG_DIR}/opp_ci.env
-EnvironmentFile=-{CONFIG_DIR}/serve.env
+EnvironmentFile=-{CONFIG_DIR}/coordinator.env
 # {spec.bindir} carries the copied uvx/uv so the daemon resolves them.
 Environment="PATH={_path_env(spec)}"
 ExecStart={uvx_command(spec, uvx=uvx)}
 Restart=on-failure
 RestartSec=5s
 
-# Hardening — safe for serve (no Nix, no podman).
+# Hardening — safe for the coordinator (no Nix, no podman).
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -379,7 +380,7 @@ def render_cert_path_unit():
 [Unit]
 Description=Watch opp_ci TLS cert for renewal
 Documentation=https://github.com/omnetpp/opp_ci
-PartOf={SERVE_UNIT}
+PartOf={COORDINATOR_UNIT}
 
 [Path]
 # Fires on close-after-write or atomic rename (acme.sh, certbot deploy hooks,
@@ -396,14 +397,14 @@ WantedBy={TARGET_UNIT}
 def render_cert_reload_unit():
     return f"""\
 [Unit]
-Description=Restart opp_ci-serve after TLS cert change
+Description=Restart opp_ci-coordinator after TLS cert change
 Documentation=https://github.com/omnetpp/opp_ci
-After={SERVE_UNIT}
-Requisite={SERVE_UNIT}
+After={COORDINATOR_UNIT}
+Requisite={COORDINATOR_UNIT}
 
 [Service]
 Type=oneshot
-ExecStart=/bin/systemctl restart {SERVE_UNIT}
+ExecStart=/bin/systemctl restart {COORDINATOR_UNIT}
 """
 
 
@@ -480,8 +481,8 @@ def render_worker_wrapper(spec, *, uvx=None):
 #
 # launchd has no equivalent of systemd's EnvironmentFile=, so this wrapper
 # sources the shared env and the per-worker env (token included) before
-# exec'ing the uvx worker command. CLI-generated by opp_ci serve/worker
-# service install.
+# exec'ing the uvx worker command. CLI-generated by
+# `opp_ci worker service install`.
 set -euo pipefail
 
 name="${{1:?usage: opp_ci-worker-run <worker-name>}}"
@@ -515,8 +516,8 @@ def render_nixos_module(spec):
     ``EnvironmentFile=``-references the rendered env files."""
     uvx = "${cfg.uvPackage}/bin/uvx"
     nix_spec = _nixos_exec_spec(spec, uvx=uvx)
-    if spec.role == "serve":
-        return _render_nixos_serve(spec, nix_spec)
+    if spec.role == "coordinator":
+        return _render_nixos_coordinator(spec, nix_spec)
     return _render_nixos_worker(spec, nix_spec)
 
 
@@ -525,18 +526,18 @@ def _nixos_exec_spec(spec, *, uvx):
     return uvx_command(spec, uvx=uvx)
 
 
-def _render_nixos_serve(spec, exec_start):
+def _render_nixos_coordinator(spec, exec_start):
     return f"""\
-# opp_ci.nix — NixOS module for the opp_ci coordinator (serve).
-# CLI-generated by `opp_ci serve service install` on NixOS. Import it and
+# opp_ci.nix — NixOS module for the opp_ci coordinator.
+# CLI-generated by `opp_ci coordinator service install` on NixOS. Import it and
 # apply with `sudo nixos-rebuild switch`. Secrets live in the referenced
 # EnvironmentFile, NOT in the Nix store.
 {{ config, lib, pkgs, ... }}:
 
 let
-  cfg = config.services.opp_ci.serve;
+  cfg = config.services.opp_ci.coordinator;
 in {{
-  options.services.opp_ci.serve = {{
+  options.services.opp_ci.coordinator = {{
     enable = lib.mkEnableOption "opp_ci coordinator";
     ref = lib.mkOption {{ type = lib.types.str; default = "{spec.ref}"; }};
     user = lib.mkOption {{ type = lib.types.str; default = "{spec.user}"; }};
@@ -545,7 +546,7 @@ in {{
     tls.enable = lib.mkOption {{ type = lib.types.bool; default = {('true' if spec.tls else 'false')}; }};
     environmentFiles = lib.mkOption {{
       type = lib.types.listOf lib.types.path;
-      default = [ "{CONFIG_DIR}/opp_ci.env" "{CONFIG_DIR}/serve.env" ];
+      default = [ "{CONFIG_DIR}/opp_ci.env" "{CONFIG_DIR}/coordinator.env" ];
     }};
   }};
 
@@ -570,7 +571,7 @@ in {{
       ensureUsers = [ {{ name = cfg.user; ensureDBOwnership = true; }} ];
     }};
 
-    systemd.services."opp_ci-serve" = {{
+    systemd.services."opp_ci-coordinator" = {{
       description = "opp_ci coordinator (web UI + API + scheduler)";
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" "postgresql.service" ];
@@ -671,7 +672,7 @@ def render_nixos_flake(spec):
   description = "opp_ci NixOS modules";
 
   outputs = { self }: {
-    nixosModules.opp_ci-serve = import ./opp_ci.nix;
+    nixosModules.opp_ci-coordinator = import ./opp_ci.nix;
     nixosModules.opp_ci-worker = import ./opp_ci.nix;
     nixosModules.default = import ./opp_ci.nix;
   };
@@ -682,11 +683,11 @@ def render_nixos_flake(spec):
 def render_nixos_apply_instructions(spec):
     """Operator-facing apply block: where to drop the files, the import line,
     the enable toggle, then nixos-rebuild switch."""
-    toggle = ("services.opp_ci.serve.enable = true;" if spec.role == "serve"
+    toggle = ("services.opp_ci.coordinator.enable = true;" if spec.role == "coordinator"
               else "services.opp_ci.worker.enable = true;")
     env_files = ([f"{CONFIG_DIR}/opp_ci.env (0640 root:{spec.user})",
-                  f"{CONFIG_DIR}/serve.env (0640 root:{spec.user})"]
-                 if spec.role == "serve"
+                  f"{CONFIG_DIR}/coordinator.env (0640 root:{spec.user})"]
+                 if spec.role == "coordinator"
                  else [f"{CONFIG_DIR}/opp_ci.env (0640 root:{spec.user})",
                        f"{spec.worker_env_path} (0600 {spec.user}:{spec.user})"])
     lines = [
@@ -701,7 +702,7 @@ def render_nixos_apply_instructions(spec):
         "# 3. In configuration.nix:",
         "#      imports = [ ./opp_ci.nix ];",
         f"#      {toggle}",
-        f'#      # services.opp_ci.{spec.role}.ref = "{spec.ref}";   # override the pinned ref',
+        f'#      # services.opp_ci.{spec.role}.ref = "{spec.ref}";  # override the pinned ref',
         "# 4. sudo nixos-rebuild switch",
         "#",
         "# Managed secrets: have the module's EnvironmentFile reference a",
@@ -825,9 +826,9 @@ def build_install_plan(spec, *, uvx=None):
     plan.files.append(FileArtifact(
         f"{CONFIG_DIR}/opp_ci.env", render_shared_env(spec),
         owner="root", group=group, mode=0o640, keep_existing=True))
-    if spec.role == "serve":
+    if spec.role == "coordinator":
         plan.files.append(FileArtifact(
-            f"{CONFIG_DIR}/serve.env", render_serve_env(spec),
+            f"{CONFIG_DIR}/coordinator.env", render_coordinator_env(spec),
             owner="root", group=group, mode=0o640, keep_existing=True))
     else:
         plan.files.append(FileArtifact(
@@ -868,9 +869,9 @@ def _plan_uv_copy(plan, spec):
 
 def _plan_systemd(plan, spec, *, uvx=None):
     g = spec.group
-    if spec.role == "serve":
+    if spec.role == "coordinator":
         plan.files.append(FileArtifact(
-            f"{SYSTEMD_DIR}/{SERVE_UNIT}", render_serve_unit(spec, uvx=uvx), mode=0o644))
+            f"{SYSTEMD_DIR}/{COORDINATOR_UNIT}", render_coordinator_unit(spec, uvx=uvx), mode=0o644))
         if spec.tls:
             plan.files.append(FileArtifact(
                 f"{SYSTEMD_DIR}/{CERT_PATH_UNIT}", render_cert_path_unit(), mode=0o644))
@@ -884,7 +885,7 @@ def _plan_systemd(plan, spec, *, uvx=None):
         f"{SYSTEMD_DIR}/{TARGET_UNIT}", render_target_unit(), mode=0o644))
 
     # provisioning + lifecycle
-    if spec.role == "serve" and spec.postgres:
+    if spec.role == "coordinator" and spec.postgres:
         plan.provision_cmds.append(
             ("provision local PostgreSQL (role + db + grant)",
              ["sudo", "-u", "postgres", "createuser", spec.user]))
@@ -894,14 +895,14 @@ def _plan_systemd(plan, spec, *, uvx=None):
              ["loginctl", "enable-linger", spec.user]))
 
     plan.lifecycle_cmds.append(["systemctl", "daemon-reload"])
-    unit = SERVE_UNIT if spec.role == "serve" else spec.worker_unit
+    unit = COORDINATOR_UNIT if spec.role == "coordinator" else spec.worker_unit
     if spec.enable and spec.start:
         plan.lifecycle_cmds.append(["systemctl", "enable", "--now", unit])
     elif spec.enable:
         plan.lifecycle_cmds.append(["systemctl", "enable", unit])
     elif spec.start:
         plan.lifecycle_cmds.append(["systemctl", "start", unit])
-    if spec.tls and spec.role == "serve":
+    if spec.tls and spec.role == "coordinator":
         plan.lifecycle_cmds.append(["systemctl", "enable", "--now", CERT_PATH_UNIT])
 
 
@@ -1022,7 +1023,7 @@ def lifecycle(spec, action, *, echo=print):
     if spec.os_kind == "macos":
         _launchctl_lifecycle(spec, action, echo=echo)
     else:
-        unit = SERVE_UNIT if spec.role == "serve" else spec.worker_unit
+        unit = COORDINATOR_UNIT if spec.role == "coordinator" else spec.worker_unit
         _systemctl(action, unit, echo=echo)
 
 
@@ -1037,8 +1038,8 @@ def render_nixos_bundle(spec):
         ("flake.nix", render_nixos_flake(spec)),
         ("opp_ci.env", render_shared_env(spec)),
     ]
-    if spec.role == "serve":
-        out.append(("serve.env", render_serve_env(spec)))
+    if spec.role == "coordinator":
+        out.append(("coordinator.env", render_coordinator_env(spec)))
     else:
         out.append((f"{spec.name}.env", render_worker_env(spec)))
     out.append(("APPLY.txt", render_nixos_apply_instructions(spec)))
@@ -1167,15 +1168,15 @@ def render_uninstall_transcript(spec):
 def _uninstall_cmds(spec):
     if spec.os_kind == "macos":
         return [["launchctl", "bootout", f"system/{spec.launchd_label}"]]
-    unit = SERVE_UNIT if spec.role == "serve" else spec.worker_unit
+    unit = COORDINATOR_UNIT if spec.role == "coordinator" else spec.worker_unit
     return [["systemctl", "disable", "--now", unit], ["systemctl", "daemon-reload"]]
 
 
 def _uninstall_files(spec):
     if spec.os_kind == "macos":
         return [spec.launchd_plist_path]
-    if spec.role == "serve":
-        return [f"{SYSTEMD_DIR}/{SERVE_UNIT}",
+    if spec.role == "coordinator":
+        return [f"{SYSTEMD_DIR}/{COORDINATOR_UNIT}",
                 f"{SYSTEMD_DIR}/{CERT_PATH_UNIT}",
                 f"{SYSTEMD_DIR}/{CERT_RELOAD_UNIT}"]
     # A worker uninstall removes only this instance's env file; the shared
@@ -1184,7 +1185,7 @@ def _uninstall_files(spec):
 
 
 def _purge_paths(spec):
-    if spec.role == "serve":
+    if spec.role == "coordinator":
         return [CONFIG_DIR, spec.state_dir]
     return [spec.worker_env_path]
 

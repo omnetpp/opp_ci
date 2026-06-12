@@ -1,7 +1,7 @@
 """
 Read process logs from systemd-journald for the web UI's Logs pages.
 
-`opp_ci serve` and each `opp_ci worker start` run as system units
+`opp_ci coordinator start` and each `opp_ci worker start` run as system units
 (`opp_ci-serve.service`, `opp_ci-worker@<name>.service`), and systemd
 already captures their full stdout/stderr into the journal — per unit,
 with rotation and retention. So the Logs pages don't add any capture

@@ -37,12 +37,12 @@ contract is explicit.
 | `OPP_CI_INSTALL_PROJECTS` | *(empty)* | Comma-separated list of opp_env projects the entrypoint should `opp_env install` before running the test command. |
 | `OPP_ENV_GIT_REF` | *(empty)* | Specific git ref to pin a `*-git` opp_env project to, when one is named. |
 
-## Web server (serve)
+## Coordinator (web server)
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPP_CI_SERVE_HOST` | `127.0.0.1` | Bind host for `opp_ci serve`. Overridden by `--host`. |
-| `OPP_CI_SERVE_PORT` | `8080` | Bind port for `opp_ci serve`. Overridden by `--port`. |
+| `OPP_CI_COORDINATOR_HOST` | `127.0.0.1` | Bind host for `opp_ci coordinator start`. Overridden by `--host`. |
+| `OPP_CI_COORDINATOR_PORT` | `8080` | Bind port for `opp_ci coordinator start`. Overridden by `--port`. |
 
 ## Workers
 
@@ -56,7 +56,7 @@ contract is explicit.
 | `OPP_CI_MAX_RECLAIMS` | `2` | Times a `running` run is re-queued after its worker goes dark before it is retired to `timed_out`/`ERROR` as a poison pill. |
 | `OPP_CI_QUEUE_UNSERVICEABLE_TIMEOUT` | `300` | Seconds a `queued` run may wait with no enabled worker able to serve its capability tags before it is expired to `timed_out`/`ERROR`. Serviceable-but-starved runs (right tags, fleet busy/offline) are never auto-expired. `0` disables the sweep. |
 
-The reaper sweep runs in the coordinator (`opp_ci serve`), not the worker:
+The reaper sweep runs in the coordinator (`opp_ci coordinator start`), not the worker:
 it covers both dead workers and queued runs no worker can serve. See
 [workers.md → Lifecycle](workers.md#lifecycle).
 
@@ -84,7 +84,7 @@ See [git_notes.md](git_notes.md) for the full permission model.
 
 ## Tips
 
-- All env vars are read once on startup. Restart `opp_ci serve` after
+- All env vars are read once on startup. Restart `opp_ci coordinator start` after
   changing them.
 - The coordinator URL auto-detection picks the host's primary outbound
   IP. On multi-NIC hosts, set `OPP_CI_COORDINATOR_URL` explicitly.

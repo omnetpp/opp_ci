@@ -99,7 +99,7 @@ opp_ci show-run 1
 ### Web UI
 
 ```bash
-opp_ci serve
+opp_ci coordinator start
 # Open http://localhost:8080
 ```
 

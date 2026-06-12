@@ -1100,52 +1100,51 @@ def _run_remote(project, kinds, git_ref, *, mode=None,
             click.echo(f"ERROR submitting {project}/{kind}: {e}")
 
 
-@main.group("serve", invoke_without_command=True)
-@click.option("--host", default=None,
-              help="Bind host (default from $OPP_CI_SERVE_HOST, or 127.0.0.1)")
-@click.option("--port", default=None, type=int,
-              help="Bind port (default from $OPP_CI_SERVE_PORT, or 8080)")
-@click.option("--cert", "cert_file", default=None,
-              help="TLS certificate file (default $OPP_CI_SERVE_TLS_CERT_FILE)")
-@click.option("--key", "key_file", default=None,
-              help="TLS private key file (default $OPP_CI_SERVE_TLS_KEY_FILE)")
-@click.pass_context
-def serve(ctx, host, port, cert_file, key_file):
-    """Start the web UI server, or manage it as a system service.
+@main.group("coordinator")
+def coordinator_group():
+    """Coordinator (web UI + API + scheduler) commands.
 
-    With no subcommand this starts the coordinator (web UI + API + scheduler)
-    exactly as before. `opp_ci serve service …` manages the systemd / NixOS
-    service (Linux-only).
+    `opp_ci coordinator start` runs the coordinator in the foreground;
+    `opp_ci coordinator service …` manages it as a system service (Linux).
     """
-    if ctx.invoked_subcommand is not None:
-        return
-    if ctx.obj.get("remote"):
-        click.echo("ERROR: serve is local-only; ignoring --remote", err=True)
-        raise SystemExit(2)
-    _serve_run(host, port, cert_file, key_file)
 
 
-def _serve_run(host, port, cert_file, key_file):
-    """Start the web UI server (the bare `opp_ci serve` body)."""
+@coordinator_group.command("start")
+@click.option("--host", default=None,
+              help="Bind host (default from $OPP_CI_COORDINATOR_HOST, or 127.0.0.1)")
+@click.option("--port", default=None, type=int,
+              help="Bind port (default from $OPP_CI_COORDINATOR_PORT, or 8080)")
+@click.option("--cert", "cert_file", default=None,
+              help="TLS certificate file (default $OPP_CI_COORDINATOR_TLS_CERT_FILE)")
+@click.option("--key", "key_file", default=None,
+              help="TLS private key file (default $OPP_CI_COORDINATOR_TLS_KEY_FILE)")
+@remoteable(_refuse_remote("coordinator start"))
+def coordinator_start(host, port, cert_file, key_file):
+    """Start the web UI server (web UI + API + scheduler)."""
+    _coordinator_run(host, port, cert_file, key_file)
+
+
+def _coordinator_run(host, port, cert_file, key_file):
+    """Start the web UI server (the `opp_ci coordinator start` body)."""
     import os
     import uvicorn
     from opp_ci.web.app import app
     from opp_ci import config as cfg
     Base.metadata.create_all(engine)
     if host is None:
-        host = cfg.SERVE_HOST
+        host = cfg.COORDINATOR_HOST
     if port is None:
-        port = cfg.SERVE_PORT
+        port = cfg.COORDINATOR_PORT
     if cert_file is None:
-        cert_file = cfg.SERVE_TLS_CERT_FILE
+        cert_file = cfg.COORDINATOR_TLS_CERT_FILE
     if key_file is None:
-        key_file = cfg.SERVE_TLS_KEY_FILE
+        key_file = cfg.COORDINATOR_TLS_KEY_FILE
 
     # ── TLS validation ──────────────────────────────────────────────
     if bool(cert_file) != bool(key_file):
         raise click.UsageError(
-            "TLS requires both --cert/$OPP_CI_SERVE_TLS_CERT_FILE and "
-            "--key/$OPP_CI_SERVE_TLS_KEY_FILE; set both or neither."
+            "TLS requires both --cert/$OPP_CI_COORDINATOR_TLS_CERT_FILE and "
+            "--key/$OPP_CI_COORDINATOR_TLS_KEY_FILE; set both or neither."
         )
     tls_on = bool(cert_file)
     if tls_on:
@@ -1186,7 +1185,7 @@ def _serve_run(host, port, cert_file, key_file):
     )
 
 
-# ── Service lifecycle subgroups (serve service … / worker service …) ────────
+# ── Service lifecycle subgroups (coordinator service … / worker service …) ──
 #
 # These fold the old packaging/{systemd,launchd} installers into the CLI: they
 # generate and apply the unit/plist artifacts that run opp_ci from GitHub via
@@ -1204,28 +1203,28 @@ def _run_service(fn, *args, **kwargs):
         raise SystemExit(1)
 
 
-def _refuse_serve_on_macos():
-    """serve service is Linux-only (incl. NixOS); macOS packaging is
+def _refuse_coordinator_on_macos():
+    """coordinator service is Linux-only (incl. NixOS); macOS packaging is
     worker-only."""
     from opp_ci import service
     if service.detect_os() == "macos":
-        click.echo("ERROR: `serve service` is Linux-only — the coordinator "
-                   "runs on Linux. macOS packaging is worker-only "
+        click.echo("ERROR: `coordinator service` is Linux-only — the "
+                   "coordinator runs on Linux. macOS packaging is worker-only "
                    "(`worker service`).", err=True)
         raise SystemExit(2)
 
 
-@serve.group("service")
-def serve_service():
+@coordinator_group.group("service")
+def coordinator_service():
     """Install/manage the opp_ci coordinator as a system service (Linux)."""
-    _refuse_serve_on_macos()
+    _refuse_coordinator_on_macos()
 
 
-@serve_service.command("install")
-@click.option("--host", default=None, help="Bind host → OPP_CI_SERVE_HOST")
-@click.option("--port", default=None, type=int, help="Bind port → OPP_CI_SERVE_PORT")
-@click.option("--cert", default=None, help="TLS cert file → OPP_CI_SERVE_TLS_CERT_FILE")
-@click.option("--key", default=None, help="TLS key file → OPP_CI_SERVE_TLS_KEY_FILE")
+@coordinator_service.command("install")
+@click.option("--host", default=None, help="Bind host → OPP_CI_COORDINATOR_HOST")
+@click.option("--port", default=None, type=int, help="Bind port → OPP_CI_COORDINATOR_PORT")
+@click.option("--cert", default=None, help="TLS cert file → OPP_CI_COORDINATOR_TLS_CERT_FILE")
+@click.option("--key", default=None, help="TLS key file → OPP_CI_COORDINATOR_TLS_KEY_FILE")
 @click.option("--user", default="opp_ci", help="Run-as service user (User= in the unit)")
 @click.option("--ref", default="main", help="opp_ci GitHub ref baked into the uvx command")
 @click.option("--no-postgres", is_flag=True, help="Skip local PostgreSQL provisioning (remote DB)")
@@ -1235,12 +1234,12 @@ def serve_service():
 @click.option("--out", "out_dir", default=None,
               help="NixOS: write the rendered module/flake/env bodies to this dir")
 @click.option("--dry-run", is_flag=True, help="Render + print all artifacts, change nothing")
-def serve_service_install(host, port, cert, key, user, ref, no_postgres, tls,
-                          no_enable, no_start, out_dir, dry_run):
-    """Install (and by default enable + start) the opp_ci-serve service."""
+def coordinator_service_install(host, port, cert, key, user, ref, no_postgres, tls,
+                                no_enable, no_start, out_dir, dry_run):
+    """Install (and by default enable + start) the opp_ci-coordinator service."""
     from opp_ci import service
     spec = service.InstallSpec(
-        role="serve", user=user, ref=ref,
+        role="coordinator", user=user, ref=ref,
         host=host, port=port, cert=cert, key=key,
         postgres=not no_postgres, tls=tls,
         enable=not no_enable, start=not no_start,
@@ -1248,31 +1247,31 @@ def serve_service_install(host, port, cert, key, user, ref, no_postgres, tls,
     _run_service(service.do_install, spec)
 
 
-@serve_service.command("uninstall")
+@coordinator_service.command("uninstall")
 @click.option("--purge", is_flag=True, help="Also remove config + state (after confirmation)")
 @click.option("--dry-run", is_flag=True, help="Render the uninstall transcript, change nothing")
-def serve_service_uninstall(purge, dry_run):
-    """Stop + disable the serve service and remove its unit files."""
+def coordinator_service_uninstall(purge, dry_run):
+    """Stop + disable the coordinator service and remove its unit files."""
     from opp_ci import service
     if purge and not dry_run:
         click.confirm("Purge will delete /etc/opp_ci config + state. Continue?",
                       abort=True)
-    spec = service.InstallSpec(role="serve", purge=purge, dry_run=dry_run)
+    spec = service.InstallSpec(role="coordinator", purge=purge, dry_run=dry_run)
     _run_service(service.do_uninstall, spec)
 
 
-def _add_serve_lifecycle(action):
+def _add_coordinator_lifecycle(action):
     def _cmd():
         from opp_ci import service
-        spec = service.InstallSpec(role="serve")
+        spec = service.InstallSpec(role="coordinator")
         _run_service(service.do_lifecycle, spec, action)
-    _cmd.__name__ = f"serve_service_{action}"
+    _cmd.__name__ = f"coordinator_service_{action}"
     _cmd.__doc__ = f"{action.capitalize()} the opp_ci-serve service."
-    serve_service.command(action)(_cmd)
+    coordinator_service.command(action)(_cmd)
 
 
 for _action in ("start", "stop", "restart", "status"):
-    _add_serve_lifecycle(_action)
+    _add_coordinator_lifecycle(_action)
 
 
 @main.command("tls-selfsign")
@@ -1393,8 +1392,8 @@ def tls_selfsign(host, extra_sans, out_dir, days, bits, dry_run):
     click.echo(f"Wrote {cert_path} and {key_path} (valid {days} days)")
     click.echo("")
     click.echo("Next steps:")
-    click.echo(f"  serve:   set OPP_CI_SERVE_TLS_CERT_FILE={cert_path}")
-    click.echo(f"                OPP_CI_SERVE_TLS_KEY_FILE={key_path}")
+    click.echo(f"  coordinator: set OPP_CI_COORDINATOR_TLS_CERT_FILE={cert_path}")
+    click.echo(f"                   OPP_CI_COORDINATOR_TLS_KEY_FILE={key_path}")
     click.echo(f"  workers: set OPP_CI_TLS_CA_BUNDLE={cert_path}  "
                "(or OPP_CI_TLS_INSECURE=1 for dev)")
 

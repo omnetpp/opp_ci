@@ -188,9 +188,9 @@ app = FastAPI(title="opp_ci", lifespan=lifespan)
 # misconfigured deploy.
 if not cfg.SESSION_SECRET:
     raise RuntimeError(
-        "OPP_CI_SESSION_SECRET is required for `opp_ci serve`. "
+        "OPP_CI_SESSION_SECRET is required for `opp_ci coordinator start`. "
         "Generate one with `python -c 'import secrets; print(secrets.token_urlsafe(32))'` "
-        "and set it in /etc/opp_ci/serve.env or the environment."
+        "and set it in /etc/opp_ci/coordinator.env or the environment."
     )
 if cfg.GITHUB_OAUTH_CLIENT_ID and not cfg.PUBLIC_URL:
     # Behind a reverse proxy, deriving the callback URL from request
@@ -2642,7 +2642,7 @@ def logs_hub(request: Request, current_user: User = Depends(require_user("submit
             "connected": w.last_heartbeat is not None and w.last_heartbeat > threshold,
         } for w in workers]
         return templates.TemplateResponse(request, "logs.html", {
-            "serve_unit": cfg.SERVE_UNIT,
+            "coordinator_unit": cfg.COORDINATOR_UNIT,
             "worker_rows": worker_rows,
             **_template_globals(request, current_user),
         })
@@ -2650,21 +2650,21 @@ def logs_hub(request: Request, current_user: User = Depends(require_user("submit
         session.close()
 
 
-@web_router.get("/logs/serve", response_class=HTMLResponse)
-def serve_log(request: Request, current_user: User = Depends(require_user("submitter"))):
+@web_router.get("/logs/coordinator", response_class=HTMLResponse)
+def coordinator_log(request: Request, current_user: User = Depends(require_user("submitter"))):
     return templates.TemplateResponse(request, "log_view.html", {
-        "log_title": "Serve log",
-        "log_subtitle": cfg.SERVE_UNIT,
-        "tail_url": "/logs/serve/tail",
+        "log_title": "Coordinator log",
+        "log_subtitle": cfg.COORDINATOR_UNIT,
+        "tail_url": "/logs/coordinator/tail",
         "back_url": "/logs",
         **_template_globals(request, current_user),
     })
 
 
-@web_router.get("/logs/serve/tail")
-def serve_log_tail(request: Request, cursor: str = Query(default=None),
-                   current_user: User = Depends(require_user("submitter"))):
-    return _tail_response(cfg.SERVE_UNIT, cursor)
+@web_router.get("/logs/coordinator/tail")
+def coordinator_log_tail(request: Request, cursor: str = Query(default=None),
+                         current_user: User = Depends(require_user("submitter"))):
+    return _tail_response(cfg.COORDINATOR_UNIT, cursor)
 
 
 @web_router.get("/logs/worker/{worker_id}", response_class=HTMLResponse)

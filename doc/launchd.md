@@ -3,7 +3,7 @@
 macOS has no systemd, so a macOS worker runs as a launchd **LaunchDaemon**
 managed from the CLI. This is the macOS analogue of the systemd worker
 ([systemd.md](systemd.md)) and is **worker-only** — the coordinator
-(`serve`) runs on Linux. `opp_ci serve service …` refuses on macOS.
+runs on Linux. `opp_ci coordinator service …` refuses on macOS.
 
 Like the Linux path, the worker runs from GitHub via `uvx`, re-fetching
 the pinned ref on every (re)start. See [systemd.md](systemd.md#how-it-runs-uvx)

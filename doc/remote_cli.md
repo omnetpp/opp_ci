@@ -91,7 +91,7 @@ These operate on *this* host or process and refuse `--remote` with a
 non-zero exit and a one-line notice (`ERROR: <cmd> is local-only;
 ignoring --remote`):
 
-`init-db`, `reset-db`, `serve`, `tls-selfsign`, `worker start`,
+`init-db`, `reset-db`, `coordinator start`, `tls-selfsign`, `worker start`,
 `worker detect-tags`, `image build`, `internal run-direct`.
 
 `resolve-deps` is a pure local computation over opp_env metadata; with

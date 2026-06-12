@@ -16,9 +16,9 @@
         </tr>
     </thead>
     <tbody>
-        <tr data-href="/logs/serve">
-            <td><strong><a href="/logs/serve">Serve</a></strong></td>
-            <td><code>{{ serve_unit }}</code></td>
+        <tr data-href="/logs/coordinator">
+            <td><strong><a href="/logs/coordinator">Coordinator</a></strong></td>
+            <td><code>{{ coordinator_unit }}</code></td>
             <td><span class="badge badge-passed">● this process</span></td>
         </tr>
         {% for row in worker_rows %}
@@ -40,7 +40,7 @@
 
 {% if not worker_rows %}
 <p style="color:var(--muted); font-size:0.85rem; margin-top:1rem;">
-    No workers registered yet — only the serve log is available.
+    No workers registered yet — only the coordinator log is available.
 </p>
 {% endif %}
 {% endblock %}

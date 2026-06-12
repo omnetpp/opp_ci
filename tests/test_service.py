@@ -4,7 +4,7 @@ Covers plan/pending/uvx-service-management.md §11:
   * the embedded uvx command — right extras per role, @<ref>, opp_repl from
     its opp_ci branch, and --refresh-package opp_ci opp_repl;
   * option → env-var mapping in the rendered env files;
-  * serve unit / worker template / target / plist / wrapper / newsyslog /
+  * coordinator unit / worker template / target / plist / wrapper / newsyslog /
     env files render with the expected key lines;
   * the unprivileged manual recipe lists files + contents + commands;
   * OPP_CI_OPP_ENV_CMD ("uvx --from opp-env opp_env") in the worker env;
@@ -22,9 +22,9 @@ from unittest import mock
 from opp_ci import service
 
 
-def serve_spec(**kw):
+def coordinator_spec(**kw):
     kw.setdefault("os_kind", "linux")
-    return service.InstallSpec(role="serve", **kw)
+    return service.InstallSpec(role="coordinator", **kw)
 
 
 def worker_spec(**kw):
@@ -36,14 +36,14 @@ UVX = "/var/lib/opp_ci/.local/bin/uvx"
 
 
 class UvxCommandTest(unittest.TestCase):
-    def test_serve_extras_ref_and_refresh(self):
-        cmd = service.uvx_command(serve_spec(ref="main"), uvx=UVX)
+    def test_coordinator_extras_ref_and_refresh(self):
+        cmd = service.uvx_command(coordinator_spec(ref="main"), uvx=UVX)
         self.assertIn("opp_ci[web,postgres,client,podman] @ "
                       "git+https://github.com/omnetpp/opp_ci.git@main", cmd)
         self.assertIn("opp_repl[all] @ "
                       "git+https://github.com/omnetpp/opp_repl.git@opp_ci", cmd)
         self.assertIn("--refresh-package opp_ci --refresh-package opp_repl", cmd)
-        self.assertTrue(cmd.endswith("opp_ci serve"))
+        self.assertTrue(cmd.endswith("opp_ci coordinator start"))
         self.assertTrue(cmd.startswith(UVX))
 
     def test_worker_extras_and_subcommand(self):
@@ -55,19 +55,19 @@ class UvxCommandTest(unittest.TestCase):
 
     def test_uvx_override_from_config(self):
         with mock.patch.object(service.cfg, "UVX", "/nix/store/uv/bin/uvx"):
-            self.assertEqual(serve_spec().uvx_path(), "/nix/store/uv/bin/uvx")
-            cmd = service.uvx_command(serve_spec())
+            self.assertEqual(coordinator_spec().uvx_path(), "/nix/store/uv/bin/uvx")
+            cmd = service.uvx_command(coordinator_spec())
             self.assertTrue(cmd.startswith("/nix/store/uv/bin/uvx"))
 
 
 class EnvFileTest(unittest.TestCase):
-    def test_serve_option_to_env_mapping(self):
-        body = service.render_serve_env(serve_spec(
+    def test_coordinator_option_to_env_mapping(self):
+        body = service.render_coordinator_env(coordinator_spec(
             host="0.0.0.0", port=8080, cert="/c.pem", key="/k.pem"))
-        self.assertIn("OPP_CI_SERVE_HOST=0.0.0.0", body)
-        self.assertIn("OPP_CI_SERVE_PORT=8080", body)
-        self.assertIn("OPP_CI_SERVE_TLS_CERT_FILE=/c.pem", body)
-        self.assertIn("OPP_CI_SERVE_TLS_KEY_FILE=/k.pem", body)
+        self.assertIn("OPP_CI_COORDINATOR_HOST=0.0.0.0", body)
+        self.assertIn("OPP_CI_COORDINATOR_PORT=8080", body)
+        self.assertIn("OPP_CI_COORDINATOR_TLS_CERT_FILE=/c.pem", body)
+        self.assertIn("OPP_CI_COORDINATOR_TLS_KEY_FILE=/k.pem", body)
 
     def test_worker_option_to_env_mapping(self):
         body = service.render_worker_env(worker_spec(
@@ -84,16 +84,16 @@ class EnvFileTest(unittest.TestCase):
         self.assertIn('OPP_CI_OPP_ENV_CMD="uvx --from opp-env opp_env"', body)
 
     def test_unset_options_omitted(self):
-        body = service.render_serve_env(serve_spec())
-        self.assertNotIn("OPP_CI_SERVE_HOST", body)
+        body = service.render_coordinator_env(coordinator_spec())
+        self.assertNotIn("OPP_CI_COORDINATOR_HOST", body)
 
 
 class SystemdRenderTest(unittest.TestCase):
-    def test_serve_unit(self):
-        unit = service.render_serve_unit(serve_spec(), uvx=UVX)
+    def test_coordinator_unit(self):
+        unit = service.render_coordinator_unit(coordinator_spec(), uvx=UVX)
         self.assertIn("User=opp_ci", unit)
         self.assertIn("EnvironmentFile=/etc/opp_ci/opp_ci.env", unit)
-        self.assertIn("EnvironmentFile=-/etc/opp_ci/serve.env", unit)
+        self.assertIn("EnvironmentFile=-/etc/opp_ci/coordinator.env", unit)
         self.assertIn("SupplementaryGroups=systemd-journal", unit)
         self.assertIn(f"ExecStart={UVX}", unit)
         self.assertIn("/var/lib/opp_ci/.local/bin", unit)  # PATH
@@ -108,7 +108,7 @@ class SystemdRenderTest(unittest.TestCase):
         self.assertIn("WantedBy=multi-user.target", service.render_target_unit())
 
     def test_run_as_user_threads_through(self):
-        unit = service.render_serve_unit(serve_spec(user="ci"), uvx=UVX)
+        unit = service.render_coordinator_unit(coordinator_spec(user="ci"), uvx=UVX)
         self.assertIn("User=ci", unit)
         self.assertIn("Group=ci", unit)
 
@@ -134,11 +134,11 @@ class LaunchdRenderTest(unittest.TestCase):
 
 
 class ManualTranscriptTest(unittest.TestCase):
-    def test_serve_transcript_lists_files_and_commands(self):
-        spec = serve_spec(host="0.0.0.0", port=8080)
+    def test_coordinator_transcript_lists_files_and_commands(self):
+        spec = coordinator_spec(host="0.0.0.0", port=8080)
         plan = service.build_install_plan(spec, uvx=UVX)
         t = service.render_manual_transcript(plan)
-        self.assertIn("/etc/systemd/system/opp_ci-serve.service", t)
+        self.assertIn("/etc/systemd/system/opp_ci-coordinator.service", t)
         self.assertIn("cat >", t)        # file contents
         self.assertIn("useradd", t)      # user creation
         self.assertIn("systemctl", t)    # enable/start
@@ -184,7 +184,7 @@ class NixosDetectorTest(unittest.TestCase):
 
     def test_nixos_install_is_render_only_even_as_root(self):
         """do_install on NixOS must mutate nothing, even euid 0."""
-        spec = serve_spec(os_kind="nixos", host="0.0.0.0", port=8080)
+        spec = coordinator_spec(os_kind="nixos", host="0.0.0.0", port=8080)
         out = []
         with mock.patch.object(service, "apply_plan") as apply_mock, \
              mock.patch.object(service, "_is_root", return_value=True):
@@ -196,8 +196,8 @@ class NixosDetectorTest(unittest.TestCase):
 
 
 class NixosRenderTest(unittest.TestCase):
-    def test_serve_module(self):
-        spec = serve_spec(os_kind="nixos", host="0.0.0.0", port=8080, ref="main")
+    def test_coordinator_module(self):
+        spec = coordinator_spec(os_kind="nixos", host="0.0.0.0", port=8080, ref="main")
         mod = service.render_nixos_module(spec)
         # pkgs.uv on the path, store-resolved uvx in ExecStart.
         self.assertIn("path = [ cfg.uvPackage ]", mod)
@@ -218,8 +218,8 @@ class NixosRenderTest(unittest.TestCase):
         self.assertNotIn("SUPER-SECRET", mod)
 
     def test_flake_exposes_modules(self):
-        flake = service.render_nixos_flake(serve_spec(os_kind="nixos"))
-        self.assertIn("nixosModules.opp_ci-serve", flake)
+        flake = service.render_nixos_flake(coordinator_spec(os_kind="nixos"))
+        self.assertIn("nixosModules.opp_ci-coordinator", flake)
         self.assertIn("nixosModules.opp_ci-worker", flake)
         self.assertIn("nixosModules.default", flake)
 
@@ -231,11 +231,11 @@ class NixosRenderTest(unittest.TestCase):
         self.assertIn("b1.env", names)
 
 
-class MacosServeRefusalTest(unittest.TestCase):
-    def test_serve_install_targets_linux_only(self):
-        # The CLI refuses serve service on macOS; the spec itself still maps
-        # to the linux/state layout. Sanity-check the detector seam the CLI
-        # relies on.
+class MacosCoordinatorRefusalTest(unittest.TestCase):
+    def test_coordinator_install_targets_linux_only(self):
+        # The CLI refuses `coordinator service` on macOS; the spec itself still
+        # maps to the linux/state layout. Sanity-check the detector seam the
+        # CLI relies on.
         with mock.patch.object(service, "is_nixos", return_value=False), \
              mock.patch("sys.platform", "darwin"):
             self.assertEqual(service.detect_os(), "macos")

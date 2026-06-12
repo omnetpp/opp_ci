@@ -1,6 +1,6 @@
 # REST API
 
-JSON API exposed by `opp_ci serve`, mounted at `/api/`. All endpoints
+JSON API exposed by `opp_ci coordinator start`, mounted at `/api/`. All endpoints
 authenticate via `Authorization: Bearer <token>` headers.
 
 ## Authentication

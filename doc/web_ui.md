@@ -1,7 +1,7 @@
 # Web UI
 
 Server-rendered FastAPI + Jinja2 application in `opp_ci/web/`. Started
-with `opp_ci serve` (default `127.0.0.1:8080`).
+with `opp_ci coordinator start` (default `127.0.0.1:8080`).
 
 > **Authentication:** the HTML routes listed below carry no auth
 > dependency — anyone who can reach the bind address can browse and
