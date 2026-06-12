@@ -24,6 +24,7 @@ import logging
 
 from sqlalchemy import select
 
+from opp_ci import platforms
 from opp_ci.db.models import Worker
 
 _logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ _logger = logging.getLogger(__name__)
 DEFAULT_PREFERENCES = {
     "compiler": ["clang", "gcc", "msvc"],   # family order; newest version within
     "arch": ["amd64", "aarch64"],
+    "os": ["linux", "macos", "windows"],
     "mode": ["release", "debug"],
 }
 
@@ -142,11 +144,43 @@ def resolve_loose_axes(coord, tags, *, preferences=None):
                 "axis (reject-incomplete).")
         coord["arch"] = arch
 
+    # ── platform: pin os/distro against the fleet when left loose ──
+    if not (coord.get("os") or coord.get("distro") or coord.get("flavor")):
+        os_name, os_ver, distro, distro_ver = _resolve_platform_pick(cand, prefs)
+        coord["os"] = os_name
+        if distro:
+            coord["distro"] = distro
+            if distro_ver:
+                coord["distro_version"] = distro_ver
+        elif os_ver:
+            coord["os_version"] = os_ver
+
     # ── mode: ranked default; not tag-gated (every worker does both) ──
     if not coord.get("mode"):
         coord["mode"] = prefs["mode"][0]
 
     return coord
+
+
+def _resolve_platform_pick(cand, prefs):
+    """Pick one concrete platform from fleet candidates.
+
+    Returns ``(os, os_version, distro, distro_version)`` — a Linux distro when
+    the fleet advertises one (newest; os="Linux", os_version=None), else an OS
+    by preference at its newest version. Raises ValueError when the fleet
+    advertises no platform at all (reject-incomplete).
+    """
+    if cand["distro"]:
+        name, ver = _pick_versioned(cand["distro"])  # newest distro implies Linux
+        return ("Linux", None, name, ver)
+    if cand["os"]:
+        families = {n for n, _ in cand["os"]}
+        family = _pick_categorical(families, prefs.get("os", []))
+        ver = _newest_version(cand["os"], family)
+        return (platforms._os_canonical(family) or family, ver, None, None)
+    raise ValueError(
+        "No worker advertises a platform (distro/os); cannot resolve the loose "
+        "platform axis (reject-incomplete).")
 
 
 def resolve_loose_matrix_axes(config, tags, *, preferences=None):
@@ -188,22 +222,17 @@ def resolve_loose_matrix_axes(config, tags, *, preferences=None):
 
     has_platform = resolved.get("os") or resolved.get("distro") or resolved.get("flavor")
     if not has_platform:
-        if cand["distro"]:
-            name, ver = _pick_versioned(cand["distro"])  # newest distro; implies Linux
-            resolved["distro"] = [name]
-            if ver:
-                resolved["distro_version"] = [ver]
-        elif cand["os"]:
-            families = {n for n, _ in cand["os"]}
-            os_name = _pick_categorical(families, prefs.get("os", []))
-            ver = _newest_version(cand["os"], os_name)
-            resolved["os"] = [os_name]
-            if ver:
-                resolved["os_version"] = [ver]
+        os_name, os_ver, distro, distro_ver = _resolve_platform_pick(cand, prefs)
+        # A distro implies Linux in expand, so set distro alone (setting os too
+        # would union an extra bare-Linux cell that fails validation).
+        if distro:
+            resolved["distro"] = [distro]
+            if distro_ver:
+                resolved["distro_version"] = [distro_ver]
         else:
-            raise ValueError(
-                "No worker advertises a platform (distro/os); cannot resolve "
-                "the matrix recipe (reject-incomplete).")
+            resolved["os"] = [os_name]
+            if os_ver:
+                resolved["os_version"] = [os_ver]
 
     if not resolved.get("modes"):
         resolved["modes"] = [prefs["mode"][0]]

@@ -41,7 +41,10 @@ class TagParsingTests(unittest.TestCase):
 
 
 def _loose(**over):
-    c = {"compiler": None, "compiler_version": None, "arch": None, "mode": None}
+    # A specified platform by default, so these cases stay focused on
+    # compiler/arch/mode; platform resolution has its own test class.
+    c = {"compiler": None, "compiler_version": None, "arch": None, "mode": None,
+         "os": "Linux", "distro": "ubuntu", "distro_version": "24.04"}
     c.update(over)
     return c
 
@@ -104,6 +107,46 @@ class ResolveTests(unittest.TestCase):
         c = resolve_loose_axes(_loose(), {"compiler:icc-2024", "arch:amd64"})
         self.assertEqual(c["compiler"], "icc")
         self.assertEqual(c["compiler_version"], "2024")
+
+
+def _loose_platform(**over):
+    c = {"compiler": None, "compiler_version": None, "arch": None, "mode": None,
+         "os": None, "os_version": None, "distro": None, "distro_version": None,
+         "flavor": None}
+    c.update(over)
+    return c
+
+
+class PlatformResolveTests(unittest.TestCase):
+    FLEET = {"compiler:gcc-14", "arch:amd64", "distro:ubuntu-24.04"}
+
+    def test_fills_loose_platform_from_distro(self):
+        c = resolve_loose_axes(_loose_platform(), self.FLEET)
+        self.assertEqual(c["os"], "Linux")
+        self.assertEqual(c["distro"], "ubuntu")
+        self.assertEqual(c["distro_version"], "24.04")
+        # and the other axes are pinned too
+        self.assertEqual(c["compiler"], "gcc")
+        self.assertEqual(c["arch"], "amd64")
+
+    def test_specified_platform_untouched(self):
+        c = resolve_loose_axes(
+            _loose_platform(compiler="gcc", compiler_version="14", arch="amd64",
+                            mode="release", os="Linux", distro="fedora"),
+            self.FLEET)
+        self.assertEqual(c["distro"], "fedora")
+
+    def test_reject_no_platform_in_fleet(self):
+        with self.assertRaises(ValueError):
+            resolve_loose_axes(_loose_platform(),
+                               {"compiler:gcc-14", "arch:amd64"})  # no distro/os
+
+    def test_resolves_os_when_no_distro(self):
+        c = resolve_loose_axes(_loose_platform(),
+                               {"compiler:gcc-14", "arch:amd64", "os:windows-11"})
+        self.assertEqual(c["os"], "Windows")
+        self.assertEqual(c["os_version"], "11")
+        self.assertIsNone(c["distro"])
 
 
 if __name__ == "__main__":
