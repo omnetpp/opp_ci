@@ -22,6 +22,11 @@ import requests
 
 from opp_ci.executor import install_project, run_test
 
+try:
+    from opp_ci._version import __version__ as _WORKER_VERSION
+except ImportError:
+    _WORKER_VERSION = "0.0.0"
+
 _logger = logging.getLogger(__name__)
 
 
@@ -278,7 +283,9 @@ class WorkerAgent:
     def _heartbeat(self, session=None):
         session = session or self._session
         batch = self._collect_log_batch()
-        body = {"logs": {"entries": batch["entries"]}} if batch else None
+        body = {"version": _WORKER_VERSION}
+        if batch:
+            body["logs"] = {"entries": batch["entries"]}
         try:
             resp = session.post(
                 f"{self.coordinator_url}/api/workers/heartbeat",

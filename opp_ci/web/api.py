@@ -539,11 +539,18 @@ async def worker_heartbeat(
                     TestRun.lifecycle == TestRunLifecycle.running,
                 )
             ).scalar() or 0
+            dirty = False
             if worker.current_job_count != actual:
                 _logger.info("Reconciling worker '%s' job count: %d -> %d",
                              worker.name, worker.current_job_count, actual)
                 worker.current_job_count = actual
                 worker.status = "busy" if actual >= worker.concurrency else "online"
+                dirty = True
+            reported_version = payload.get("version") if isinstance(payload, dict) else None
+            if reported_version and worker.software_version != reported_version:
+                worker.software_version = reported_version
+                dirty = True
+            if dirty:
                 session.commit()
     finally:
         session.close()

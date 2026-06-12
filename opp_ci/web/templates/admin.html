@@ -65,6 +65,7 @@
             <tr>
                 <th>Name</th>
                 <th>Status</th>
+                <th>Version</th>
                 <th>Tags</th>
                 <th>Jobs</th>
                 <th>Concurrency</th>
@@ -80,6 +81,8 @@
                     {% elif w.status == "busy" %}<span class="badge badge-running">busy</span>
                     {% else %}<span class="badge badge-queued">offline</span>{% endif %}
                 </td>
+                <td>{% if w.software_version %}<code style="font-size:0.8rem;">{{ w.software_version }}</code>
+                    {% else %}<span style="color:var(--muted);">-</span>{% endif %}</td>
                 <td>{{ (w.tags or [])|join(", ") or "-" }}</td>
                 <td>{{ w.current_job_count }}</td>
                 <td>{{ w.concurrency }}</td>

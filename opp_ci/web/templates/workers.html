@@ -16,6 +16,7 @@
             <th>Name</th>
             <th>Connected</th>
             <th>Status</th>
+            <th>Version</th>
             <th>Capabilities</th>
             <th>Other Tags</th>
             <th>Jobs</th>
@@ -46,6 +47,10 @@
                 {% if w.status == "online" %}<span class="badge badge-passed">online</span>
                 {% elif w.status == "busy" %}<span class="badge badge-running">busy</span>
                 {% else %}<span class="badge badge-queued">{{ w.status }}</span>{% endif %}
+            </td>
+            <td>
+                {% if w.software_version %}<code style="font-size:0.8rem;">{{ w.software_version }}</code>
+                {% else %}<span style="color:var(--muted);">-</span>{% endif %}
             </td>
             <td>
                 {% if row.has_podman %}<span class="badge badge-passed">podman</span>{% endif %}

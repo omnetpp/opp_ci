@@ -133,6 +133,7 @@ class Worker(Base):
     last_heartbeat = Column(DateTime, nullable=True)
     registered_at = Column(DateTime, default=datetime.datetime.utcnow)
     current_job_count = Column(Integer, default=0)
+    software_version = Column(String, nullable=True)  # opp_ci version last reported by the worker
 
     def __repr__(self):
         return f"<Worker(name={self.name!r}, status={self.status!r}, tags={self.tags})>"

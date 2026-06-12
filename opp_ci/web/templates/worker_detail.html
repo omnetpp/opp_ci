@@ -31,6 +31,9 @@
                     {% elif w.status == "busy" %}<span class="badge badge-running">busy</span>
                     {% else %}<span class="badge badge-queued">{{ w.status }}</span>{% endif %}
                 </td></tr>
+            <tr><th style="text-align:left;">Version</th>
+                <td>{% if w.software_version %}<code>{{ w.software_version }}</code>
+                    {% else %}<span style="color:var(--muted);">unknown</span>{% endif %}</td></tr>
             <tr><th style="text-align:left;">Jobs / Concurrency</th>
                 <td>{{ w.current_job_count }} / {{ w.concurrency }}</td></tr>
             <tr><th style="text-align:left;">Tags</th>
