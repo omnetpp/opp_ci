@@ -11,6 +11,7 @@ Run with: python -m pytest tests/test_matrix_recipe.py
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 _DB_FD, _DB_PATH = tempfile.mkstemp(suffix=".db", prefix="opp_ci_mrec_")
 os.close(_DB_FD)
@@ -35,9 +36,17 @@ class RecipeDetectionTests(unittest.TestCase):
     def test_missing_platform_is_recipe(self):
         self.assertTrue(matrix_is_recipe({"compiler": ["gcc-14"], "arch": ["amd64"]}))
 
+    def test_moving_ref_is_recipe(self):
+        full = {"compiler": ["gcc-14"], "arch": ["amd64"], "distro": ["ubuntu"]}
+        self.assertTrue(matrix_is_recipe({**full, "refs": ["main"]}))          # branch
+        self.assertTrue(matrix_is_recipe({**full, "refs": ["v1..v2"]}))        # range
+        self.assertTrue(matrix_is_recipe({**full, "ref_range": {"base": "a", "head": "b"}}))
+
     def test_fully_specified_is_resolved(self):
-        self.assertFalse(matrix_is_recipe(
-            {"compiler": ["gcc-14"], "arch": ["amd64"], "distro": ["ubuntu"]}))
+        full = {"compiler": ["gcc-14"], "arch": ["amd64"], "distro": ["ubuntu"]}
+        self.assertFalse(matrix_is_recipe(full))
+        # full coordinate + a pinned-SHA ref is resolved (no moving source)
+        self.assertFalse(matrix_is_recipe({**full, "refs": ["a" * 40]}))
 
 
 class DescribeExpansionTests(unittest.TestCase):
@@ -63,6 +72,38 @@ class DescribeExpansionTests(unittest.TestCase):
         # No compiler/arch/platform → each resolves to one value, so the count
         # matches what the snapshot will produce.
         self.assertEqual(describe_expansion({"kinds": ["a", "b", "c"]}), "3 Tests")
+
+
+class MatrixHashTests(unittest.TestCase):
+    def test_hash_order_independent(self):
+        from opp_ci.db.models import compute_matrix_hash
+        a = compute_matrix_hash("inet", None,
+                                {"kinds": ["a", "b"], "arch": ["amd64"]})
+        b = compute_matrix_hash("inet", None,
+                                {"arch": ["amd64"], "kinds": ["b", "a"]})
+        self.assertEqual(a, b)                       # axis order irrelevant
+        c = compute_matrix_hash("inet", None, {"kinds": ["a"]})
+        self.assertNotEqual(a, c)                    # different content differs
+
+
+class PinMatrixRefsTests(unittest.TestCase):
+    def test_branch_pinned_to_sha(self):
+        from opp_ci.scheduler import pin_matrix_refs
+        with mock.patch("opp_ci.scheduler.resolve_source_commit",
+                        return_value="c" * 40):
+            out = pin_matrix_refs("inet", {"refs": ["main"], "kinds": ["smoke"]})
+        self.assertEqual(out["refs"], ["c" * 40])    # no moving branch survives
+        self.assertEqual(out["kinds"], ["smoke"])
+
+    def test_full_sha_kept(self):
+        from opp_ci.scheduler import pin_matrix_refs
+        out = pin_matrix_refs("inet", {"refs": ["D" * 40]})
+        self.assertEqual(out["refs"], ["d" * 40])
+
+    def test_no_refs_unchanged(self):
+        from opp_ci.scheduler import pin_matrix_refs
+        cfg = {"kinds": ["smoke"], "compiler": ["gcc-14"]}
+        self.assertEqual(pin_matrix_refs("inet", cfg), cfg)
 
 
 class ResolveMatrixAxesTests(unittest.TestCase):
@@ -137,6 +178,15 @@ class RecipeLifecycleTests(unittest.TestCase):
         mr = create_matrix_run(self.s, matrix_id=snap.id)
         self.assertIsNotNone(mr.id)
         self.assertIn(snap, recipe.resolved_instances)
+
+    def test_resolve_is_content_addressed(self):
+        # Re-resolving a recipe to the same pinned content reuses the snapshot.
+        recipe = self._make_recipe({"kinds": ["smoke"]})
+        s1 = resolve_matrix_recipe(self.s, recipe)
+        s2 = resolve_matrix_recipe(self.s, recipe)
+        self.assertEqual(s1.id, s2.id)
+        self.assertEqual(len(recipe.resolved_instances), 1)
+        self.assertIsNotNone(s1.matrix_hash)
 
     def test_fully_specified_matrix_is_resolved(self):
         m = create_matrix_from_axes(

@@ -51,10 +51,10 @@ class WebhookRecipeTests(unittest.TestCase):
         finally:
             s.close()
 
-    def _push(self):
+    def _push(self, sha=_SHA):
         return handle_webhook_event("push", {
             "ref": "refs/heads/main",
-            "after": _SHA,
+            "after": sha,
             "repository": {"name": "inet",
                            "owner": {"login": "inet-framework"}},
         })
@@ -82,15 +82,20 @@ class WebhookRecipeTests(unittest.TestCase):
         finally:
             s.close()
 
-    def test_each_push_mints_a_new_snapshot(self):
-        self._push()
-        self._push()
+    def test_content_addressed_snapshots(self):
+        # Resolved matrices are content-addressed: pushing the SAME commit twice
+        # reuses one snapshot; a DIFFERENT commit mints a new one.
+        self._push("a" * 40)
+        self._push("a" * 40)        # same commit → dedup
+        self._push("b" * 40)        # new commit → new snapshot
         s = SessionLocal()
         try:
             snaps = s.execute(
                 select(TestMatrix).where(TestMatrix.resolved_from == self.recipe_id)
             ).scalars().all()
-            self.assertEqual(len(snaps), 2)  # one snapshot per push (lineage)
+            self.assertEqual(len(snaps), 2)   # {a..., b...}, not 3
+            self.assertEqual({tuple(sn.config["refs"]) for sn in snaps},
+                             {("a" * 40,), ("b" * 40,)})
         finally:
             s.close()
 

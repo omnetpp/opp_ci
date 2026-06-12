@@ -25,6 +25,7 @@ from opp_ci.db.models import (
     TestVerdict,
     TestVerdictKind,
     Worker,
+    compute_matrix_hash,
     compute_test_coord_hash,
 )
 
@@ -424,7 +425,8 @@ def create_matrix_from_axes(session, *, project, config, name=None, opp_file=Non
     if cleaned and get_matrix_by_name(session, cleaned) is not None:
         raise ValueError(f"A matrix named {cleaned!r} already exists.")
     matrix = TestMatrix(name=cleaned, project=project, opp_file=opp_file,
-                        config=config, is_resolved=is_resolved)
+                        config=config, is_resolved=is_resolved,
+                        matrix_hash=compute_matrix_hash(project, opp_file, config))
     session.add(matrix)
     session.flush()
     return matrix
@@ -450,14 +452,32 @@ def resolve_matrix_recipe(session, recipe, *, commit_sha=None):
     if recipe.is_resolved:
         raise ValueError("Matrix is already resolved.")
     from opp_ci.fleet import fleet_tags, resolve_loose_matrix_axes
+    from opp_ci.scheduler import pin_matrix_refs
     resolved_config = resolve_loose_matrix_axes(recipe.config or {},
                                                 fleet_tags(session))
     if commit_sha:
+        # Branch-tracking (a push): pin the source to the pushed commit.
         resolved_config["refs"] = [commit_sha]
         resolved_config.pop("ref_range", None)
+    else:
+        # Manual resolve: pin any moving branch/tag/range to concrete SHAs, so
+        # the snapshot is pinned all the way down on its source too.
+        resolved_config = pin_matrix_refs(recipe.project, resolved_config)
+    # Content-addressed: reuse an existing resolved snapshot with the same
+    # pinned content rather than minting a duplicate (mirrors get_or_create_test).
+    h = compute_matrix_hash(recipe.project, recipe.opp_file, resolved_config)
+    existing = session.execute(
+        select(TestMatrix).where(TestMatrix.matrix_hash == h,
+                                 TestMatrix.is_resolved.is_(True))
+    ).scalar_one_or_none()
+    if existing is not None:
+        if existing.resolved_from is None and existing.id != recipe.id:
+            existing.resolved_from = recipe.id
+        return existing
     snapshot = TestMatrix(
         name=None, project=recipe.project, opp_file=recipe.opp_file,
-        config=resolved_config, is_resolved=True, resolved_from=recipe.id)
+        config=resolved_config, is_resolved=True, resolved_from=recipe.id,
+        matrix_hash=h)
     session.add(snapshot)
     session.flush()
     return snapshot

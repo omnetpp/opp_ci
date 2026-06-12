@@ -363,17 +363,25 @@ def _is_full_sha(ref):
 
 
 def matrix_is_recipe(config):
-    """True if a matrix config is a *recipe* — its coordinate is underspecified
-    along a fleet-resolvable axis, so it must be resolved (pinned against the
-    fleet) before it can run. A matrix is a recipe when it lacks a compiler, an
-    arch, or a platform (os/distro/flavor) — exactly the axes a job needs to
-    pass coordinate validation. A fully-specified config is already
-    resolved/runnable. Moving refs (branches/ranges) are handled separately by
-    expand and don't, by themselves, make a recipe.
+    """True if a matrix config is a *recipe* — not yet pinned all the way down,
+    so it must be resolved before it can run. A matrix is a recipe when:
+
+      * it lacks a compiler, an arch, or a platform (os/distro/flavor) — the
+        fleet-resolvable coordinate axes a job needs to pass validation; **or**
+      * its source is **moving** — a ``ref_range``, or a ``refs`` entry that
+        isn't a concrete commit SHA (a branch/tag/range). Resolution pins these
+        to SHAs so a resolved matrix never carries a moving ref.
+
+    A config with a full coordinate and only pinned-SHA refs is already
+    resolved/runnable.
     """
     config = config or {}
     has_platform = config.get("os") or config.get("distro") or config.get("flavor")
-    return not (config.get("compiler") and config.get("arch") and has_platform)
+    if not (config.get("compiler") and config.get("arch") and has_platform):
+        return True
+    if config.get("ref_range"):
+        return True
+    return any(r and not _is_full_sha(r) for r in (config.get("refs") or []))
 
 
 def _resolve_ref_range(project_name, range_str):
@@ -454,6 +462,39 @@ def resolve_source_commit(project_name, git_ref):
             f"Could not resolve ref {git_ref!r} to a commit for {project_name}.")
     finally:
         session.close()
+
+
+def pin_matrix_refs(project, config):
+    """Return *config* with its source pinned all the way down — every entry of
+    the refs axis replaced by a concrete commit SHA, so no moving branch/tag
+    survives in a resolved matrix.
+
+    A branch/tag → its current SHA; a ``base..topic`` range → the range's commit
+    SHAs; a full SHA → itself; the legacy ``ref_range`` dict → its SHAs. A
+    config with no refs/ref_range is returned unchanged (no source axis to pin).
+    Strict: raises ValueError if a ref can't be resolved (decision #7).
+    """
+    if config.get("refs"):
+        pinned = []
+        for ref in config["refs"]:
+            if not ref:
+                continue
+            if ".." in ref:
+                pinned.extend(_resolve_ref_range(project, ref))
+            elif _is_full_sha(ref):
+                pinned.append(ref.lower())
+            else:
+                pinned.append(resolve_source_commit(project, ref))
+    elif config.get("ref_range"):
+        rr = config["ref_range"]
+        pinned = _resolve_ref_range(project, f"{rr['base']}..{rr['head']}")
+    else:
+        return config
+
+    out = dict(config)
+    out["refs"] = pinned
+    out.pop("ref_range", None)
+    return out
 
 
 def _resolve_refs_axis(project, config):

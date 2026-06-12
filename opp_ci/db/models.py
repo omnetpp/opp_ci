@@ -86,6 +86,11 @@ class TestMatrix(Base):
     project = Column(String, nullable=False)
     opp_file = Column(String, nullable=True)
     config = Column(JSON, nullable=False)
+    # Content hash over (project, opp_file, canonical config). A resolved matrix
+    # is content-addressed by this — re-resolving a recipe to the same pinned
+    # content reuses the snapshot instead of minting a duplicate (mirrors
+    # Test.coord_hash). NULL allowed on legacy rows.
+    matrix_hash = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Resolve-in-place state (Phase 2/3), mirroring Test. An unresolved matrix
@@ -270,6 +275,38 @@ def compute_test_coord_hash(coord):
     """
     payload = {field: coord.get(field) for field in TEST_COORD_FIELDS}
     payload["resolved_deps"] = normalise_deps(coord.get("resolved_deps"))
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _canonical_config(config):
+    """Canonicalise a matrix config for hashing: sort dict keys and sort each
+    axis's value list (a matrix axis is an unordered set — its cartesian
+    product doesn't depend on order), so configs that differ only in ordering
+    hash identically."""
+    def canon(v):
+        if isinstance(v, dict):
+            return {k: canon(v[k]) for k in sorted(v)}
+        if isinstance(v, list):
+            items = [canon(x) for x in v]
+            try:
+                return sorted(items)
+            except TypeError:      # non-scalar items — keep order
+                return items
+        return v
+    return canon(config or {})
+
+
+def compute_matrix_hash(project, opp_file, config):
+    """SHA-256 hex over a TestMatrix's content (project, opp_file, canonical
+    config). A resolved matrix is content-addressed by this, so re-resolving a
+    recipe to the same pinned content reuses the snapshot (mirrors
+    `compute_test_coord_hash` for Tests)."""
+    payload = {
+        "project": project,
+        "opp_file": opp_file,
+        "config": _canonical_config(config),
+    }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 

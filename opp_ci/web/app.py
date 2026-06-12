@@ -995,6 +995,16 @@ def test_new_submit(
             "opp_file": None,
             "resolved_deps": resolved_deps,
         }
+        # Pin the source ref to a concrete commit so the Test's identity never
+        # carries a moving branch (pinned all the way down on its source).
+        if git_ref:
+            from opp_ci.scheduler import resolve_source_commit
+            try:
+                coord["commit_sha"] = resolve_source_commit(project, git_ref)
+            except ValueError as e:
+                return _render_test_form(
+                    request, session, current_user, values=values,
+                    message=str(e), message_type="error", status_code=400)
         # Underspecified "Save" persists a *recipe* (a separate object) to
         # resolve later or per push; "Run" and fully-specified saves resolve
         # eagerly below.
