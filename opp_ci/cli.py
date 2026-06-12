@@ -932,6 +932,26 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
             click.echo(f"ERROR: {e}")
             return
 
+        # Resolve any loose coordinate axis against THIS host — the local run
+        # executes here, so an under-specified local run is pinned to the host's
+        # own compiler/arch/platform (the same resolver the fleet path uses,
+        # just with local tags as the source). Done before install/run so build,
+        # execution, and Test identity all use the resolved coordinate.
+        from opp_ci.fleet import resolve_loose_axes
+        _coord = {"os": os_name, "os_version": os_version, "distro": distro,
+                  "distro_version": distro_version, "flavor": flavor,
+                  "flavor_version": flavor_version, "arch": arch,
+                  "compiler": compiler, "compiler_version": compiler_version,
+                  "mode": mode}
+        try:
+            resolve_loose_axes(_coord, set(_detect_capability_tags()))
+        except ValueError:
+            pass  # partial fill; the per-kind validate_test_coord reports the rest
+        os_name, os_version = _coord["os"], _coord.get("os_version")
+        distro, distro_version = _coord["distro"], _coord.get("distro_version")
+        arch, compiler = _coord["arch"], _coord["compiler"]
+        compiler_version, mode = _coord["compiler_version"], _coord["mode"]
+
         if not skip_install:
             try:
                 install_project(project, git_ref=git_ref,

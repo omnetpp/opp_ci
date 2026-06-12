@@ -37,6 +37,19 @@ Confirmed scope:
   with deliberately-minimal coords).
 - DB can be recreated — no migration of existing under-specified Test rows.
 
+### Update — resolve-in-place layering (2026-06)
+
+This invariant is unchanged and still load-bearing, but submit-time entry points
+now **resolve before they validate**: loose coordinate axes are pinned to a
+concrete value first — against the worker fleet for REST/web submits
+(`fleet.resolve_loose_axes`) or the local host for the CLI local run
+(`cli._detect_capability_tags`) — and a moving source ref is pinned to a commit,
+*then* `validate_test_coord` runs. So an under-specified submission is resolved
+to a concrete coordinate first and rejected only if resolution can't complete it.
+`validate_test_coord` remains the guarantee that every persisted Test identity is
+total — i.e. it's exactly what makes resolution safe. See
+plan/done/repeatable-tests-and-moving-target-matrices.md.
+
 ## The rule — `validate_test_coord(coord)`
 
 Raises `ValueError` (precise, user-facing) when under-specified:

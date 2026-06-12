@@ -995,6 +995,14 @@ def test_new_submit(
             "opp_file": None,
             "resolved_deps": resolved_deps,
         }
+        # Best-effort: pin loose coordinate axes against the fleet (the form
+        # queues for workers); validate_test_coord then gates and names anything
+        # the fleet couldn't fill, so a human gets the precise field-level error.
+        from opp_ci.fleet import fleet_tags, resolve_loose_axes
+        try:
+            resolve_loose_axes(coord, fleet_tags(session))
+        except ValueError:
+            pass
         try:
             validate_test_coord(coord)
         except ValueError as e:
