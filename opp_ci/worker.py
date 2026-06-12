@@ -153,6 +153,7 @@ class WorkerAgent:
             self._apply_niceness(niceness)
 
         self._install_log_handler()
+        self._reap_leaked_containers()
 
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -197,6 +198,32 @@ class WorkerAgent:
             _logger.info("Worker running at nice level %d", new_nice)
         except (OSError, AttributeError) as e:
             _logger.warning("Could not set niceness to %d: %s", niceness, e)
+
+    def _reap_leaked_containers(self):
+        """Remove opp_ci runner containers left behind by a previous crash.
+
+        Safe to run at startup: no job is executing yet, so any container named
+        ``opp_ci_run_*`` is orphaned (its `finally` teardown never ran because
+        the worker was killed mid-run). Best-effort — a quiet no-op when podman
+        isn't installed or there's nothing to reap.
+        """
+        import subprocess
+        try:
+            ps = subprocess.run(
+                ["podman", "ps", "-aq", "--filter", "name=^opp_ci_run_"],
+                capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as e:
+            _logger.debug("Container reap skipped: %s", e)
+            return
+        ids = ps.stdout.split()
+        if not ids:
+            return
+        _logger.info("Reaping %d leaked runner container(s) from a prior crash", len(ids))
+        try:
+            subprocess.run(["podman", "rm", "-f", *ids],
+                           capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as e:
+            _logger.warning("Failed to reap leaked containers: %s", e)
 
     def _install_log_handler(self):
         """Attach the ring-buffer handler to the `opp_ci` logger.

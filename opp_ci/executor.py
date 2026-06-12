@@ -715,15 +715,17 @@ def _resolve_project_dir(project, opp_file=None):
     return os.path.join(base_dir, project)
 
 
-def _create_git_worktree(project_dir, git_ref):
+def _create_git_worktree(project_dir, git_ref, on_output=None):
     """Create a detached git worktree for *git_ref* in a temp dir and return its path."""
     target = os.path.join(tempfile.gettempdir(), f"opp-ci-worktree-{uuid.uuid4().hex[:8]}")
     run_external(
         ["git", "fetch", "origin"], label="git fetch", cwd=project_dir, timeout=120,
+        stream=True, on_output=on_output,
     )
     result = run_external(
         ["git", "worktree", "add", "--detach", target, git_ref],
         label=f"git worktree add {git_ref}", cwd=project_dir,
+        stream=True, on_output=on_output,
     )
     if result.returncode != 0:
         raise RuntimeError(f"git worktree add {git_ref} failed: {result.stderr.strip()}")
@@ -1231,7 +1233,20 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
     else:
         project_dir = _resolve_project_dir(project, opp_file)
         if git_ref:
-            worktree_path = _create_git_worktree(project_dir, git_ref)
+            # checkout: detached worktree at the requested ref (host side, then
+            # bind-mounted). Captured as its own stage so a bad ref is obvious.
+            if recorder is not None:
+                recorder.begin(Stage.CHECKOUT, command=f"git worktree add {git_ref}")
+            try:
+                worktree_path = _create_git_worktree(
+                    project_dir, git_ref,
+                    on_output=recorder.output if recorder else None)
+            except Exception:
+                if recorder is not None:
+                    recorder.end(1, status="failed")
+                raise
+            if recorder is not None:
+                recorder.end(0)
             mount_path = worktree_path
         else:
             mount_path = project_dir
@@ -1426,15 +1441,20 @@ def _run_podman_staged(*, image, run_stages, entry_script, run_flags,
                             recorder.skip(skip_name, reason="skipped: previous stage failed")
                     break
     finally:
-        # Teardown is its own best-effort step; a failed remove must not mask
-        # the run's result.
-        run_external(["podman", "rm", "-f", container],
-                     label=f"podman rm {container}")
+        # cleanup: remove the container (and host worktree/scratch). Its own
+        # best-effort stage; a failed remove must not mask the run's result.
+        if recorder is not None:
+            recorder.begin(Stage.CLEANUP, command=f"podman rm -f {container}")
+        rm = run_external(["podman", "rm", "-f", container],
+                          label=f"podman rm {container}",
+                          stream=True, on_output=recorder.output if recorder else None)
         if worktree_path:
             _remove_git_worktree(worktree_path)
         if scratch_dir:
             import shutil
             shutil.rmtree(scratch_dir, ignore_errors=True)
+        if recorder is not None:
+            recorder.end(rm.returncode)
     duration = time.time() - start
 
     result_code = "PASS" if (result is not None and result.returncode == 0) else "FAIL"
