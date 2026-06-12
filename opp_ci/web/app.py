@@ -18,6 +18,11 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from opp_ci import config as cfg
 from opp_ci.auth import get_csrf_token, require_csrf, require_user
+
+try:
+    from opp_ci._version import __version__ as _APP_VERSION
+except ImportError:
+    _APP_VERSION = "0.0.0"
 from opp_ci.db.connection import SessionLocal
 from opp_ci.db.models import (
     ApiToken, AutoTestRule, Compiler, ExpectedTestResult, OS, Project, Test,
@@ -237,6 +242,7 @@ def _template_globals(request, current_user):
     return {
         "current_user": current_user,
         "csrf_token": get_csrf_token(request),
+        "app_version": _APP_VERSION,
     }
 
 

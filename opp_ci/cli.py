@@ -3,6 +3,11 @@ import functools
 import logging
 
 import click
+
+try:
+    from opp_ci._version import __version__ as _VERSION
+except ImportError:
+    _VERSION = "0.0.0"
 from sqlalchemy import select
 
 from opp_ci.db.connection import engine, SessionLocal
@@ -21,6 +26,7 @@ from opp_ci.notes import update_ci_note
 
 
 @click.group()
+@click.version_option(version=_VERSION, prog_name="opp_ci")
 @click.option("-v", "--verbose", is_flag=True, help="Enable verbose logging")
 @click.option("--remote/--local", "remote", default=None,
               help="Drive a remote coordinator over the REST API instead of "

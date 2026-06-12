@@ -184,7 +184,10 @@
 <body>
     <header>
         <div class="container">
-            <h1>opp_ci</h1>
+            <div style="display:flex;flex-direction:column;gap:0">
+                <h1>opp_ci</h1>
+                <span style="font-size:0.65rem;color:var(--muted);line-height:1">{{ app_version }}</span>
+            </div>
             <nav style="flex: 1;">
                 {% if current_user %}
                 <a href="/">Dashboard</a> &nbsp;

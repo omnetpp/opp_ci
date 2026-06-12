@@ -69,6 +69,7 @@ opp_ci = ["podman/*.j2", "podman/*.yml", "data/*.pem", "data/nixos/*.nix"]
 
 [tool.setuptools_scm]
 write_to = "opp_ci/_version.py"
+fallback_version = "0.0.0"
 
 [build-system]
 requires = ["setuptools>=61.0", "setuptools_scm[toml]>=6.2"]
