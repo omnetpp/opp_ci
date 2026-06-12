@@ -74,14 +74,18 @@
         </thead>
         <tbody>
             {% for w in workers %}
-            <tr>
+            <tr data-href="/workers/{{ w.id }}">
                 <td>{{ w.name }}</td>
                 <td>
                     {% if w.status == "online" %}<span class="badge badge-passed">online</span>
                     {% elif w.status == "busy" %}<span class="badge badge-running">busy</span>
                     {% else %}<span class="badge badge-queued">offline</span>{% endif %}
                 </td>
-                <td>{% if w.software_version %}<code style="font-size:0.8rem;">{{ w.software_version }}</code>
+                <td>{% if w.software_version %}
+                        {% if w.software_version != app_version %}
+                        <code style="font-size:0.8rem; color:var(--warn); font-weight:bold;"
+                              title="Version differs from coordinator ({{ app_version }})">⚠ {{ w.software_version }}</code>
+                        {% else %}<code style="font-size:0.8rem;">{{ w.software_version }}</code>{% endif %}
                     {% else %}<span style="color:var(--muted);">-</span>{% endif %}</td>
                 <td>{{ (w.tags or [])|join(", ") or "-" }}</td>
                 <td>{{ w.current_job_count }}</td>
