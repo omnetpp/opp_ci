@@ -3,6 +3,15 @@ Dependency resolution for opp_ci.
 
 Queries the opp_env project registry to discover required_projects
 and resolve compatible dependency versions. Supports version pinning.
+
+The lock a submit pins is the **complete transitive closure** — every
+project opp_env would build, not just the direct ``required_projects`` —
+because opp_env builds the whole closure and a version chosen deep in the
+graph can still change the build outcome. ``resolve_dependencies`` walks
+that closure; with ``require_complete=True`` it raises
+``DependencyResolutionError`` rather than return a partial lock (the
+submit-time "reject-incomplete" rule — see
+plan/pending/repeatable-tests-and-moving-target-matrices.md).
 """
 
 import json
@@ -10,6 +19,16 @@ import logging
 import subprocess
 
 _logger = logging.getLogger(__name__)
+
+
+class DependencyResolutionError(Exception):
+    """A complete transitive dependency lock could not be produced.
+
+    Raised by ``resolve_dependencies(..., require_complete=True)`` when
+    opp_env cannot be queried for a node in the closure, a required project
+    lists no compatible versions, or two nodes demand incompatible versions
+    of the same dependency. Submit paths surface this as a hard rejection.
+    """
 
 
 def query_opp_env_info(project_version):
@@ -98,47 +117,104 @@ def get_required_projects(project_version):
     return info.get("required_projects", {})
 
 
-def resolve_dependencies(project_version, pins=None):
+def resolve_dependencies(project_version, pins=None, *, transitive=True,
+                         require_complete=False):
     """
-    Resolve compatible dependency versions for a project.
+    Resolve the dependency lock for a project — by default the full
+    transitive closure.
 
-    For each dependency in required_projects, selects the latest
-    compatible version (first in list, as opp_env orders them
-    newest-first). Pins override the auto-selection.
+    Walks ``required_projects`` breadth-first from ``project_version``: each
+    dependency is pinned to one version (a pin if given, else the latest
+    compatible — opp_env lists them newest-first), and every chosen
+    dependency is then itself expanded so its own requirements are pinned
+    too. A version is chosen once and reused everywhere it recurs.
 
     Args:
         project_version: e.g. "inet-4.5"
         pins: dict mapping dep name to pinned version, e.g. {"omnetpp": "6.0.3"}
+        transitive: walk the whole closure (default). ``False`` resolves only
+            the project's direct ``required_projects`` (legacy behaviour).
+        require_complete: when True, raise ``DependencyResolutionError`` instead
+            of returning a partial lock — opp_env unavailable for a node, a
+            dependency with no compatible versions, or an unsatisfiable
+            version conflict. This is the submit-time reject-incomplete rule.
 
     Returns:
-        dict mapping dep name to resolved version string,
-        e.g. {"omnetpp": "6.1.0"}
+        dict mapping dep name to resolved version string, e.g.
+        ``{"omnetpp": "6.1.0"}`` — the complete lock that keys Test identity.
 
     Raises:
-        ValueError: if a pinned version is not in the compatible list.
+        ValueError: if a pinned version is not in a node's compatible list.
+        DependencyResolutionError: if ``require_complete`` and the closure
+            cannot be fully and consistently pinned.
     """
     pins = pins or {}
-    required = get_required_projects(project_version)
-    if not required:
-        _logger.info("No dependencies found for %s", project_version)
-        return {}
-
     resolved = {}
-    for dep_name, compatible_versions in required.items():
-        if dep_name in pins:
-            pinned = pins[dep_name]
-            if compatible_versions and pinned not in compatible_versions:
-                raise ValueError(
-                    f"Pinned version '{dep_name}-{pinned}' is not compatible with "
-                    f"{project_version}. Compatible versions: {compatible_versions}"
+    queue = [project_version]
+    visited = set()
+
+    while queue:
+        node = queue.pop(0)
+        if node in visited:
+            continue
+        visited.add(node)
+
+        info = query_opp_env_info(node)
+        if info is None:
+            # opp_env could not describe this node, so we cannot see its
+            # requirements. A partial lock is not repeatable — reject when
+            # the caller demands completeness, else carry on best-effort.
+            if require_complete:
+                raise DependencyResolutionError(
+                    f"opp_env could not resolve {node!r}; cannot produce a "
+                    f"complete dependency lock (is opp_env installed and the "
+                    f"version known?)."
                 )
-            resolved[dep_name] = pinned
-            _logger.info("Dependency %s pinned to %s", dep_name, pinned)
-        elif compatible_versions:
-            resolved[dep_name] = compatible_versions[0]
-            _logger.info("Dependency %s resolved to %s (latest compatible)", dep_name, compatible_versions[0])
-        else:
-            _logger.warning("Dependency %s has no compatible versions listed", dep_name)
+            _logger.warning("opp_env has no info for %s — lock may be partial", node)
+            continue
+
+        required = info.get("required_projects", {}) or {}
+        for dep_name, compatible in required.items():
+            compatible = compatible or []
+            if dep_name in pins:
+                chosen = pins[dep_name]
+                if compatible and chosen not in compatible:
+                    raise ValueError(
+                        f"Pinned version '{dep_name}-{chosen}' is not compatible "
+                        f"with {node}. Compatible versions: {compatible}"
+                    )
+            elif dep_name in resolved:
+                chosen = resolved[dep_name]
+                if compatible and chosen not in compatible:
+                    # A deeper node demands a version incompatible with the one
+                    # already locked: the closure has no single consistent pick.
+                    if require_complete:
+                        raise DependencyResolutionError(
+                            f"Dependency {dep_name!r} is locked to {chosen!r} but "
+                            f"{node} requires one of {compatible}; no consistent "
+                            f"transitive lock exists."
+                        )
+                    _logger.warning(
+                        "Conflicting version for %s (%s vs %s required by %s); "
+                        "keeping %s", dep_name, chosen, compatible, node, chosen)
+                continue  # already locked
+            elif compatible:
+                chosen = compatible[0]  # opp_env orders newest-first
+            else:
+                if require_complete:
+                    raise DependencyResolutionError(
+                        f"Dependency {dep_name!r} (required by {node}) lists no "
+                        f"compatible versions; cannot complete the lock."
+                    )
+                _logger.warning(
+                    "Dependency %s (required by %s) has no compatible versions",
+                    dep_name, node)
+                continue
+
+            resolved[dep_name] = chosen
+            _logger.info("Locked dependency %s to %s", dep_name, chosen)
+            if transitive:
+                queue.append(f"{dep_name}-{chosen}")
 
     return resolved
 
