@@ -27,33 +27,49 @@ from opp_ci.persistence import (                                # noqa: E402
 
 class RecipeDetectionTests(unittest.TestCase):
     def test_missing_compiler_is_recipe(self):
-        self.assertTrue(matrix_is_recipe({"arch": ["amd64"], "kinds": ["smoke"]}))
+        self.assertTrue(matrix_is_recipe({"arch": ["amd64"], "distro": ["ubuntu"]}))
 
     def test_missing_arch_is_recipe(self):
-        self.assertTrue(matrix_is_recipe({"compiler": ["gcc-14"]}))
+        self.assertTrue(matrix_is_recipe({"compiler": ["gcc-14"], "distro": ["ubuntu"]}))
+
+    def test_missing_platform_is_recipe(self):
+        self.assertTrue(matrix_is_recipe({"compiler": ["gcc-14"], "arch": ["amd64"]}))
 
     def test_fully_specified_is_resolved(self):
-        self.assertFalse(matrix_is_recipe({"compiler": ["gcc-14"], "arch": ["amd64"]}))
+        self.assertFalse(matrix_is_recipe(
+            {"compiler": ["gcc-14"], "arch": ["amd64"], "distro": ["ubuntu"]}))
 
 
 class ResolveMatrixAxesTests(unittest.TestCase):
-    FLEET = {"compiler:clang-18", "compiler:gcc-14", "arch:amd64", "arch:aarch64"}
+    FLEET = {"compiler:clang-18", "compiler:gcc-14", "arch:amd64",
+             "arch:aarch64", "distro:ubuntu-24.04"}
 
-    def test_pins_loose_compiler_and_arch(self):
+    def test_pins_loose_axes(self):
         out = resolve_loose_matrix_axes({"kinds": ["smoke"]}, self.FLEET)
         self.assertEqual(out["compiler"], ["clang-18"])  # preferred + newest
         self.assertEqual(out["arch"], ["amd64"])
-        self.assertEqual(out["kinds"], ["smoke"])        # untouched
+        self.assertEqual(out["distro"], ["ubuntu"])       # platform from fleet
+        self.assertEqual(out["distro_version"], ["24.04"])
+        self.assertEqual(out["modes"], ["release"])
+        self.assertEqual(out["kinds"], ["smoke"])         # untouched
 
     def test_keeps_specified_axes(self):
         out = resolve_loose_matrix_axes(
-            {"compiler": ["gcc-13"], "arch": ["aarch64"]}, self.FLEET)
+            {"compiler": ["gcc-13"], "arch": ["aarch64"], "distro": ["fedora"]},
+            self.FLEET)
         self.assertEqual(out["compiler"], ["gcc-13"])
         self.assertEqual(out["arch"], ["aarch64"])
+        self.assertEqual(out["distro"], ["fedora"])
 
-    def test_reject_when_fleet_lacks_axis(self):
+    def test_reject_when_fleet_lacks_compiler(self):
         with self.assertRaises(ValueError):
-            resolve_loose_matrix_axes({"arch": ["amd64"]}, {"arch:amd64"})  # no compiler
+            resolve_loose_matrix_axes(
+                {"arch": ["amd64"], "distro": ["ubuntu"]},
+                {"arch:amd64", "distro:ubuntu-24.04"})  # no compiler
+
+    def test_reject_when_fleet_lacks_platform(self):
+        with self.assertRaises(ValueError):
+            resolve_loose_matrix_axes({}, {"compiler:gcc-14", "arch:amd64"})
 
 
 class RecipeLifecycleTests(unittest.TestCase):
@@ -64,7 +80,8 @@ class RecipeLifecycleTests(unittest.TestCase):
 
     def setUp(self):
         self.s = SessionLocal()
-        self.s.add(Worker(name="w", tags=["compiler:clang-18", "arch:amd64"]))
+        self.s.add(Worker(name="w", tags=["compiler:clang-18", "arch:amd64",
+                                          "distro:ubuntu-24.04"]))
         self.s.flush()
 
     def tearDown(self):
@@ -90,6 +107,7 @@ class RecipeLifecycleTests(unittest.TestCase):
         self.assertEqual(snap.resolved_from, recipe.id)
         self.assertEqual(snap.config["compiler"], ["clang-18"])
         self.assertEqual(snap.config["arch"], ["amd64"])
+        self.assertEqual(snap.config["distro"], ["ubuntu"])
         # Snapshot is runnable; recipe sees it in its lineage.
         mr = create_matrix_run(self.s, matrix_id=snap.id)
         self.assertIsNotNone(mr.id)
@@ -98,13 +116,15 @@ class RecipeLifecycleTests(unittest.TestCase):
     def test_fully_specified_matrix_is_resolved(self):
         m = create_matrix_from_axes(
             self.s, project="inet",
-            config={"kinds": ["smoke"], "compiler": ["gcc-14"], "arch": ["amd64"]})
+            config={"kinds": ["smoke"], "compiler": ["gcc-14"],
+                    "arch": ["amd64"], "distro": ["ubuntu"]})
         self.assertTrue(m.is_resolved)
 
     def test_resolving_already_resolved_raises(self):
         m = create_matrix_from_axes(
             self.s, project="inet",
-            config={"compiler": ["gcc-14"], "arch": ["amd64"]})
+            config={"compiler": ["gcc-14"], "arch": ["amd64"],
+                    "distro": ["ubuntu"]})
         with self.assertRaises(ValueError):
             resolve_matrix_recipe(self.s, m)
 

@@ -329,21 +329,31 @@ def create_matrix_from_axes(session, *, project, config, name=None, opp_file=Non
     return matrix
 
 
-def resolve_matrix_recipe(session, recipe):
+def resolve_matrix_recipe(session, recipe, *, commit_sha=None):
     """Resolve a recipe matrix into a new pinned snapshot matrix.
 
     Pins the recipe's loose coordinate axes (compiler/arch) against the fleet
     and returns a new ``TestMatrix`` (``is_resolved=True``,
     ``resolved_from=recipe.id``) carrying the pinned config. The recipe is
     preserved, so re-resolving later mints another snapshot — that lineage is
-    the moving-target history. Raises ValueError if the matrix is already
-    resolved or the fleet can't satisfy a loose axis (reject-incomplete).
+    the moving-target history.
+
+    When ``commit_sha`` is given (branch-tracking: a push event auto-resolving
+    the recipe), the source is also pinned — the snapshot's ``refs`` axis is set
+    to that one commit, so it tests exactly what was pushed. Without it (a
+    manual UI resolve) the recipe's refs are left as authored.
+
+    Raises ValueError if the matrix is already resolved or the fleet can't
+    satisfy a loose axis (reject-incomplete).
     """
     if recipe.is_resolved:
         raise ValueError("Matrix is already resolved.")
     from opp_ci.fleet import fleet_tags, resolve_loose_matrix_axes
     resolved_config = resolve_loose_matrix_axes(recipe.config or {},
                                                 fleet_tags(session))
+    if commit_sha:
+        resolved_config["refs"] = [commit_sha]
+        resolved_config.pop("ref_range", None)
     snapshot = TestMatrix(
         name=None, project=recipe.project, opp_file=recipe.opp_file,
         config=resolved_config, is_resolved=True, resolved_from=recipe.id)

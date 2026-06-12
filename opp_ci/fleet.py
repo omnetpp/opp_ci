@@ -67,20 +67,28 @@ def _version_key(ver):
 def candidate_axes(tags):
     """Parse a flat tag set into per-axis candidate values.
 
-    Returns a dict with ``compiler`` → set of ``(name, version|None)`` and
-    ``arch`` → set of arch strings (both lower-cased).
+    Returns a dict with ``compiler``/``distro``/``os``/``flavor`` → sets of
+    ``(name, version|None)`` and ``arch`` → set of arch strings (all
+    lower-cased). The structured `key:value` tags mirror the scheduler's
+    capability vocabulary (see persistence.required_tags_for_test).
     """
-    compilers, arches = set(), set()
+    out = {k: set() for k in ("compiler", "distro", "os", "flavor")}
+    arches = set()
     for t in tags:
-        if t.startswith("compiler:"):
-            name, _, ver = t[len("compiler:"):].partition("-")
-            if name:
-                compilers.add((name.lower(), ver or None))
-        elif t.startswith("arch:"):
-            arch = t[len("arch:"):].strip().lower()
-            if arch:
-                arches.add(arch)
-    return {"compiler": compilers, "arch": arches}
+        for axis in ("compiler", "distro", "os", "flavor"):
+            prefix = axis + ":"
+            if t.startswith(prefix):
+                name, _, ver = t[len(prefix):].partition("-")
+                if name:
+                    out[axis].add((name.lower(), ver or None))
+                break
+        else:
+            if t.startswith("arch:"):
+                arch = t[len("arch:"):].strip().lower()
+                if arch:
+                    arches.add(arch)
+    out["arch"] = arches
+    return out
 
 
 def _pick_categorical(values, order):
@@ -142,14 +150,19 @@ def resolve_loose_axes(coord, tags, *, preferences=None):
 
 
 def resolve_loose_matrix_axes(config, tags, *, preferences=None):
-    """Pin a recipe matrix's loose `compiler`/`arch` axes against fleet `tags`,
-    returning a new config (the recipe's other axes untouched).
+    """Pin a recipe matrix's loose coordinate axes against fleet `tags`,
+    returning a new, fully-runnable config (already-specified axes untouched).
 
-    Mirrors `resolve_loose_axes` but yields single-value axis *lists* for a
-    matrix config: a loose compiler becomes the fleet's preferred family at its
-    newest advertised version (e.g. ``["clang-18"]``), a loose arch the
-    preferred arch (e.g. ``["amd64"]``). Raises ValueError if the fleet can't
-    satisfy a loose axis (reject-incomplete). Already-specified axes are kept.
+    Fills every axis a runnable coordinate needs that the recipe left loose:
+      * compiler → the fleet's preferred family at its newest advertised version
+        (e.g. ``["clang-18"]``);
+      * arch → the preferred arch (e.g. ``["amd64"]``);
+      * platform → a Linux distro the fleet advertises (newest, implying
+        os=Linux), else an OS by preference;
+      * modes → defaulted (``["release"]``; not tag-gated).
+
+    Raises ValueError if the fleet can't satisfy a loose tag-gated axis
+    (reject-incomplete).
     """
     prefs = preferences or DEFAULT_PREFERENCES
     cand = candidate_axes(tags)
@@ -173,7 +186,35 @@ def resolve_loose_matrix_axes(config, tags, *, preferences=None):
                 "recipe (reject-incomplete).")
         resolved["arch"] = [arch]
 
+    has_platform = resolved.get("os") or resolved.get("distro") or resolved.get("flavor")
+    if not has_platform:
+        if cand["distro"]:
+            name, ver = _pick_versioned(cand["distro"])  # newest distro; implies Linux
+            resolved["distro"] = [name]
+            if ver:
+                resolved["distro_version"] = [ver]
+        elif cand["os"]:
+            families = {n for n, _ in cand["os"]}
+            os_name = _pick_categorical(families, prefs.get("os", []))
+            ver = _newest_version(cand["os"], os_name)
+            resolved["os"] = [os_name]
+            if ver:
+                resolved["os_version"] = [ver]
+        else:
+            raise ValueError(
+                "No worker advertises a platform (distro/os); cannot resolve "
+                "the matrix recipe (reject-incomplete).")
+
+    if not resolved.get("modes"):
+        resolved["modes"] = [prefs["mode"][0]]
+
     return resolved
+
+
+def _pick_versioned(candidates):
+    """Pick one ``(name, version)`` deterministically: newest version, then
+    lexically-greatest name. Used for distro selection (no global preference)."""
+    return max(candidates, key=lambda nv: (_version_key(nv[1]), nv[0]))
 
 
 def _newest_version(compiler_candidates, family):

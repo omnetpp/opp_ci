@@ -20,7 +20,8 @@ from opp_ci.config import GITHUB_WEBHOOK_SECRET, COORDINATOR_URL
 from opp_ci.db.connection import SessionLocal
 from opp_ci.db.models import AutoTestRule, Project, TestMatrix
 from opp_ci.github.client import GitHubClient
-from opp_ci.persistence import create_matrix_run, enqueue_job
+from opp_ci.persistence import (
+    create_matrix_run, enqueue_job, resolve_matrix_recipe)
 from opp_ci.scheduler import expand_matrix
 
 _logger = logging.getLogger(__name__)
@@ -197,6 +198,20 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
                     _logger.warning("Rule %d references missing matrix %d",
                                     rule.id, rule.matrix_id)
                     continue
+                # Branch-tracking: a recipe matrix auto-resolves on the event —
+                # loose coordinate axes pinned against the fleet, the source
+                # pinned to the pushed commit — minting a fresh snapshot each
+                # push (the recipe is preserved as its lineage). The resolved
+                # snapshot is what actually runs.
+                if not matrix.is_resolved:
+                    try:
+                        matrix = resolve_matrix_recipe(
+                            session, matrix, commit_sha=commit_sha)
+                    except ValueError as e:
+                        _logger.warning(
+                            "Could not resolve recipe matrix %d for %s/%s %s: %s",
+                            rule.matrix_id, owner, repo, ref_name, e)
+                        continue
                 jobs = expand_matrix(matrix.project, matrix.config)
                 matrix_id = matrix.id
                 opp_file = matrix.opp_file

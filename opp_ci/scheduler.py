@@ -364,13 +364,16 @@ def _is_full_sha(ref):
 
 def matrix_is_recipe(config):
     """True if a matrix config is a *recipe* — its coordinate is underspecified
-    along a fleet-resolvable axis (no compiler or no arch), so it must be
-    resolved (pinned against the fleet) before it can run. A fully-specified
-    config is already resolved/runnable. Moving refs (branches/ranges) are
-    handled separately by expand and don't, by themselves, make a recipe.
+    along a fleet-resolvable axis, so it must be resolved (pinned against the
+    fleet) before it can run. A matrix is a recipe when it lacks a compiler, an
+    arch, or a platform (os/distro/flavor) — exactly the axes a job needs to
+    pass coordinate validation. A fully-specified config is already
+    resolved/runnable. Moving refs (branches/ranges) are handled separately by
+    expand and don't, by themselves, make a recipe.
     """
     config = config or {}
-    return not config.get("compiler") or not config.get("arch")
+    has_platform = config.get("os") or config.get("distro") or config.get("flavor")
+    return not (config.get("compiler") and config.get("arch") and has_platform)
 
 
 def _resolve_ref_range(project_name, range_str):
