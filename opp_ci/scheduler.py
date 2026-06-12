@@ -492,6 +492,64 @@ def _resolve_refs_axis(project, config):
     return pairs
 
 
+def describe_expansion(config):
+    """Human description of how many Tests this matrix expands into — computed
+    **offline** (no GitHub round-trip), so it's safe to call on every page
+    render.
+
+    It multiplies the cartesian axis cardinalities exactly as `expand_matrix`
+    would, but treats the refs axis specially: static refs (branches/tags/SHAs)
+    are counted, while a ``base..topic`` range's commit count is unknown until
+    resolved at run time, so it's described "per commit" rather than enumerated.
+
+    Loose coordinate axes (a recipe's missing compiler/arch/platform) count as
+    one each — matching resolution, which pins each to a single fleet value —
+    so a recipe and the snapshot it mints report the same count.
+    """
+    config = config or {}
+
+    def _n(seq):
+        return len(seq) if seq else 1
+
+    per_coord = (
+        _n(config.get("versions", [None]))
+        * _n(config.get("kinds", ["smoke"]))
+        * _n(config.get("modes", ["release"]))
+        * len(_resolve_platform_axis(config))
+        * len(_resolve_arch_axis(config))
+        * len(_resolve_compiler_axis(config))
+        * len(_resolve_deps_axis(config))
+        * len(_resolve_isolation_axis(config))
+        * len(_resolve_toolchain_axis(config))
+    )
+
+    range_expr = None
+    static_refs = 0
+    if config.get("refs"):
+        for r in config["refs"]:
+            if r and ".." in r:
+                range_expr = r
+            else:
+                static_refs += 1
+    elif config.get("ref_range"):
+        rr = config["ref_range"]
+        range_expr = f"{rr.get('base', '')}..{rr.get('head', '')}"
+
+    def _plural(n):
+        return "Test" if n == 1 else "Tests"
+
+    if range_expr:
+        prefix = ""
+        if static_refs:
+            pinned = per_coord * static_refs
+            prefix = f"{pinned} {_plural(pinned)} for the pinned refs, plus "
+        return (f"{prefix}{per_coord} {_plural(per_coord)} per commit in "
+                f"{range_expr} (commits resolved at run time)")
+
+    total = per_coord * (static_refs or 1)
+    return f"{total} {_plural(total)}"
+
+
 def expand_matrix(project, config):
     """
     Expand a matrix config into a list of individual job specs.

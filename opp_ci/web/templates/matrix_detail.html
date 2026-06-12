@@ -85,11 +85,12 @@
             {%- endfor %}
         </td></tr>
         {% endif %}
-        <tr><th>Expanded Jobs <span class="derived-tag" title="derived: count of jobs produced by expand_matrix(project, config) — not stored">derived</span></th><td>{{ jobs|length }}</td></tr>
+        <tr><th>Expands to <span class="derived-tag" title="derived offline from the config (axis cardinalities × refs) — not stored; a base..topic range is counted per commit since its commits resolve at run time">derived</span></th><td>{{ expansion_summary }}</td></tr>
         <tr><th>Created at</th><td>{{ matrix.created_at.strftime("%Y-%m-%d %H:%M:%S") if matrix.created_at else "-" }}</td></tr>
     </table>
 </div>
 
+{% if jobs %}
 <div class="card">
     <h2>Expanded Jobs ({{ jobs|length }})</h2>
     <table>
@@ -122,6 +123,16 @@
         </tbody>
     </table>
 </div>
+{% else %}
+<div class="card">
+    <h2>Expanded Jobs</h2>
+    <p class="empty">
+        {% if matrix.is_recipe %}Resolve this recipe to enumerate its Tests.
+        {% else %}This matrix tracks a commit range; its per-commit Tests are enumerated when the range is resolved at run time.{% endif %}
+        Expands to {{ expansion_summary }}.
+    </p>
+</div>
+{% endif %}
 
 {% if recent_runs %}
 <div class="card">

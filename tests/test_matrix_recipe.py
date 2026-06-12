@@ -18,7 +18,7 @@ os.environ["OPP_CI_DATABASE_URL"] = f"sqlite:///{_DB_PATH}"
 
 from opp_ci.db.connection import engine, SessionLocal           # noqa: E402
 from opp_ci.db.models import Base, TestMatrix, Worker           # noqa: E402
-from opp_ci.scheduler import matrix_is_recipe                   # noqa: E402
+from opp_ci.scheduler import matrix_is_recipe, describe_expansion  # noqa: E402
 from opp_ci.fleet import resolve_loose_matrix_axes              # noqa: E402
 from opp_ci.persistence import (                                # noqa: E402
     create_matrix_from_axes, create_matrix_run, resolve_matrix_recipe,
@@ -38,6 +38,31 @@ class RecipeDetectionTests(unittest.TestCase):
     def test_fully_specified_is_resolved(self):
         self.assertFalse(matrix_is_recipe(
             {"compiler": ["gcc-14"], "arch": ["amd64"], "distro": ["ubuntu"]}))
+
+
+class DescribeExpansionTests(unittest.TestCase):
+    def test_empty_config_is_one(self):
+        self.assertEqual(describe_expansion({}), "1 Test")
+
+    def test_cartesian_product(self):
+        self.assertEqual(
+            describe_expansion({"kinds": ["a", "b"], "modes": ["x", "y"]}),
+            "4 Tests")
+
+    def test_static_refs_multiply(self):
+        self.assertEqual(
+            describe_expansion({"kinds": ["a"], "refs": ["main", "v1.0"]}),
+            "2 Tests")
+
+    def test_range_counted_per_commit(self):
+        out = describe_expansion({"kinds": ["a", "b"], "refs": ["base..topic"]})
+        self.assertIn("2 Tests per commit in base..topic", out)
+        self.assertIn("resolved at run time", out)
+
+    def test_recipe_loose_axes_count_as_one(self):
+        # No compiler/arch/platform → each resolves to one value, so the count
+        # matches what the snapshot will produce.
+        self.assertEqual(describe_expansion({"kinds": ["a", "b", "c"]}), "3 Tests")
 
 
 class ResolveMatrixAxesTests(unittest.TestCase):

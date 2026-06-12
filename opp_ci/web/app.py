@@ -1609,7 +1609,7 @@ def matrix_new_form(request: Request,
 def matrix_detail(request: Request, matrix_id: int,
                   current_user: User = Depends(require_user()),
                   error: str = Query(default=None)):
-    from opp_ci.scheduler import expand_matrix
+    from opp_ci.scheduler import expand_matrix, describe_expansion
 
     session = SessionLocal()
     try:
@@ -1619,7 +1619,17 @@ def matrix_detail(request: Request, matrix_id: int,
         if matrix is None:
             return HTMLResponse("<h1>Matrix not found</h1>", status_code=404)
 
-        jobs = expand_matrix(matrix.project, matrix.config)
+        # Test count is derived offline from the (immutable, for a snapshot)
+        # config — never stored, never a GitHub round-trip on render.
+        expansion_summary = describe_expansion(matrix.config)
+        # Enumerate the per-job table only when it's cheap and meaningful: a
+        # resolved matrix with no moving range. expand_matrix would otherwise
+        # hit GitHub for a range, or list placeholder all-None rows for a recipe.
+        cfg = matrix.config or {}
+        has_range = bool(cfg.get("ref_range")) or any(
+            isinstance(r, str) and ".." in r for r in (cfg.get("refs") or []))
+        jobs = (expand_matrix(matrix.project, matrix.config)
+                if matrix.is_resolved and not has_range else [])
 
         recent_runs = session.execute(
             select(TestRun)
@@ -1632,6 +1642,7 @@ def matrix_detail(request: Request, matrix_id: int,
         return templates.TemplateResponse(request, "matrix_detail.html", {
             "matrix": matrix,
             "jobs": jobs,
+            "expansion_summary": expansion_summary,
             "recent_runs": recent_runs,
             "error": error,
             "current_default_expectation": default_expectation.value if default_expectation else "",

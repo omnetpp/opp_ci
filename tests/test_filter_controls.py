@@ -238,6 +238,8 @@ class FilterPageTests(unittest.TestCase):
         body = self._get(f"/test-matrices/{mid}")
         self.assertIn("badge-recipe", body)
         self.assertIn(f"/test-matrices/{mid}/resolve", body)
+        # The derived Test-count is shown (offline, never stored).
+        self.assertIn("Expands to", body)
 
     def test_matrix_runs_axis_filter_survives_limit(self):
         # The smoke matrix run is the oldest (lowest id); 5 newer fingerprint
