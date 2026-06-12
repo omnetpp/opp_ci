@@ -320,7 +320,10 @@ EnvironmentFile=-{CONFIG_DIR}/coordinator.env
 # {spec.bindir} carries the copied uvx/uv so the daemon resolves them.
 Environment="PATH={_path_env(spec)}"
 ExecStart={uvx_command(spec, uvx=uvx)}
-Restart=on-failure
+# `always`, not `on-failure`: an admin-requested shutdown from the web UI exits
+# 0 (clean, like Ctrl-C), and we still want systemd to restart the process so it
+# comes back on the freshly-pinned uvx ref.
+Restart=always
 RestartSec=5s
 
 # Hardening — safe for the coordinator (no Nix, no podman).
@@ -355,7 +358,10 @@ EnvironmentFile={CONFIG_DIR}/opp_ci.env
 EnvironmentFile={CONFIG_DIR}/workers/%i.env
 Environment="PATH={_path_env(spec)}"
 ExecStart={uvx_command(spec, uvx=uvx)}
-Restart=on-failure
+# `always`, not `on-failure`: an admin-requested shutdown from the web UI exits
+# 0 (clean, like Ctrl-C), and we still want systemd to restart the worker so it
+# comes back on the freshly-pinned uvx ref.
+Restart=always
 RestartSec=10s
 # Worker handles SIGINT / SIGTERM cleanly per doc/workers.md.
 KillSignal=SIGTERM
@@ -457,10 +463,10 @@ def render_worker_plist(spec):
         <string>{spec.home}</string>
     </dict>
 
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key> <false/>
-    </dict>
+    <!-- Plain `true`, not {{SuccessfulExit: false}}: an admin-requested shutdown
+         from the web UI exits 0 (clean, like Ctrl-C), and we still want launchd
+         to restart the worker so it comes back on the freshly-pinned uvx ref. -->
+    <key>KeepAlive</key> <true/>
     <key>ThrottleInterval</key> <integer>10</integer>
 
     <key>RunAtLoad</key> <{'true' if spec.start else 'false'}/>

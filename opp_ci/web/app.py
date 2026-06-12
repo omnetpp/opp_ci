@@ -3045,10 +3045,12 @@ def admin_coordinator_shutdown(current_user: User = Depends(require_user("admin"
     import threading
     who = current_user.username or current_user.github_username or f"id={current_user.id}"
     _logger.warning("Coordinator shutdown requested by admin '%s'", who)
-    # Send SIGTERM (uvicorn's graceful-shutdown signal) to our own process, but
-    # only after this response is flushed — otherwise the browser sees a dropped
+    # Send SIGINT — uvicorn shuts down gracefully on both SIGINT and SIGTERM,
+    # but only SIGINT exits 0; SIGTERM exits 143. Use SIGINT so a web-requested
+    # shutdown returns success, exactly like Ctrl-C at the console. Fire it only
+    # after this response is flushed — otherwise the browser sees a dropped
     # connection instead of the redirect.
-    threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
     return RedirectResponse(
         url="/admin?message=Coordinator+shutting+down+%E2%80%94+the+service+will+restart+it",
         status_code=303)
