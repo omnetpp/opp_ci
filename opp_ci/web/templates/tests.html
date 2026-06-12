@@ -91,7 +91,10 @@
                     <button type="submit" class="btn btn-success btn-sm">Run</button>
                 </form>
                 {% else %}
-                <span style="color:var(--muted);" title="A recipe must be resolved before it can run">resolve to run</span>
+                <form method="post" action="/tests/{{ t.id }}/resolve" class="inline-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-primary btn-sm" title="Pin loose axes against the fleet">Resolve</button>
+                </form>
                 {% endif %}
             </td>
             {% endif %}

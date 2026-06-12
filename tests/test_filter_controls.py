@@ -223,6 +223,21 @@ class FilterPageTests(unittest.TestCase):
         self.assertIn("Source commit", body)
         self._get(f"/test-matrices/{mid}")
 
+    def test_recipe_test_detail_shows_resolve(self):
+        # A recipe Test renders the recipe badge and a Resolve action.
+        from opp_ci.persistence import get_or_create_test_recipe
+        s = SessionLocal()
+        try:
+            recipe = get_or_create_test_recipe(
+                s, {"project": "inet", "kind": "smoke", "resolved_deps": None})
+            s.commit()
+            rid = recipe.id
+        finally:
+            s.close()
+        body = self._get(f"/tests/{rid}")
+        self.assertIn("badge-recipe", body)
+        self.assertIn(f"/tests/{rid}/resolve", body)
+
     def test_recipe_matrix_detail_shows_resolve(self):
         # A recipe matrix renders the recipe badge and a Resolve action.
         from opp_ci.persistence import create_matrix_from_axes

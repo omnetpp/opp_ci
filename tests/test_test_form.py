@@ -20,7 +20,7 @@ os.environ.setdefault("OPP_CI_SESSION_SECRET", "test-secret-for-form-tests")
 from fastapi.testclient import TestClient                       # noqa: E402
 
 from opp_ci.db.connection import engine, SessionLocal           # noqa: E402
-from opp_ci.db.models import Base, Project, User                # noqa: E402
+from opp_ci.db.models import Base, Project, Test, User          # noqa: E402
 from opp_ci.web import app as webapp                            # noqa: E402
 
 
@@ -60,12 +60,14 @@ class TestFormStateTests(unittest.TestCase):
         self.assertIsNotNone(m, "csrf token not found in form")
         return m.group(1)
 
-    def test_under_specified_submission_reports_and_preserves_state(self):
+    def test_under_specified_run_reports_and_preserves_state(self):
         token = self._csrf()
-        # Linux distro pinned but no version, and arch/mode/compiler all blank.
+        # action=run eager-resolves against the fleet; with no workers it can't,
+        # so it reports (in place, state preserved). (action=save would instead
+        # persist a recipe — see test_under_specified_save_creates_recipe.)
         r = self.client.post("/tests/new", data={
             "csrf_token": token,
-            "action": "save",
+            "action": "run",
             "project": "inet", "kind": "fingerprint",
             "os": "Linux", "distro": "Ubuntu",
             # deliberately omitted: distro_version, arch, mode, compiler,
@@ -108,6 +110,29 @@ class TestFormStateTests(unittest.TestCase):
         # On success the handler redirects to the test detail page.
         self.assertIn(r.status_code, (302, 303), r.text)
         self.assertIn("/tests/", r.headers.get("location", ""))
+
+    def test_under_specified_save_creates_recipe(self):
+        token = self._csrf()
+        # Underspecified + Save → persisted as a recipe (not an error).
+        r = self.client.post("/tests/new", data={
+            "csrf_token": token,
+            "action": "save",
+            "project": "inet", "kind": "smoke",
+            "os": "Linux", "distro": "Ubuntu",
+            # no distro_version/arch/mode/compiler → a recipe
+        }, follow_redirects=False)
+        self.assertIn(r.status_code, (302, 303), r.text)
+        loc = r.headers.get("location", "")
+        self.assertRegex(loc, r"/tests/\d+")
+        test_id = int(loc.rstrip("/").split("/")[-1])
+        s = SessionLocal()
+        try:
+            t = s.get(Test, test_id)
+            self.assertIsNotNone(t)
+            self.assertFalse(t.is_resolved)   # it's a recipe
+            self.assertIsNone(t.compiler)     # loose axis, unvalidated
+        finally:
+            s.close()
 
 
 if __name__ == "__main__":

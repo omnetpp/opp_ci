@@ -12,7 +12,10 @@
         <button type="submit" class="btn btn-success btn-sm">Run this test</button>
     </form>
     {% else %}
-    <span style="color:var(--muted);" title="Resolve the recipe to a pinned Test before running">resolve to run</span>
+    <form method="post" action="/tests/{{ test.id }}/resolve" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-primary btn-sm" title="Pin the loose coordinate axes against the fleet, minting a runnable resolved Test">Resolve</button>
+    </form>
     {% endif %}
     {% endif %}
 </div>

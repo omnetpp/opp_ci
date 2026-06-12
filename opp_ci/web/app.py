@@ -995,6 +995,23 @@ def test_new_submit(
             "opp_file": None,
             "resolved_deps": resolved_deps,
         }
+        # Underspecified "Save" persists a *recipe* (a separate object) to
+        # resolve later or per push; "Run" and fully-specified saves resolve
+        # eagerly below.
+        from opp_ci.persistence import (test_coord_is_recipe,
+                                        get_or_create_test_recipe)
+        if action != "run" and test_coord_is_recipe(coord):
+            recipe = get_or_create_test_recipe(session, coord)
+            if name.strip():
+                try:
+                    set_test_name(session, recipe, name)
+                except ValueError as e:
+                    session.rollback()
+                    return _render_test_form(
+                        request, session, current_user, values=values,
+                        message=str(e), message_type="error", status_code=409)
+            session.commit()
+            return RedirectResponse(url=f"/tests/{recipe.id}", status_code=303)
         # Pin loose coordinate axes against the fleet (the form queues for
         # workers), then validate. If the fleet can't supply a loose axis, the
         # error names the fleet as the cause — not the user.
@@ -1081,14 +1098,47 @@ def test_run(test_id: int,
                 url="/tests?message=Test+not+found&message_type=error",
                 status_code=303,
             )
-        run = create_test_run(
-            session,
-            test_id=test.id,
-            git_ref=git_ref or None,
-            version=version or None,
-        )
+        try:
+            run = create_test_run(
+                session,
+                test_id=test.id,
+                git_ref=git_ref or None,
+                version=version or None,
+            )
+        except ValueError as e:
+            # e.g. a recipe Test — resolve it first.
+            return RedirectResponse(
+                url=f"/tests/{test.id}?message={e}&message_type=error",
+                status_code=303)
         session.commit()
         return RedirectResponse(url=f"/test-runs/{run.id}", status_code=303)
+    finally:
+        session.close()
+
+
+@web_router.post("/tests/{test_id}/resolve", dependencies=[Depends(require_csrf)])
+def test_resolve(test_id: int,
+                 current_user: User = Depends(require_user("submitter"))):
+    """Resolve a recipe Test: pin its loose coordinate axes against the fleet
+    and mint a runnable resolved Test, then go to it."""
+    from opp_ci.fleet import fleet_tags
+    from opp_ci.persistence import resolve_test_recipe
+    session = SessionLocal()
+    try:
+        recipe = session.get(Test, test_id)
+        if recipe is None:
+            return RedirectResponse(url="/tests", status_code=303)
+        try:
+            resolved = resolve_test_recipe(
+                session, recipe, fleet_tags(session),
+                expectation_set_by=current_user.display_name)
+            session.commit()
+        except ValueError as e:
+            session.rollback()
+            return RedirectResponse(
+                url=f"/tests/{test_id}?message={e}&message_type=error",
+                status_code=303)
+        return RedirectResponse(url=f"/tests/{resolved.id}", status_code=303)
     finally:
         session.close()
 
