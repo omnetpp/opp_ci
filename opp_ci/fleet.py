@@ -141,6 +141,41 @@ def resolve_loose_axes(coord, tags, *, preferences=None):
     return coord
 
 
+def resolve_loose_matrix_axes(config, tags, *, preferences=None):
+    """Pin a recipe matrix's loose `compiler`/`arch` axes against fleet `tags`,
+    returning a new config (the recipe's other axes untouched).
+
+    Mirrors `resolve_loose_axes` but yields single-value axis *lists* for a
+    matrix config: a loose compiler becomes the fleet's preferred family at its
+    newest advertised version (e.g. ``["clang-18"]``), a loose arch the
+    preferred arch (e.g. ``["amd64"]``). Raises ValueError if the fleet can't
+    satisfy a loose axis (reject-incomplete). Already-specified axes are kept.
+    """
+    prefs = preferences or DEFAULT_PREFERENCES
+    cand = candidate_axes(tags)
+    resolved = dict(config or {})
+
+    if not resolved.get("compiler"):
+        families = {name for name, _ in cand["compiler"]}
+        family = _pick_categorical(families, prefs["compiler"])
+        if family is None:
+            raise ValueError(
+                "No worker advertises a compiler; cannot resolve the matrix "
+                "recipe (reject-incomplete).")
+        ver = _newest_version(cand["compiler"], family)
+        resolved["compiler"] = [f"{family}-{ver}" if ver else family]
+
+    if not resolved.get("arch"):
+        arch = _pick_categorical(cand["arch"], prefs["arch"])
+        if arch is None:
+            raise ValueError(
+                "No worker advertises an arch; cannot resolve the matrix "
+                "recipe (reject-incomplete).")
+        resolved["arch"] = [arch]
+
+    return resolved
+
+
 def _newest_version(compiler_candidates, family):
     """Newest advertised version string for `family`, or None if the fleet
     offers that family only without a version."""

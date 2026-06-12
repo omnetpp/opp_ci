@@ -362,6 +362,17 @@ def _is_full_sha(ref):
             and all(c in "0123456789abcdef" for c in ref.lower()))
 
 
+def matrix_is_recipe(config):
+    """True if a matrix config is a *recipe* — its coordinate is underspecified
+    along a fleet-resolvable axis (no compiler or no arch), so it must be
+    resolved (pinned against the fleet) before it can run. A fully-specified
+    config is already resolved/runnable. Moving refs (branches/ranges) are
+    handled separately by expand and don't, by themselves, make a recipe.
+    """
+    config = config or {}
+    return not config.get("compiler") or not config.get("arch")
+
+
 def _resolve_ref_range(project_name, range_str):
     """Resolve a ``base..head`` range string to its commit SHAs via GitHub.
 

@@ -309,20 +309,47 @@ def set_matrix_name(session, matrix, name):
     return matrix
 
 
-def create_matrix_from_axes(session, *, project, config, name=None, opp_file=None):
+def create_matrix_from_axes(session, *, project, config, name=None, opp_file=None,
+                            is_resolved=True):
     """Create a TestMatrix row from a config dict.
 
     `name` may be None (anonymous). Shared by `matrix_create`, the web
     anonymous-run handler, and the CLI so the row is built one way.
-    Raises ValueError if a named matrix collides.
+    `is_resolved=False` marks it a recipe (the web form passes this for an
+    underspecified matrix; see `scheduler.matrix_is_recipe`); the default keeps
+    every other caller's matrix runnable. Raises ValueError on a name collision.
     """
     cleaned = name.strip() if name else None
     if cleaned and get_matrix_by_name(session, cleaned) is not None:
         raise ValueError(f"A matrix named {cleaned!r} already exists.")
-    matrix = TestMatrix(name=cleaned, project=project, opp_file=opp_file, config=config)
+    matrix = TestMatrix(name=cleaned, project=project, opp_file=opp_file,
+                        config=config, is_resolved=is_resolved)
     session.add(matrix)
     session.flush()
     return matrix
+
+
+def resolve_matrix_recipe(session, recipe):
+    """Resolve a recipe matrix into a new pinned snapshot matrix.
+
+    Pins the recipe's loose coordinate axes (compiler/arch) against the fleet
+    and returns a new ``TestMatrix`` (``is_resolved=True``,
+    ``resolved_from=recipe.id``) carrying the pinned config. The recipe is
+    preserved, so re-resolving later mints another snapshot — that lineage is
+    the moving-target history. Raises ValueError if the matrix is already
+    resolved or the fleet can't satisfy a loose axis (reject-incomplete).
+    """
+    if recipe.is_resolved:
+        raise ValueError("Matrix is already resolved.")
+    from opp_ci.fleet import fleet_tags, resolve_loose_matrix_axes
+    resolved_config = resolve_loose_matrix_axes(recipe.config or {},
+                                                fleet_tags(session))
+    snapshot = TestMatrix(
+        name=None, project=recipe.project, opp_file=recipe.opp_file,
+        config=resolved_config, is_resolved=True, resolved_from=recipe.id)
+    session.add(snapshot)
+    session.flush()
+    return snapshot
 
 
 # ── Expectations ──────────────────────────────────────────────────────

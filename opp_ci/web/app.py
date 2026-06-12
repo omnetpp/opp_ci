@@ -1734,9 +1734,15 @@ def matrix_create(
             isolation=isolation, toolchain=toolchain,
             ref_range_base=ref_range_base, ref_range_head=ref_range_head,
         )
+        # An underspecified matrix (no compiler/arch) is a recipe: it must be
+        # resolved against the fleet before it can run.
+        from opp_ci.scheduler import matrix_is_recipe
+        from opp_ci.persistence import resolve_matrix_recipe
+        is_recipe = matrix_is_recipe(config)
         try:
             matrix = create_matrix_from_axes(
                 session, project=project, config=config, name=name or None,
+                is_resolved=not is_recipe,
             )
         except ValueError:
             return RedirectResponse(
@@ -1744,8 +1750,17 @@ def matrix_create(
                 status_code=303,
             )
         if action == "run":
+            # Save & run on a recipe resolves it first, then runs the snapshot.
+            runnable = matrix
+            if is_recipe:
+                try:
+                    runnable = resolve_matrix_recipe(session, matrix)
+                except ValueError as e:
+                    session.commit()  # keep the saved recipe
+                    return RedirectResponse(
+                        url=f"/test-matrices/{matrix.id}?error={e}", status_code=303)
             matrix_run = _queue_matrix_run(
-                session, matrix, trigger="web",
+                session, runnable, trigger="web",
                 default_expectation=default_expectation,
                 expectation_set_by=current_user.display_name,
             )
@@ -1776,6 +1791,29 @@ def matrix_rename(matrix_id: int,
                 url=f"/test-matrices/{matrix_id}?error={e}", status_code=303,
             )
         return RedirectResponse(url=f"/test-matrices/{matrix_id}", status_code=303)
+    finally:
+        session.close()
+
+
+@web_router.post("/test-matrices/{matrix_id}/resolve", dependencies=[Depends(require_csrf)])
+def matrix_resolve(matrix_id: int,
+                   current_user: User = Depends(require_user("submitter"))):
+    """Resolve a recipe matrix: pin its loose coordinate axes against the fleet
+    and mint a runnable snapshot matrix, then go to it."""
+    from opp_ci.persistence import resolve_matrix_recipe
+    session = SessionLocal()
+    try:
+        recipe = session.get(TestMatrix, matrix_id)
+        if recipe is None:
+            return RedirectResponse(url="/test-matrices", status_code=303)
+        try:
+            snapshot = resolve_matrix_recipe(session, recipe)
+            session.commit()
+        except ValueError as e:
+            session.rollback()
+            return RedirectResponse(
+                url=f"/test-matrices/{matrix_id}?error={e}", status_code=303)
+        return RedirectResponse(url=f"/test-matrices/{snapshot.id}", status_code=303)
     finally:
         session.close()
 

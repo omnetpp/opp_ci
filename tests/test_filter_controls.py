@@ -223,6 +223,22 @@ class FilterPageTests(unittest.TestCase):
         self.assertIn("Source commit", body)
         self._get(f"/test-matrices/{mid}")
 
+    def test_recipe_matrix_detail_shows_resolve(self):
+        # A recipe matrix renders the recipe badge and a Resolve action.
+        from opp_ci.persistence import create_matrix_from_axes
+        s = SessionLocal()
+        try:
+            m = create_matrix_from_axes(s, project="inet",
+                                        config={"kinds": ["smoke"]},
+                                        is_resolved=False)
+            s.commit()
+            mid = m.id
+        finally:
+            s.close()
+        body = self._get(f"/test-matrices/{mid}")
+        self.assertIn("badge-recipe", body)
+        self.assertIn(f"/test-matrices/{mid}/resolve", body)
+
     def test_matrix_runs_axis_filter_survives_limit(self):
         # The smoke matrix run is the oldest (lowest id); 5 newer fingerprint
         # runs sit above it. With limit=2 the smoke run is outside the window,

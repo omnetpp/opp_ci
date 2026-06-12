@@ -68,10 +68,17 @@
             <td>{{ run_counts.get(m.id, 0) }}</td>
             <td onclick="event.stopPropagation()" style="display:flex; gap:0.4rem;">
                 {% if current_user and current_user.role in ("submitter", "admin") %}
+                {% if m.is_resolved %}
                 <form method="post" action="/test-matrices/{{ m.id }}/run" class="inline-form">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="btn btn-success btn-sm">Run</button>
                 </form>
+                {% else %}
+                <form method="post" action="/test-matrices/{{ m.id }}/resolve" class="inline-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-primary btn-sm" title="Pin loose axes against the fleet">Resolve</button>
+                </form>
+                {% endif %}
                 {% endif %}
             </td>
         </tr>

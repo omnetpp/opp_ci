@@ -18,7 +18,10 @@
         <button type="submit" class="btn btn-success btn-sm">Run this matrix</button>
     </form>
     {% else %}
-    <span style="color:var(--muted);" title="Resolve + expand the recipe into pinned Tests before running">resolve to run</span>
+    <form method="post" action="/test-matrices/{{ matrix.id }}/resolve" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-primary btn-sm" title="Pin the loose coordinate axes against the fleet, minting a runnable resolved matrix">Resolve</button>
+    </form>
     {% endif %}
     {% endif %}
 </div>
@@ -41,6 +44,9 @@
     <table>
         <tr><th style="width:150px;">ID</th><td>{{ matrix.id }}</td></tr>
         <tr><th>Name <span class="derived-tag" title="derived: matrix.name, or '(anonymous #id)' when name is unset">display</span></th><td>{{ matrix.display_name }}{% if not matrix.name %} <span style="color:var(--muted);">(name column is NULL — anonymous)</span>{% endif %}</td></tr>
+        <tr><th>State</th><td><span class="badge badge-{{ matrix.state_label }}">{{ matrix.state_label }}</span>{% if matrix.is_recipe %} <span style="color:var(--muted);">— resolve to pin loose axes against the fleet</span>{% endif %}</td></tr>
+        {% if matrix.resolved_from %}<tr><th>Resolved from</th><td><a href="/test-matrices/{{ matrix.resolved_from }}">recipe #{{ matrix.resolved_from }}</a></td></tr>{% endif %}
+        {% if matrix.resolved_instances %}<tr><th>Resolved snapshots</th><td>{% for r in matrix.resolved_instances %}<a href="/test-matrices/{{ r.id }}">#{{ r.id }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>{% endif %}
         <tr><th>Project</th><td><a href="/projects/{{ matrix.project }}">{{ matrix.project }}</a></td></tr>
         <tr><th>opp file</th><td>{{ matrix.opp_file or "-" }}</td></tr>
         <tr><th>Kinds</th><td>{{ matrix.config.get("kinds", [])|join(", ") }}</td></tr>
