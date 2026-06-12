@@ -1705,6 +1705,18 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
                     "details": None, "commit_sha": commit_sha,
                 }
 
+        # kind=build has no test stage — the build is the whole job. When
+        # skip_build is set (podman host path: the build ran as a separate
+        # exec), we reach here without the build block's early return above, so
+        # finish PASS rather than call the (None) test function.
+        if build_only:
+            commit_sha = git_ref or resolve_commit_sha(project, opp_file=opp_file)
+            return {
+                "result_code": "PASS", "test_exec_seconds": time.time() - start,
+                "stdout": stdout_buf.getvalue(), "stderr": stderr_buf.getvalue(),
+                "details": None, "commit_sha": commit_sha,
+            }
+
         # ── test.run (build already done; don't rebuild) ──────────────
         if recorder is not None:
             recorder.begin(Stage.TEST_RUN, command=f"{func.__name__} --no-build (direct)")
