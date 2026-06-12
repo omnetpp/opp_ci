@@ -722,14 +722,8 @@ def reset_db(yes, preserve_tokens):
         Base.metadata.create_all(engine)
         session = SessionLocal()
         try:
-            saved_api_tokens = [
-                {c.name: getattr(t, c.name) for c in ApiToken.__table__.columns}
-                for t in session.execute(select(ApiToken)).scalars().all()
-            ]
-            saved_workers = [
-                {c.name: getattr(w, c.name) for c in Worker.__table__.columns}
-                for w in session.execute(select(Worker)).scalars().all()
-            ]
+            saved_api_tokens = _snapshot_rows(session, ApiToken)
+            saved_workers = _snapshot_rows(session, Worker)
         finally:
             session.close()
 
@@ -754,6 +748,28 @@ def reset_db(yes, preserve_tokens):
             session.close()
     else:
         click.echo("Database reset.")
+
+
+def _snapshot_rows(session, model):
+    """Snapshot every row of *model* as plain dicts, reading only the columns
+    that physically exist in the live table.
+
+    `reset-db --preserve-tokens` runs before the schema is rebuilt, so the live
+    table may predate a column that was since added to the model (e.g. a worker
+    table from before `software_version` existed). Selecting the full set of
+    model columns would emit `SELECT … software_version …` and crash on the old
+    database. Restricting the read to the columns actually present keeps the
+    preserve step working across any additive schema change; a missing column
+    is simply absent from the dict and restores to its model default.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    live_cols = {c["name"] for c in sa_inspect(session.get_bind())
+                 .get_columns(model.__tablename__)}
+    cols = [c for c in model.__table__.columns if c.name in live_cols]
+    names = [c.name for c in cols]
+    return [dict(zip(names, row))
+            for row in session.execute(select(*cols)).all()]
 
 
 def _drop_everything(engine):
