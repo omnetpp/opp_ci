@@ -6,6 +6,30 @@
 {% if message %}<div class="flash flash-success">{{ message }}</div>{% endif %}
 {% if error %}<div class="flash flash-error">{{ error }}</div>{% endif %}
 
+{% if worker_token %}
+<div class="flash flash-success" style="display:block;">
+    <strong>Worker registered.</strong> Copy its token now — it is shown only once and cannot be retrieved later.
+    <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.5rem;">
+        <input type="text" readonly value="{{ worker_token }}" id="worker-token-value"
+               style="flex:1; font-family:monospace; padding:0.4rem;" onclick="this.select();">
+        <button type="button" class="btn btn-primary btn-sm"
+                onclick="navigator.clipboard.writeText(document.getElementById('worker-token-value').value); this.textContent='Copied';">Copy</button>
+    </div>
+</div>
+{% endif %}
+
+{% if new_token %}
+<div class="flash flash-success" style="display:block;">
+    <strong>Token created.</strong> Copy it now — it is shown only once and cannot be retrieved later.
+    <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.5rem;">
+        <input type="text" readonly value="{{ new_token }}" id="new-token-value"
+               style="flex:1; font-family:monospace; padding:0.4rem;" onclick="this.select();">
+        <button type="button" class="btn btn-primary btn-sm"
+                onclick="navigator.clipboard.writeText(document.getElementById('new-token-value').value); this.textContent='Copied';">Copy</button>
+    </div>
+</div>
+{% endif %}
+
 <p style="margin-bottom: 1rem;">
     <a class="btn btn-primary btn-sm" href="/admin/users">Manage users</a>
 </p>

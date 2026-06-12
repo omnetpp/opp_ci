@@ -2904,7 +2904,8 @@ def rule_delete_web(rule_id: int, current_user: User = Depends(require_user("sub
 
 @web_router.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request, current_user: User = Depends(require_user("admin")),
-               message: str = Query(default=None), error: str = Query(default=None)):
+               message: str = Query(default=None), error: str = Query(default=None),
+               new_token: str = Query(default=None), worker_token: str = Query(default=None)):
     session = SessionLocal()
     try:
         stats = {
@@ -2955,6 +2956,8 @@ def admin_page(request: Request, current_user: User = Depends(require_user("admi
             "default_expectation": default_expectation.value if default_expectation else "",
             "message": message,
             "error": error,
+            "new_token": new_token,
+            "worker_token": worker_token,
             **_template_globals(request, current_user),
         })
     finally:
