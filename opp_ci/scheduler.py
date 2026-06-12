@@ -356,13 +356,26 @@ def _resolve_deps_axis(config):
     return combos
 
 
-def _resolve_ref_range(project_name, ref_range):
-    """Resolve a ref_range dict to a list of commit SHAs via the GitHub API."""
+def _is_full_sha(ref):
+    """True if `ref` is a full 40-hex commit SHA (already pinned)."""
+    return (isinstance(ref, str) and len(ref) == 40
+            and all(c in "0123456789abcdef" for c in ref.lower()))
+
+
+def _resolve_ref_range(project_name, range_str):
+    """Resolve a ``base..head`` range string to its commit SHAs via GitHub.
+
+    This is the *expand* of the source dimension: one ``base..topic`` ref
+    expression fans out into one commit per reachable commit. Raises
+    ValueError if the project has no GitHub repo or the range is empty —
+    reject-incomplete for the source (decision #7).
+    """
     from opp_ci.db.connection import SessionLocal
     from opp_ci.db.models import Project
     from opp_ci.github.client import GitHubClient
     from sqlalchemy import select
 
+    base, head = (part.strip() for part in range_str.split("..", 1))
     session = SessionLocal()
     try:
         proj = session.execute(
@@ -374,13 +387,50 @@ def _resolve_ref_range(project_name, ref_range):
             raise ValueError(f"Project '{project_name}' has no GitHub owner/repo configured")
 
         client = GitHubClient()
-        base = ref_range["base"]
-        head = ref_range["head"]
         shas = client.list_commits_in_range(proj.github_owner, proj.github_repo, base, head)
+        if not shas:
+            raise ValueError(
+                f"Ref range {range_str!r} resolved to no commits for {project_name}")
         _logger.info("Resolved ref range %s..%s to %d commits for %s", base, head, len(shas), project_name)
         return shas
     finally:
         session.close()
+
+
+def _resolve_refs_axis(project, config):
+    """Resolve the ``refs`` axis into ``(git_ref, commit_sha)`` pairs.
+
+    Decision #5: the ``refs`` axis carries the source spec. Each element is a
+    ref expression:
+      * ``base..topic``  → fans out into one pair per commit in the range,
+        each pinned (``git_ref`` = ``commit_sha`` = the SHA) — the moving
+        target, expanded into per-commit resolved Tests;
+      * a full 40-hex SHA → already pinned (``commit_sha`` = the SHA);
+      * a branch / tag    → passes through unpinned (``commit_sha`` None) so a
+        plain matrix preview never touches the network. Pinning a single ref
+        to its current SHA is the separate ``resolve`` step.
+
+    Falls back to the legacy ``ref_range`` dict, then to ``[(None, None)]``
+    (no source axis).
+    """
+    if "refs" in config:
+        raw_refs = config["refs"]
+    elif "ref_range" in config:
+        rr = config["ref_range"]
+        return [(sha, sha)
+                for sha in _resolve_ref_range(project, f"{rr['base']}..{rr['head']}")]
+    else:
+        return [(None, None)]
+
+    pairs = []
+    for ref in raw_refs:
+        if ref and ".." in ref:
+            pairs.extend((sha, sha) for sha in _resolve_ref_range(project, ref))
+        elif _is_full_sha(ref):
+            pairs.append((ref, ref))
+        else:
+            pairs.append((ref, None))
+    return pairs
 
 
 def expand_matrix(project, config):
@@ -419,12 +469,10 @@ def expand_matrix(project, config):
     kinds = config.get("kinds", ["smoke"])
     modes = config.get("modes", ["release"])
     versions = config.get("versions", [None])
-    if "refs" in config:
-        refs = config["refs"]
-    elif "ref_range" in config:
-        refs = _resolve_ref_range(project, config["ref_range"])
-    else:
-        refs = [None]
+    # The refs axis carries the source spec; each entry resolves to a
+    # (git_ref, commit_sha) pair — a base..topic range fans out to one pinned
+    # pair per commit (the moving-target case).
+    ref_pairs = _resolve_refs_axis(project, config)
     platform_cells = _resolve_platform_axis(config)
     compiler_tuples = _resolve_compiler_axis(config)
     dep_combos = _resolve_deps_axis(config)
@@ -433,9 +481,9 @@ def expand_matrix(project, config):
     arches = _resolve_arch_axis(config)
 
     jobs = []
-    for (version, ref, kind, mode, platform_cell, arch,
+    for (version, (ref, commit_sha), kind, mode, platform_cell, arch,
          (comp_name, comp_ver), dep_pins, isolation, toolchain) in itertools.product(
-            versions, refs, kinds, modes, platform_cells, arches, compiler_tuples,
+            versions, ref_pairs, kinds, modes, platform_cells, arches, compiler_tuples,
             dep_combos, isolations, toolchains):
         if toolchain == "nix":
             _validate_nix_compiler(comp_name, comp_ver)
@@ -446,6 +494,7 @@ def expand_matrix(project, config):
             "kind": kind,
             "mode": mode,
             "git_ref": ref,
+            "commit_sha": commit_sha,
             "os": os_name,
             "os_version": os_ver,
             "distro": distro,
