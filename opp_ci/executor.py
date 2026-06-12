@@ -1380,7 +1380,15 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
             # cwd (the install dir set by the entrypoint).
             extra += ["--opp-file", "/work/" + os.path.basename(opp_file)]
         mode_suffix = f" --mode {mode}" if mode else ""
-        run_stages = [
+        run_stages = []
+        if is_catalog:
+            # Install the catalog project(s) once, as their own stage
+            # (entry script --do-install), instead of re-running the install
+            # loop on every build/test exec. A bind-mounted SimulationProject
+            # needs no install stage — its source is already at /work.
+            run_stages.append(
+                (Stage.DEPS_INSTALL, ["--do-install"], f"opp_env install {repl_project}"))
+        run_stages += [
             (Stage.PROJECT_BUILD, common + ["--kind", "build"] + extra,
              "opp_build_project" + mode_suffix),
             (Stage.TEST_RUN, common + ["--kind", kind, "--no-build"] + extra,

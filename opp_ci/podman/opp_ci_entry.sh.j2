@@ -3,16 +3,14 @@
 #
 # Stages (the worker drives these as separate `podman exec`s; see
 # executor._run_test_in_podman):
-#   --bootstrap-only  clone/fetch opp_ci + opp_repl into /opt/<name>_src and
-#                     pip install -e them, then exit. Run once per container.
-#   --skip-bootstrap  skip the clone/pip (already done) and run the rest.
-#   (no flag)         bootstrap + run, the legacy single-shot behaviour.
-#
-# The "rest":
-#   * (Optional) opp_env-install extra catalog projects named in
-#     OPP_CI_INSTALL_PROJECTS (comma-separated), bind-mounted in the same
-#     opp_env workspace as omnetpp so their setenv (PATH, etc.) is active.
-#   * Exec via 'opp_env run' so OMNETPP_ROOT / PATH / etc. are set up.
+#   --bootstrap-only             clone/fetch opp_ci + opp_repl + pip install, exit.
+#   --skip-bootstrap --do-install
+#                                opp_env-install the catalog project(s), then
+#                                exit — the "Install dependencies" stage.
+#   --skip-bootstrap …           skip clone/pip AND install (already done); cd
+#                                into the installed project dir and `opp_env
+#                                run` the rest (Compile / Run tests stages).
+#   (no flag)                    bootstrap + install + run, legacy single-shot.
 #
 # set -x echoes each executed command (to stderr, `+ `-prefixed) so the
 # per-stage podman exec captures the actual commands it runs, not just their
@@ -37,57 +35,70 @@ do_bootstrap() {
     pip install -q -e /opt/opp_ci_src /opt/opp_repl_src
 }
 
-case "$1" in
-    --bootstrap-only) do_bootstrap; exit 0 ;;
-    --skip-bootstrap) shift ;;
-    *)                do_bootstrap ;;
-esac
-
-# Install extra opp_env catalog projects into the workspace, remember them
-# so we can pass them to `opp_env run` below, and cd into the first one's
-# install dir — opp_repl's project auto-discovery looks at cwd.
-EXTRA_PROJECTS=""
-FIRST_PROJECT=""
-if [ -n "$OPP_CI_INSTALL_PROJECTS" ]; then
+# Parse OPP_CI_INSTALL_PROJECTS (comma-separated catalog projects) into
+# FIRST_PROJECT (for the cwd cd) and EXTRA_PROJECTS (space-separated, passed to
+# `opp_env run`). Recomputed on every exec — cheap, env-only.
+parse_projects() {
+    EXTRA_PROJECTS=""
+    FIRST_PROJECT=""
+    [ -z "$OPP_CI_INSTALL_PROJECTS" ] && return 0
     IFS=','
     for p in $OPP_CI_INSTALL_PROJECTS; do
         p=$(echo "$p" | tr -d ' ')
         [ -z "$p" ] && continue
         [ -z "$FIRST_PROJECT" ] && FIRST_PROJECT="$p"
-        # The workspace was created with --init --nixless-workspace at
-        # image build time; subsequent installs into it are nixless by
-        # inheritance and reject --nixless-workspace again.
-        # $OPP_CI_PIN_DEPS holds the run's pinned dependency versions (e.g.
-        # 'omnetpp-6.2.0') — passing them makes opp_env build those exact
-        # versions instead of resolving each dependency to its latest, which
-        # would ignore the omnetpp baked into this image and recompile a newer one.
-        opp_env -l ERROR install -w /opt/opp_env_workspace "$p" $OPP_CI_PIN_DEPS
         EXTRA_PROJECTS="$EXTRA_PROJECTS $p"
     done
     unset IFS
-    if [ -n "$FIRST_PROJECT" ]; then
-        # opp_env's install dir is named "<project>-<version>" (e.g.
-        # opp_env_testproject-0.1). FIRST_PROJECT is the versioned name
-        # the matrix passed in (e.g. opp_env_testproject-0.1 or
-        # opp_env_testproject-latest); take an exact match if it exists,
-        # else glob in case the user passed `…-latest` and the install
-        # dir is the resolved version.
-        if [ -d "/opt/opp_env_workspace/$FIRST_PROJECT" ]; then
-            cd "/opt/opp_env_workspace/$FIRST_PROJECT"
-        else
-            # FIRST_PROJECT may be a "-latest" alias while opp_env installs the
-            # resolved version (e.g. mm1k-latest → mm1k-git). Glob by the bare
-            # project name (strip a trailing -latest/-git/-<version>).
-            prefix=$(echo "$FIRST_PROJECT" | sed -E "s/-(latest|git|[0-9].*)$//")
-            workdir=$(ls -d /opt/opp_env_workspace/${prefix}*/ 2>/dev/null | head -1)
-            [ -n "$workdir" ] && cd "$workdir"
-        fi
+}
+
+# Install each catalog project into the shared workspace. Runs ONCE, in the
+# Install dependencies stage (--do-install) — not on every build/test exec.
+# $OPP_CI_PIN_DEPS pins dependency versions (e.g. omnetpp-6.2.0) so opp_env
+# builds the exact versions the run requested and reuses the baked omnetpp.
+do_deps_install() {
+    for p in $EXTRA_PROJECTS; do
+        opp_env -l ERROR install -w /opt/opp_env_workspace "$p" $OPP_CI_PIN_DEPS
+    done
+}
+
+# cd into the first installed project's dir — opp_repl auto-discovers the
+# project from cwd. No-op for a bind-mounted SimulationProject (no catalog
+# install), which stays in /work.
+enter_workdir() {
+    [ -z "$FIRST_PROJECT" ] && return 0
+    if [ -d "/opt/opp_env_workspace/$FIRST_PROJECT" ]; then
+        cd "/opt/opp_env_workspace/$FIRST_PROJECT"
+    else
+        # A "-latest"/"-git" alias resolves to a versioned dir; glob the bare name.
+        prefix=$(echo "$FIRST_PROJECT" | sed -E "s/-(latest|git|[0-9].*)$//")
+        workdir=$(ls -d /opt/opp_env_workspace/${prefix}*/ 2>/dev/null | head -1)
+        [ -n "$workdir" ] && cd "$workdir"
     fi
+}
+
+LEGACY=""
+case "$1" in
+    --bootstrap-only) do_bootstrap; exit 0 ;;
+    --skip-bootstrap) shift ;;
+    *)                do_bootstrap; LEGACY=1 ;;
+esac
+
+parse_projects
+
+# The Install dependencies stage: install the catalog project(s), then exit.
+if [ "$1" = "--do-install" ]; then
+    do_deps_install
+    exit 0
 fi
 
+# Legacy single-shot path installs inline (option (b) does it as its own stage).
+[ -n "$LEGACY" ] && do_deps_install
+
+enter_workdir
+
 # The run command must name omnetpp (and any other pinned deps) so opp_env sets
-# up the matching environment. Prefer the run's authoritative pins
-# ($OPP_CI_PIN_DEPS, e.g. 'omnetpp-6.2.0 inet-4.5.0'); fall back to the omnetpp
-# baked into this image when the run carried no pins.
+# up the matching environment. Prefer the run's pins ($OPP_CI_PIN_DEPS); fall
+# back to the omnetpp baked into this image when the run carried no pins.
 PINNED_PROJECTS="${OPP_CI_PIN_DEPS:-omnetpp-{{ omnetpp_version }}}"
 exec opp_env -l ERROR run -w /opt/opp_env_workspace $PINNED_PROJECTS$EXTRA_PROJECTS -c "opp_ci $*"
