@@ -62,13 +62,13 @@
             </div>
             <div class="form-group">
                 <label for="git_ref">Git Ref (optional)</label>
-                <input type="text" name="git_ref" id="git_ref" placeholder="master, topic/feature, v4.5.0, etc." value="{{ values.git_ref or '' }}">
+                <input type="text" name="git_ref" id="git_ref" placeholder="e.g. master, topic/feature, v4.5.0" value="{{ values.git_ref or '' }}">
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
                 <label for="os">OS</label>
-                <input type="text" name="os" id="os" list="os-options" placeholder="Linux" value="{{ values.os or '' }}">
+                <input type="text" name="os" id="os" list="os-options" placeholder="e.g. Linux" value="{{ values.os or '' }}">
                 <datalist id="os-options">
                     {% for o in os_suggestions %}<option value="{{ o }}">{% endfor %}
                 </datalist>
@@ -82,7 +82,7 @@
             </div>
             <div class="form-group">
                 <label for="arch">Architecture</label>
-                <input type="text" name="arch" id="arch" list="arch-options" placeholder="amd64" value="{{ values.arch or '' }}">
+                <input type="text" name="arch" id="arch" list="arch-options" placeholder="e.g. amd64" value="{{ values.arch or '' }}">
                 <datalist id="arch-options">
                     {% for a in arch_suggestions %}<option value="{{ a }}">{% endfor %}
                 </datalist>
@@ -91,18 +91,18 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="distro">Distro (Linux only)</label>
-                <input type="text" name="distro" id="distro" list="distro-options" placeholder="Ubuntu" value="{{ values.distro or '' }}">
+                <input type="text" name="distro" id="distro" list="distro-options" placeholder="e.g. Ubuntu" value="{{ values.distro or '' }}">
                 <datalist id="distro-options">
                     {% for d in distro_suggestions %}<option value="{{ d }}">{% endfor %}
                 </datalist>
             </div>
             <div class="form-group">
                 <label for="distro_version">Distro Version</label>
-                <input type="text" name="distro_version" id="distro_version" placeholder="24.04" value="{{ values.distro_version or '' }}">
+                <input type="text" name="distro_version" id="distro_version" placeholder="e.g. 24.04" value="{{ values.distro_version or '' }}">
             </div>
             <div class="form-group">
                 <label for="flavor">Flavor</label>
-                <input type="text" name="flavor" id="flavor" list="flavor-options" placeholder="Kubuntu" value="{{ values.flavor or '' }}">
+                <input type="text" name="flavor" id="flavor" list="flavor-options" placeholder="e.g. Kubuntu" value="{{ values.flavor or '' }}">
                 <datalist id="flavor-options">
                     {% for f in flavor_suggestions %}<option value="{{ f }}">{% endfor %}
                 </datalist>
@@ -115,14 +115,14 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="compiler">Compiler</label>
-                <input type="text" name="compiler" id="compiler" list="compiler-options" placeholder="clang" value="{{ values.compiler or '' }}">
+                <input type="text" name="compiler" id="compiler" list="compiler-options" placeholder="e.g. clang" value="{{ values.compiler or '' }}">
                 <datalist id="compiler-options">
                     {% for c in compiler_suggestions %}<option value="{{ c }}">{% endfor %}
                 </datalist>
             </div>
             <div class="form-group">
                 <label for="compiler_version">Compiler Version</label>
-                <input type="text" name="compiler_version" id="compiler_version" list="compiler-version-options" placeholder="22" value="{{ values.compiler_version or '' }}">
+                <input type="text" name="compiler_version" id="compiler_version" list="compiler-version-options" placeholder="e.g. 22" value="{{ values.compiler_version or '' }}">
                 <datalist id="compiler-version-options">
                     {% for v in compiler_version_suggestions %}<option value="{{ v }}">{% endfor %}
                 </datalist>

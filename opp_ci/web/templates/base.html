@@ -167,6 +167,10 @@
         .form-group label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem; color: var(--muted); }
         .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 0.5rem 0.6rem; border: 1px solid var(--border); border-radius: 4px; font-size: 0.85rem; }
         .form-group textarea { resize: vertical; min-height: 80px; font-family: monospace; }
+        /* Placeholders that give an example value are prefixed "e.g." — render them washed
+           out and italic so they read as suggestions, not as the field's actual default. */
+        input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+        input[placeholder^="e.g."]::placeholder, textarea[placeholder^="e.g."]::placeholder { opacity: 0.45; font-style: italic; }
         .form-row { display: flex; gap: 1rem; }
         .form-row .form-group { flex: 1; }
 

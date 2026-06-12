@@ -25,7 +25,7 @@
             </div>
             <div class="form-group">
                 <label for="kinds">Kinds</label>
-                <input type="text" name="kinds" id="kinds" list="kind-options" placeholder="smoke, fingerprint, statistical">
+                <input type="text" name="kinds" id="kinds" list="kind-options" placeholder="e.g. smoke, fingerprint, statistical">
                 <datalist id="kind-options">
                     <option value="smoke">
                     <option value="fingerprint">
@@ -66,7 +66,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="modes">Modes</label>
-                <input type="text" name="modes" id="modes" list="mode-options" placeholder="release, debug">
+                <input type="text" name="modes" id="modes" list="mode-options" placeholder="e.g. release, debug">
                 <datalist id="mode-options">
                     <option value="release">
                     <option value="debug">
@@ -80,7 +80,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="os">OSes</label>
-                <input type="text" name="os" id="os" list="os-options" placeholder="Linux, Windows, MacOS">
+                <input type="text" name="os" id="os" list="os-options" placeholder="e.g. Linux, Windows, MacOS">
                 <datalist id="os-options">
                     {% for o in os_suggestions %}<option value="{{ o }}">{% endfor %}
                 </datalist>
@@ -91,7 +91,7 @@
             </div>
             <div class="form-group">
                 <label for="arch">Architectures</label>
-                <input type="text" name="arch" id="arch" list="arch-options" placeholder="amd64, aarch64">
+                <input type="text" name="arch" id="arch" list="arch-options" placeholder="e.g. amd64, aarch64">
                 <datalist id="arch-options">
                     {% for a in arch_suggestions %}<option value="{{ a }}">{% endfor %}
                 </datalist>
@@ -100,18 +100,18 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="distro">Distros (Linux)</label>
-                <input type="text" name="distro" id="distro" list="distro-options" placeholder="Ubuntu 24.04, Fedora 41">
+                <input type="text" name="distro" id="distro" list="distro-options" placeholder="e.g. Ubuntu 24.04, Fedora 41">
                 <datalist id="distro-options">
                     {% for d in distro_suggestions %}<option value="{{ d }}">{% endfor %}
                 </datalist>
             </div>
             <div class="form-group">
                 <label for="distro_version">Distro Versions</label>
-                <input type="text" name="distro_version" id="distro_version" placeholder="24.04, 26.04">
+                <input type="text" name="distro_version" id="distro_version" placeholder="e.g. 24.04, 26.04">
             </div>
             <div class="form-group">
                 <label for="flavor">Flavors</label>
-                <input type="text" name="flavor" id="flavor" list="flavor-options" placeholder="Kubuntu 24.04">
+                <input type="text" name="flavor" id="flavor" list="flavor-options" placeholder="e.g. Kubuntu 24.04">
                 <datalist id="flavor-options">
                     {% for f in flavor_suggestions %}<option value="{{ f }}">{% endfor %}
                 </datalist>
@@ -124,14 +124,14 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="compiler">Compilers</label>
-                <input type="text" name="compiler" id="compiler" list="compiler-options" placeholder="gcc, clang">
+                <input type="text" name="compiler" id="compiler" list="compiler-options" placeholder="e.g. gcc, clang">
                 <datalist id="compiler-options">
                     {% for c in compiler_suggestions %}<option value="{{ c }}">{% endfor %}
                 </datalist>
             </div>
             <div class="form-group">
                 <label for="compiler_version">Compiler Versions</label>
-                <input type="text" name="compiler_version" id="compiler_version" list="compiler-version-options" placeholder="14, 18, 22">
+                <input type="text" name="compiler_version" id="compiler_version" list="compiler-version-options" placeholder="e.g. 14, 18, 22">
                 <datalist id="compiler-version-options">
                     {% for v in compiler_version_suggestions %}<option value="{{ v }}">{% endfor %}
                 </datalist>
@@ -144,7 +144,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="isolation">Isolations</label>
-                <input type="text" name="isolation" id="isolation" list="isolation-options" placeholder="none, podman">
+                <input type="text" name="isolation" id="isolation" list="isolation-options" placeholder="e.g. none, podman">
                 <datalist id="isolation-options">
                     <option value="none">
                     <option value="podman">
@@ -152,7 +152,7 @@
             </div>
             <div class="form-group">
                 <label for="toolchain">Toolchains</label>
-                <input type="text" name="toolchain" id="toolchain" list="toolchain-options" placeholder="none, nix">
+                <input type="text" name="toolchain" id="toolchain" list="toolchain-options" placeholder="e.g. none, nix">
                 <datalist id="toolchain-options">
                     <option value="none">
                     <option value="nix">

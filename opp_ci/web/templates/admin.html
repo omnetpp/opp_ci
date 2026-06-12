@@ -97,8 +97,8 @@
 
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
-            <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="builder-1"></div>
-            <div class="form-group"><label>Tags (comma-sep)</label><input type="text" name="tags" placeholder="linux,amd64"></div>
+            <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="e.g. builder-1"></div>
+            <div class="form-group"><label>Tags (comma-sep)</label><input type="text" name="tags" placeholder="e.g. linux,amd64"></div>
             <div class="form-group"><label>Concurrency</label><input type="number" name="concurrency" value="1" min="1"></div>
         </div>
         <button type="submit" class="btn btn-success btn-sm">Register</button>
@@ -143,7 +143,7 @@
 
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-row">
-            <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="my-token"></div>
+            <div class="form-group"><label>Name</label><input type="text" name="name" required placeholder="e.g. my-token"></div>
             <div class="form-group">
                 <label>Role</label>
                 <select name="role">
