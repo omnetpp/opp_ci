@@ -13,7 +13,11 @@
 #     OPP_CI_INSTALL_PROJECTS (comma-separated), bind-mounted in the same
 #     opp_env workspace as omnetpp so their setenv (PATH, etc.) is active.
 #   * Exec via 'opp_env run' so OMNETPP_ROOT / PATH / etc. are set up.
-set -e
+#
+# set -x echoes each executed command (to stderr, `+ `-prefixed) so the
+# per-stage podman exec captures the actual commands it runs, not just their
+# output — "capture executed commands inside podman".
+set -ex
 
 sync_repo() {
     name=$1

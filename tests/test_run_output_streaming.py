@@ -139,6 +139,68 @@ class OppEnvBuildTestSplitTests(unittest.TestCase):
         self.assertEqual(rec.stages[1]["status"], SKIPPED)
 
 
+class DirectBuildTestSplitTests(unittest.TestCase):
+    """_run_test_direct splits into project.build (simulation_project.build)
+    then test.run (the runner with build=False)."""
+
+    def _patches(self, sim, funcs):
+        return [
+            mock.patch("opp_ci.executor._load_workspace", return_value=(None, sim)),
+            mock.patch("opp_ci.executor._get_test_functions", return_value=funcs),
+            mock.patch("opp_repl.common.util.ensure_logging_initialized", create=True),
+            mock.patch("opp_ci.executor.resolve_commit_sha", return_value=None),
+        ]
+
+    def test_splits_build_then_test_with_no_rebuild(self):
+        sim = mock.MagicMock()
+        sim.build.return_value = None                 # build ok
+        captured = {}
+
+        def fake_func(**kw):
+            captured["build"] = kw.get("build")
+            return None                                # PASS
+
+        rec = StageRecorder()
+        with contextlib.ExitStack() as es:
+            for p in self._patches(sim, {"smoke": fake_func}):
+                es.enter_context(p)
+            outcome = executor._run_test_direct("mm1k", "smoke", recorder=rec)
+        self.assertEqual([s["name"] for s in rec.stages],
+                         [Stage.PROJECT_BUILD, Stage.TEST_RUN])
+        self.assertEqual(outcome["result_code"], "PASS")
+        sim.build.assert_called_once()
+        self.assertIs(captured["build"], False)        # test stage doesn't rebuild
+
+    def test_build_failure_skips_test(self):
+        sim = mock.MagicMock()
+        bad = mock.MagicMock()
+        bad.is_all_results_expected.return_value = False   # compile failed
+        sim.build.return_value = bad
+
+        def fake_func(**kw):
+            raise AssertionError("test must not run after a failed build")
+
+        rec = StageRecorder()
+        with contextlib.ExitStack() as es:
+            for p in self._patches(sim, {"smoke": fake_func}):
+                es.enter_context(p)
+            outcome = executor._run_test_direct("mm1k", "smoke", recorder=rec)
+        self.assertEqual([(s["name"], s["status"]) for s in rec.stages],
+                         [(Stage.PROJECT_BUILD, FAILED), (Stage.TEST_RUN, SKIPPED)])
+        self.assertEqual(outcome["result_code"], "FAIL")
+
+    def test_kind_build_has_no_test_stage(self):
+        sim = mock.MagicMock()
+        sim.build.return_value = None
+        rec = StageRecorder()
+        with contextlib.ExitStack() as es:
+            for p in self._patches(sim, {}):
+                es.enter_context(p)
+            outcome = executor._run_test_direct("mm1k", "build", recorder=rec)
+        self.assertEqual([s["name"] for s in rec.stages], [Stage.PROJECT_BUILD])
+        self.assertEqual(outcome["result_code"], "PASS")
+
+
 class RunOutputStoreTests(unittest.TestCase):
     def test_events_build_stages_and_lines(self):
         s = RunOutputStore(ring=100, max_runs=10)

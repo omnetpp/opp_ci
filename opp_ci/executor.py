@@ -1586,42 +1586,103 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
     When *git_ref* is set, an isolated git worktree is created for that
     commit and removed after the test completes.
 
-    Extra kwargs (e.g. os, compiler) are accepted-and-ignored so this can
-    sit downstream of the run_test dispatcher. The whole run is captured as a
-    single ``test.run`` stage when a ``recorder`` is given (this in-process
-    path doesn't split build out yet — that's the opp_env/podman paths).
+    Captured as stages (mirroring the opp_env path): an optional ``checkout``
+    (worktree), then ``project.build`` (``simulation_project.build()``), then
+    ``test.run`` (the test runner with ``build=False`` — no rebuild). A build
+    failure fails the build stage and skips the test. For ``kind=build`` the
+    build is the whole job, so there is no test stage.
+
+    Extra kwargs (e.g. os, compiler) are accepted-and-ignored so this can sit
+    downstream of the run_test dispatcher.
     """
+    build_only = kind == "build"
     test_functions = _get_test_functions()
-    func = test_functions.get(kind)
-    if func is None:
+    func = None if build_only else test_functions.get(kind)
+    if not build_only and func is None:
         raise ValueError(f"Unknown test kind: {kind!r}. Supported: {list(test_functions.keys())}")
 
     _ws, simulation_project = _load_workspace(project, opp_file)
 
-    worktree_path = None
-    if git_ref:
-        from opp_repl.simulation.project import make_worktree_simulation_project
-        root = simulation_project.get_root_path()
-        if root:
-            subprocess.run(["git", "fetch", "origin"], cwd=root,
-                           capture_output=True, timeout=120)
-        simulation_project = make_worktree_simulation_project(simulation_project, git_ref)
-        worktree_path = simulation_project.get_root_path()
-        _logger.info("Created worktree at %s for %s@%s", worktree_path, project, git_ref)
-
-    from opp_repl.common.util import ensure_logging_initialized
-    ensure_logging_initialized("DEBUG", "DEBUG", None)
-
-    _logger.info("Running %s test for %s (direct mode)", kind, project)
     out_cb = (lambda text: recorder.output("out", text)) if recorder else None
     err_cb = (lambda text: recorder.output("err", text)) if recorder else None
     stdout_buf = _CallbackStringIO(out_cb) if out_cb else io.StringIO()
     stderr_buf = _CallbackStringIO(err_cb) if err_cb else io.StringIO()
-    if recorder is not None:
-        recorder.begin(Stage.TEST_RUN, command=f"{func.__name__} (direct)")
+
+    # ── checkout (worktree) ───────────────────────────────────────────
+    worktree_path = None
+    if git_ref:
+        if recorder is not None:
+            recorder.begin(Stage.CHECKOUT, command=f"git worktree @ {git_ref}")
+        try:
+            from opp_repl.simulation.project import make_worktree_simulation_project
+            root = simulation_project.get_root_path()
+            if root:
+                run_external(["git", "fetch", "origin"], label="git fetch",
+                             cwd=root, timeout=120, stream=True, on_output=out_cb)
+            simulation_project = make_worktree_simulation_project(simulation_project, git_ref)
+            worktree_path = simulation_project.get_root_path()
+            _logger.info("Created worktree at %s for %s@%s", worktree_path, project, git_ref)
+        except Exception as e:
+            if recorder is not None:
+                recorder.output("err", repr(e))
+                recorder.end(1, status="failed")
+            raise
+        if recorder is not None:
+            recorder.end(0)
+
+    from opp_repl.common.util import ensure_logging_initialized
+    ensure_logging_initialized("DEBUG", "DEBUG", None)
+    _logger.info("Running %s test for %s (direct mode)", kind, project)
+
+    build_mode = mode or "debug"
     start = time.time()
     try:
-        call_kwargs = {"simulation_project": simulation_project, "build": "task", "build_mode": "task"}
+        # ── project.build ─────────────────────────────────────────────
+        if recorder is not None:
+            recorder.begin(Stage.PROJECT_BUILD, command="opp_build_project (direct)")
+        try:
+            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+                build_result = simulation_project.build(mode=build_mode)
+        except Exception as e:
+            _logger.error("Build for %s raised: %s", project, e)
+            if recorder is not None:
+                recorder.output("err", repr(e))
+                recorder.end(1, status="failed")
+                if not build_only:
+                    recorder.skip(Stage.TEST_RUN, reason="skipped: build failed")
+            return {
+                "result_code": "ERROR", "test_exec_seconds": time.time() - start,
+                "stdout": stdout_buf.getvalue(),
+                "stderr": stderr_buf.getvalue() + "\n" + repr(e),
+                "details": None, "commit_sha": git_ref,
+            }
+        build_failed = (build_result is not None
+                        and hasattr(build_result, "is_all_results_expected")
+                        and not build_result.is_all_results_expected())
+        if recorder is not None:
+            recorder.end(1 if build_failed else 0,
+                         status="failed" if build_failed else None)
+        if build_failed:
+            if recorder is not None and not build_only:
+                recorder.skip(Stage.TEST_RUN, reason="skipped: build failed")
+            return {
+                "result_code": "FAIL", "test_exec_seconds": time.time() - start,
+                "stdout": stdout_buf.getvalue(), "stderr": stderr_buf.getvalue(),
+                "details": None, "commit_sha": git_ref or resolve_commit_sha(project, opp_file=opp_file),
+            }
+        if build_only:
+            # The build is the whole job — no test stage.
+            commit_sha = git_ref or resolve_commit_sha(project, opp_file=opp_file)
+            return {
+                "result_code": "PASS", "test_exec_seconds": time.time() - start,
+                "stdout": stdout_buf.getvalue(), "stderr": stderr_buf.getvalue(),
+                "details": None, "commit_sha": commit_sha,
+            }
+
+        # ── test.run (build already done; don't rebuild) ──────────────
+        if recorder is not None:
+            recorder.begin(Stage.TEST_RUN, command=f"{func.__name__} --no-build (direct)")
+        call_kwargs = {"simulation_project": simulation_project, "build": False}
         if mode:
             call_kwargs["mode"] = mode
         if kind == "opp":
@@ -1641,6 +1702,8 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
         else:
             result_code = "PASS"
             details = None
+        if recorder is not None:
+            recorder.end(0 if result_code == "PASS" else 1)
 
     except Exception as e:
         duration = time.time() - start
@@ -1660,8 +1723,6 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
         if worktree_path:
             _remove_git_worktree(worktree_path)
 
-    if recorder is not None:
-        recorder.end(0 if result_code == "PASS" else 1)
     commit_sha = git_ref or resolve_commit_sha(project, opp_file=opp_file)
     _logger.info("Test finished: %s (%.1fs)", result_code, duration)
     return {

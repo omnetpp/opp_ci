@@ -10,7 +10,11 @@
 #      land on PATH inside the venv.
 #   3. Exec opp_env directly with the args the worker passed (typically
 #      'run --install <project> -c "<opp_repl_command>"').
-set -e
+#
+# set -x echoes each executed command (to stderr, `+ `-prefixed) so the
+# per-stage podman exec captures the actual commands it runs, not just their
+# output — "capture executed commands inside podman".
+set -ex
 
 sync_repo() {
     name=$1
