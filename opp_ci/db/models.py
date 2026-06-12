@@ -88,6 +88,16 @@ class TestMatrix(Base):
     config = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+    # Resolve-in-place state (Phase 2/3), mirroring Test. An unresolved matrix
+    # (recipe) carries moving refs / ranges / loose axes; resolve() pins them
+    # and expand() fans the resolved matrix into resolved Tests. Defaults True
+    # so existing matrices stay runnable until the recipe flow lands.
+    is_resolved = Column(Boolean, nullable=False, default=True)
+    resolved_from = Column(Integer, ForeignKey("test_matrices.id"), nullable=True)
+
+    recipe = relationship("TestMatrix", remote_side=[id],
+                          backref="resolved_instances")
+
     @property
     def display_name(self):
         """Human label that never renders blank for anonymous matrices."""
@@ -201,7 +211,7 @@ class AutoTestRule(Base):
 # in that the JSON serializer sorts keys; what matters is the set of
 # fields. Adding or removing one re-keys every Test.
 TEST_COORD_FIELDS = (
-    "project", "kind", "mode",
+    "project", "commit_sha", "kind", "mode",
     "os", "os_version",
     "distro", "distro_version",
     "flavor", "flavor_version",
@@ -237,6 +247,11 @@ def compute_test_coord_hash(coord):
     Tests. `resolved_deps` is normalised (`None` == `{}`, key order
     irrelevant) so a pinned and an auto-resolved identical version collapse
     to the same Test — identity tracks resolved versions, not pin intent.
+
+    The project **source commit** (`commit_sha`) is part of the coordinate
+    too (Phase 2 "resolve in place"): a resolved Test is pinned to one
+    commit, so two commits are distinct Tests, and re-running a Test rebuilds
+    the same source. An unresolved recipe leaves it None.
 
     Unknown keys in `coord` are ignored; missing keys are treated as None
     so the hash is stable regardless of whether the caller passed every
@@ -293,6 +308,10 @@ class Test(Base):
 
     # Coordinate fields (immutable after creation; see TEST_COORD_FIELDS).
     project = Column(String, nullable=False)
+    # Resolved project source commit (Phase 2). Part of the coordinate /
+    # identity: a resolved Test is pinned to one commit, so two commits are
+    # distinct Tests. NULL on an unresolved recipe (and on legacy rows).
+    commit_sha = Column(String, nullable=True)
     kind = Column(String, nullable=False)             # was "test" in legacy schema
     mode = Column(String, nullable=True)
     os = Column(String, nullable=True)                # "Linux" | "Windows" | "MacOS"
@@ -316,7 +335,18 @@ class Test(Base):
     coord_hash = Column(String(64), unique=True, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+    # Resolve-in-place state (Phase 2). A recipe (is_resolved=False) carries
+    # loose / moving inputs (a branch, "latest", an underspecified axis) and
+    # may not be run; resolve() mints a *new* resolved Test (is_resolved=True)
+    # with everything pinned and points resolved_from back at the recipe. The
+    # recipe is preserved, so re-resolving it later mints another snapshot —
+    # that lineage is the moving-target history. Defaults True so a directly
+    # submitted, already-concrete Test is runnable without an extra step.
+    is_resolved = Column(Boolean, nullable=False, default=True)
+    resolved_from = Column(Integer, ForeignKey("tests.id"), nullable=True)
+
     runs = relationship("TestRun", back_populates="test", cascade="all, delete-orphan")
+    recipe = relationship("Test", remote_side=[id], backref="resolved_instances")
 
     def __repr__(self):
         return f"<Test(id={self.id}, project={self.project!r}, kind={self.kind!r})>"
