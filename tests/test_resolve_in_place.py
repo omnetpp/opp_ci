@@ -106,5 +106,51 @@ class ResolveStateTests(unittest.TestCase):
             s.close()
 
 
+class RecipeGatingTests(unittest.TestCase):
+    """A recipe (is_resolved=False) is inert: it cannot be run."""
+
+    @classmethod
+    def setUpClass(cls):
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+
+    def test_cannot_run_unresolved_test(self):
+        from opp_ci.persistence import create_test_run
+        s = SessionLocal()
+        try:
+            recipe = Test(project="inet", kind="smoke",
+                          coord_hash="recipe-test-hash", is_resolved=False)
+            s.add(recipe)
+            s.flush()
+            with self.assertRaises(ValueError):
+                create_test_run(s, test_id=recipe.id)
+        finally:
+            s.close()
+
+    def test_can_run_resolved_test(self):
+        from opp_ci.persistence import create_test_run
+        s = SessionLocal()
+        try:
+            t = get_or_create_test(s, _coord(commit_sha="e" * 40))
+            s.flush()
+            run = create_test_run(s, test_id=t.id)  # no raise
+            self.assertIsNotNone(run.id)
+        finally:
+            s.close()
+
+    def test_cannot_run_unresolved_matrix(self):
+        from opp_ci.persistence import create_matrix_run
+        s = SessionLocal()
+        try:
+            recipe = TestMatrix(project="inet", config={"refs": ["main"]},
+                                is_resolved=False)
+            s.add(recipe)
+            s.flush()
+            with self.assertRaises(ValueError):
+                create_matrix_run(s, matrix_id=recipe.id)
+        finally:
+            s.close()
+
+
 if __name__ == "__main__":
     unittest.main()

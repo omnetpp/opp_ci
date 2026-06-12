@@ -203,7 +203,16 @@ def create_matrix_run(session, *, matrix_id, trigger="manual", ref=None,
                       github_owner=None, github_repo=None,
                       github_commit_sha=None, github_pr_number=None,
                       github_status_url=None):
-    """Create a TestMatrixRun row for one matrix submission."""
+    """Create a TestMatrixRun row for one matrix submission.
+
+    Refuses an unresolved (recipe) matrix: only a resolved matrix may run
+    (resolve + expand it first). See the resolve-in-place invariants.
+    """
+    matrix = session.get(TestMatrix, matrix_id)
+    if matrix is not None and not matrix.is_resolved:
+        raise ValueError(
+            "Cannot run an unresolved TestMatrix (a recipe); resolve and "
+            "expand it into pinned Tests first.")
     matrix_run = TestMatrixRun(
         matrix_id=matrix_id,
         trigger=trigger,
@@ -222,7 +231,17 @@ def create_matrix_run(session, *, matrix_id, trigger="manual", ref=None,
 def create_test_run(session, *, test_id, matrix_run_id=None,
                     commit_sha=None, git_ref=None, version=None,
                     resolved_deps=None, cache_fingerprint=None):
-    """Create a queued TestRun targeting `test_id`."""
+    """Create a queued TestRun targeting `test_id`.
+
+    Refuses an unresolved (recipe) Test: a recipe carries loose/moving inputs
+    and is inert until resolve() mints a pinned Test from it (the "can't run a
+    recipe" invariant).
+    """
+    test = session.get(Test, test_id)
+    if test is not None and not test.is_resolved:
+        raise ValueError(
+            "Cannot run an unresolved Test (a recipe); resolve it to a pinned "
+            "Test first.")
     run = TestRun(
         test_id=test_id,
         matrix_run_id=matrix_run_id,
