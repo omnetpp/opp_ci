@@ -80,6 +80,9 @@ class TestFormStateTests(unittest.TestCase):
         # form's own field labels. Scope the assertion to the "Missing/empty:"
         # list so it can't pass on the page's <label> text.
         self.assertIn("under-specifies", body)
+        # With no workers, resolution can't supply the loose axes — the message
+        # names the fleet as the cause, not the user.
+        self.assertIn("against the fleet", body)
         m = re.search(r"Missing/empty:\s*([^<]+)", body)
         self.assertIsNotNone(m, "missing-field list not found in flash")
         listed = m.group(1)

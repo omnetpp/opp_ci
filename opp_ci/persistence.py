@@ -157,6 +157,37 @@ def validate_test_coord(coord):
         )
 
 
+def resolve_and_validate_coord(coord, tags, *, source="the fleet",
+                               remedy="connect a worker that advertises them"):
+    """Best-effort resolve *coord*'s loose axes against *tags*, then validate it.
+
+    Resolution fills what *tags* can supply (mutating `coord` in place); the
+    strict `validate_test_coord` is the gate. The point of this wrapper is the
+    error: when resolution was attempted but the source couldn't supply a loose
+    axis, the failure is the *source's* (an empty/under-tagged fleet, or a host
+    missing a compiler) — not the user under-specifying. So the message names
+    the source as the cause instead of the misleading "you under-specified",
+    while still listing the missing axes. `source`/`remedy` tailor the wording
+    (fleet vs local host).
+    """
+    from opp_ci.fleet import resolve_loose_axes
+    resolve_incomplete = False
+    try:
+        resolve_loose_axes(coord, tags)
+    except ValueError:
+        resolve_incomplete = True
+    try:
+        validate_test_coord(coord)
+    except ValueError as e:
+        if resolve_incomplete:
+            raise ValueError(
+                f"Couldn't resolve the unspecified coordinate against {source} — "
+                f"nothing there advertises the missing axes. {e} "
+                f"Either specify them explicitly, or {remedy}."
+            ) from e
+        raise
+
+
 def get_or_create_test(session, coord, *, default_expectation=_UNSET,
                        expectation_set_by="system"):
     """Return the Test row matching `coord`, creating it if missing.

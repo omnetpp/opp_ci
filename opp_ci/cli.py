@@ -945,8 +945,11 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
                   "mode": mode}
         try:
             resolve_loose_axes(_coord, set(_detect_capability_tags()))
+            resolve_incomplete = False
         except ValueError:
-            pass  # partial fill; the per-kind validate_test_coord reports the rest
+            # Partial fill; the per-kind validate_test_coord reports the rest,
+            # and names this host as the cause when it couldn't supply an axis.
+            resolve_incomplete = True
         os_name, os_version = _coord["os"], _coord.get("os_version")
         distro, distro_version = _coord["distro"], _coord.get("distro_version")
         arch, compiler = _coord["arch"], _coord["compiler"]
@@ -989,6 +992,11 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
             try:
                 validate_test_coord(coord)
             except ValueError as e:
+                if resolve_incomplete:
+                    raise click.ClickException(
+                        f"Couldn't resolve the unspecified coordinate against "
+                        f"this host — it doesn't provide the missing axes. {e} "
+                        f"Either specify them, or install them on this host.")
                 raise click.ClickException(str(e))
             test = get_or_create_test(
                 session, coord, default_expectation=default_expectation,

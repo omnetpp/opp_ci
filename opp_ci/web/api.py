@@ -197,18 +197,14 @@ async def submit_run(
             # validating: a caller may submit an underspecified coordinate and a
             # moving ref, and both are resolved into the Test's identity. Source
             # resolution is strict — an unpinnable ref is rejected (decision #7).
-            from opp_ci.fleet import fleet_tags, resolve_loose_axes
+            from opp_ci.fleet import fleet_tags
+            from opp_ci.persistence import resolve_and_validate_coord
             from opp_ci.scheduler import resolve_source_commit
-            # Best-effort: fill what the fleet can; validate_test_coord is the
-            # gate and reports anything still missing with a precise message.
+            # Resolve loose axes against the fleet (naming the fleet if it can't
+            # supply one), then pin the source strictly (decision #7).
             try:
-                resolve_loose_axes(coord, fleet_tags(session))
-            except ValueError:
-                pass
-            try:
-                # Source pinning stays strict (decision #7).
+                resolve_and_validate_coord(coord, fleet_tags(session))
                 coord["commit_sha"] = resolve_source_commit(req.project, req.git_ref)
-                validate_test_coord(coord)
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
             test = get_or_create_test(
