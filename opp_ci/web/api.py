@@ -533,13 +533,31 @@ async def worker_heartbeat(
     (``{"logs": {"entries": [...]}}``) for the per-worker log view; older
     workers send no body, so the field is optional.
     """
+    going_offline = bool(payload.get("going_offline")) if isinstance(payload, dict) else False
     shutdown = False
     session = SessionLocal()
     try:
         worker = session.execute(
             select(Worker).where(Worker.id == worker_info["worker_id"])
         ).scalar_one_or_none()
-        if worker:
+        if worker and going_offline:
+            # Graceful-shutdown goodbye: mark the worker offline at once so the
+            # UI reflects it immediately instead of waiting for the
+            # heartbeat-timeout reaper. The auth dependency just bumped
+            # last_heartbeat/status, so back-date last_heartbeat to exactly the
+            # staleness threshold here — connected/online is computed from
+            # last_heartbeat freshness everywhere, so this reads as offline at
+            # once while still preserving a roughly accurate last-seen time in
+            # the database (rather than wiping it to NULL).
+            from opp_ci.config import WORKER_HEARTBEAT_TIMEOUT
+
+            worker.status = "offline"
+            worker.current_job_count = 0
+            worker.last_heartbeat = datetime.datetime.utcnow() - datetime.timedelta(
+                seconds=WORKER_HEARTBEAT_TIMEOUT
+            )
+            session.commit()
+        elif worker:
             shutdown = bool(worker.shutdown_requested)
             actual = session.execute(
                 select(func.count(TestRun.id)).where(

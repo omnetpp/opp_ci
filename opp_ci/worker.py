@@ -184,10 +184,13 @@ class WorkerAgent:
             else:
                 time.sleep(poll_interval)
 
-        # Stop the heartbeat thread and wait briefly for it to exit.
+        # Stop the heartbeat thread and wait briefly for it to exit, then send
+        # a final goodbye so the coordinator marks us offline immediately
+        # (joining first ensures no normal heartbeat re-bumps us online after).
         self._stop_event.set()
         if self._heartbeat_thread is not None:
             self._heartbeat_thread.join(timeout=5)
+        self._send_offline()
 
         _logger.info("Worker stopped.")
 
@@ -469,6 +472,20 @@ class WorkerAgent:
                 _logger.error("Result report failed for run #%d: %s %s", run_id, resp.status_code, resp.text)
         except requests.RequestException as e:
             _logger.error("Result report error for run #%d: %s", run_id, e)
+
+    def _send_offline(self):
+        """Best-effort final heartbeat on shutdown, flagged so the coordinator
+        marks us offline at once instead of waiting for the heartbeat-timeout
+        reaper to notice. Never raises — shutdown must not hang on the network.
+        """
+        try:
+            self._session.post(
+                f"{self.coordinator_url}/api/workers/heartbeat",
+                json={"going_offline": True, "version": _WORKER_VERSION},
+                timeout=10,
+            )
+        except requests.RequestException as e:
+            _logger.warning("Final offline heartbeat failed: %s", e)
 
     def _request_stop(self, reason):
         """Stop the main loop and heartbeat thread gracefully.

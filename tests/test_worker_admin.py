@@ -203,6 +203,36 @@ class ShutdownDirectiveTests(unittest.TestCase):
         r = self.client.post("/api/workers/heartbeat", json={}, headers=self._h(wtok))
         self.assertEqual(r.json().get("command"), "shutdown")
 
+    def test_going_offline_marks_worker_offline(self):
+        wid, wtok = self._register("w-goodbye")
+        # Come online first (a plain heartbeat bumps last_heartbeat via auth).
+        self.client.post("/api/workers/heartbeat", json={}, headers=self._h(wtok))
+        session = SessionLocal()
+        try:
+            w = session.get(Worker, wid)
+            self.assertEqual(w.status, "online")
+            self.assertIsNotNone(w.last_heartbeat)
+        finally:
+            session.close()
+        # The shutdown goodbye marks it offline immediately.
+        r = self.client.post("/api/workers/heartbeat",
+                             json={"going_offline": True}, headers=self._h(wtok))
+        self.assertEqual(r.status_code, 200, r.text)
+        session = SessionLocal()
+        try:
+            from opp_ci.config import WORKER_HEARTBEAT_TIMEOUT
+            w = session.get(Worker, wid)
+            self.assertEqual(w.status, "offline")
+            # last_heartbeat is back-dated to the staleness threshold rather
+            # than wiped, so it reads as offline at once but keeps a roughly
+            # accurate last-seen time.
+            self.assertIsNotNone(w.last_heartbeat)
+            threshold = datetime.datetime.utcnow() - datetime.timedelta(
+                seconds=WORKER_HEARTBEAT_TIMEOUT)
+            self.assertLessEqual(w.last_heartbeat, threshold)
+        finally:
+            session.close()
+
     def test_me_clears_flag(self):
         wid, wtok = self._register("w-shutdown-me")
         self._set_shutdown(wid)
