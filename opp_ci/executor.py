@@ -16,6 +16,11 @@ from opp_ci.stages import Stage
 
 _logger = logging.getLogger(__name__)
 
+# Marker the container entry scripts (opp_ci/podman/*.j2) prefix onto each
+# meaningful command via their run_cmd helper; _run_podman_staged strips it and
+# records that line as the "cmd" stream so the UI colours it as a command.
+_CMD_MARKER = "@@oppci:cmd@@ "
+
 
 def _format_argv(args):
     """Render an argv list as a copy-pasteable shell command."""
@@ -1422,10 +1427,19 @@ def _run_podman_staged(*, image, run_stages, entry_script, run_flags,
     run_d = (["podman", "run", "-d", "--name", container]
              + run_flags + ["--entrypoint", "sleep", image, "infinity"])
 
+    def _on_output(stream, text):
+        # The entry script tags meaningful commands with a marker (run_cmd);
+        # surface those as the "cmd" stream (rendered as a coloured command
+        # line), everything else as the stream it came from.
+        if text.startswith(_CMD_MARKER):
+            recorder.output("cmd", text[len(_CMD_MARKER):])
+        else:
+            recorder.output(stream, text)
+
     def _exec(args, label):
         return run_external(["podman", "exec", container] + args, label=label,
                             stream=True,
-                            on_output=recorder.output if recorder else None)
+                            on_output=_on_output if recorder is not None else None)
 
     out_parts, err_parts = [], []
     result = None

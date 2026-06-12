@@ -101,9 +101,10 @@
                    line-height:1.45; max-height:55vh; overflow-y:auto; white-space:pre-wrap; word-break:break-word; border-top:1px solid #333; }
         .ro-line { display:block; }
         .ro-line.err { background:rgba(220,53,69,.12); border-left:2px solid rgba(220,53,69,.5); }
-        .ro-cmd { display:block; color:#7ee787; font-weight:600; }
-        #ro-stages.hide-cmd .ro-cmd { display:none; }
-        #ro-stages.hide-out .ro-line:not(.err) { display:none; }
+        .ro-cmd, .ro-line.cmd { display:block; color:#7ee787; font-weight:600; }
+        .ro-line.cmd::before { content:"$ "; opacity:.7; }
+        #ro-stages.hide-cmd .ro-cmd, #ro-stages.hide-cmd .ro-line.cmd { display:none; }
+        #ro-stages.hide-out .ro-line:not(.err):not(.cmd) { display:none; }
         #ro-stages.hide-err .ro-line.err { display:none; }
     </style>
     <h2>Live output <span class="derived-tag" title="streamed from the worker while the test runs, organised into stages; replaced by the full stdout/stderr once it finishes">live · staged</span></h2>
@@ -190,7 +191,7 @@
             const sec = sections[l.ordinal];
             if (!sec) continue;
             const line = document.createElement("span");
-            line.className = "ro-line" + (l.stream === "err" ? " err" : "");
+            line.className = "ro-line" + (l.stream === "err" ? " err" : (l.stream === "cmd" ? " cmd" : ""));
             const msg = document.createElement("span");
             msg.innerHTML = l.html;           // server-escaped + ANSI-rendered
             line.appendChild(msg);
@@ -254,9 +255,10 @@
                    line-height:1.45; max-height:55vh; overflow-y:auto; white-space:pre-wrap; word-break:break-word; border-top:1px solid #333; }
         .rs-line { display:block; }
         .rs-line.err { background:rgba(220,53,69,.12); border-left:2px solid rgba(220,53,69,.5); }
-        .rs-cmd { display:block; color:#7ee787; font-weight:600; }
-        #rs-stages.hide-cmd .rs-cmd { display:none; }
-        #rs-stages.hide-out .rs-line:not(.err) { display:none; }
+        .rs-cmd, .rs-line.cmd { display:block; color:#7ee787; font-weight:600; }
+        .rs-line.cmd::before { content:"$ "; opacity:.7; }
+        #rs-stages.hide-cmd .rs-cmd, #rs-stages.hide-cmd .rs-line.cmd { display:none; }
+        #rs-stages.hide-out .rs-line:not(.err):not(.cmd) { display:none; }
         #rs-stages.hide-err .rs-line.err { display:none; }
         .rs-toolbar { display:flex; align-items:center; gap:1rem; margin:.2rem 0 .7rem; font-size:.85rem; color:var(--muted); }
         .rs-toolbar label { display:inline-flex; align-items:center; gap:.35rem; cursor:pointer; }
@@ -275,7 +277,7 @@
             <span>{{ st.name }}</span>
             <span class="rs-meta">{% if st.exit_code is not none %}exit {{ st.exit_code }}{% endif %}{% if st.duration_seconds %} · {{ "%.1f"|format(st.duration_seconds) }}s{% endif %}</span>
         </summary>
-        <div class="rs-pane">{% if st.command %}<span class="rs-cmd">$ {{ st.command }}</span>{% endif %}{% for line in st.output or [] %}<span class="rs-line{{ ' err' if line.stream == 'err' else '' }}">{{ line.text | ansi_to_html }}</span>{% endfor %}</div>
+        <div class="rs-pane">{% if st.command %}<span class="rs-cmd">$ {{ st.command }}</span>{% endif %}{% for line in st.output or [] %}<span class="rs-line{{ ' err' if line.stream == 'err' else (' cmd' if line.stream == 'cmd' else '') }}">{{ line.text | ansi_to_html }}</span>{% endfor %}</div>
     </details>
     {% endfor %}
     </div>

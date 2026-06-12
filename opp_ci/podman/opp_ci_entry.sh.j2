@@ -12,27 +12,33 @@
 #                                run` the rest (Compile / Run tests stages).
 #   (no flag)                    bootstrap + install + run, legacy single-shot.
 #
-# set -x echoes each executed command (to stderr, `+ `-prefixed) so the
-# per-stage podman exec captures the actual commands it runs, not just their
-# output — "capture executed commands inside podman".
-set -ex
+# run_cmd prints each meaningful command, prefixed with a marker the worker
+# recognises and shows as a coloured "command" line in the stage view (see
+# _run_podman_staged) — so the captured log shows what ran, not a `set -x`
+# dump of every shell builtin.
+set -e
+
+run_cmd() {
+    printf '@@oppci:cmd@@ %s\n' "$*"
+    "$@"
+}
 
 sync_repo() {
     name=$1
     url=$2
     dir=/opt/${name}_src
     if [ ! -d "$dir/.git" ]; then
-        git clone --depth 50 "$url" "$dir"
+        run_cmd git clone --depth 50 "$url" "$dir"
     else
-        git -C "$dir" fetch --depth 50 origin
-        git -C "$dir" reset --hard origin/HEAD
+        run_cmd git -C "$dir" fetch --depth 50 origin
+        run_cmd git -C "$dir" reset --hard origin/HEAD
     fi
 }
 
 do_bootstrap() {
     sync_repo opp_ci   https://github.com/omnetpp/opp_ci.git
     sync_repo opp_repl https://github.com/omnetpp/opp_repl.git
-    pip install -q -e /opt/opp_ci_src /opt/opp_repl_src
+    run_cmd pip install -q -e /opt/opp_ci_src /opt/opp_repl_src
 }
 
 # Parse OPP_CI_INSTALL_PROJECTS (comma-separated catalog projects) into
@@ -58,7 +64,7 @@ parse_projects() {
 # builds the exact versions the run requested and reuses the baked omnetpp.
 do_deps_install() {
     for p in $EXTRA_PROJECTS; do
-        opp_env -l ERROR install -w /opt/opp_env_workspace "$p" $OPP_CI_PIN_DEPS
+        run_cmd opp_env -l ERROR install -w /opt/opp_env_workspace "$p" $OPP_CI_PIN_DEPS
     done
 }
 
