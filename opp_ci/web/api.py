@@ -192,7 +192,12 @@ async def submit_run(
                 "opp_file": None,
                 "resolved_deps": resolved_deps,
             }
+            # Pin any loose coordinate axis (compiler / arch / mode) against the
+            # fleet before validating — lets a caller submit an underspecified
+            # coordinate and have it resolved to what the workers actually offer.
+            from opp_ci.fleet import fleet_tags, resolve_loose_axes
             try:
+                resolve_loose_axes(coord, fleet_tags(session))
                 validate_test_coord(coord)
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
