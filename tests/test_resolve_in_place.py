@@ -165,5 +165,111 @@ class RecipeGatingTests(unittest.TestCase):
             s.close()
 
 
+class TestRecipeObjectTests(unittest.TestCase):
+    """Test recipes are first-class separate objects: an underspecified Test is
+    a recipe (is_resolved=False, inert) and resolving it mints a separate
+    resolved Test with resolved_from lineage."""
+
+    FLEET = {"compiler:clang-18", "arch:amd64", "distro:ubuntu-24.04"}
+
+    @classmethod
+    def setUpClass(cls):
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+
+    def _loose(self, **over):
+        c = {"project": "inet", "kind": "smoke", "commit_sha": None,
+             "mode": None, "os": None, "os_version": None, "distro": None,
+             "distro_version": None, "flavor": None, "flavor_version": None,
+             "arch": None, "compiler": None, "compiler_version": None,
+             "isolation": "none", "toolchain": "none", "opp_file": None,
+             "resolved_deps": None}
+        c.update(over)
+        return c
+
+    def test_is_recipe_detection(self):
+        from opp_ci.persistence import test_coord_is_recipe
+        self.assertTrue(test_coord_is_recipe(self._loose()))
+        self.assertTrue(test_coord_is_recipe(
+            self._loose(compiler="gcc", arch="amd64")))   # no platform
+        self.assertFalse(test_coord_is_recipe(
+            {"compiler": "gcc", "arch": "amd64", "distro": "ubuntu"}))
+
+    def test_recipe_created_unresolved_and_inert(self):
+        from opp_ci.persistence import get_or_create_test_recipe, create_test_run
+        s = SessionLocal()
+        try:
+            recipe = get_or_create_test_recipe(s, self._loose())
+            s.commit()
+            self.assertFalse(recipe.is_resolved)
+            self.assertIsNone(recipe.compiler)            # loose, no validation
+            with self.assertRaises(ValueError):
+                create_test_run(s, test_id=recipe.id)     # can't run a recipe
+        finally:
+            s.close()
+
+    def test_recipe_dedups(self):
+        from opp_ci.persistence import get_or_create_test_recipe
+        s = SessionLocal()
+        try:
+            a = get_or_create_test_recipe(s, self._loose(kind="build"))
+            s.commit()
+            b = get_or_create_test_recipe(s, self._loose(kind="build"))
+            s.commit()
+            self.assertEqual(a.id, b.id)
+        finally:
+            s.close()
+
+    def test_resolve_mints_resolved_test_with_lineage(self):
+        from opp_ci.persistence import (get_or_create_test_recipe,
+                                        resolve_test_recipe, create_test_run)
+        s = SessionLocal()
+        try:
+            recipe = get_or_create_test_recipe(s, self._loose(kind="fingerprint"))
+            s.commit()
+            resolved = resolve_test_recipe(s, recipe, self.FLEET,
+                                           default_expectation=None)
+            s.commit()
+            self.assertTrue(resolved.is_resolved)
+            self.assertEqual((resolved.compiler, resolved.compiler_version),
+                             ("clang", "18"))
+            self.assertEqual(resolved.arch, "amd64")
+            self.assertEqual(resolved.distro, "ubuntu")
+            self.assertNotEqual(resolved.id, recipe.id)
+            self.assertEqual(resolved.resolved_from, recipe.id)
+            self.assertIn(resolved, recipe.resolved_instances)
+            run = create_test_run(s, test_id=resolved.id)   # runnable
+            self.assertIsNotNone(run.id)
+        finally:
+            s.close()
+
+    def test_re_resolve_same_fleet_reuses_test(self):
+        from opp_ci.persistence import get_or_create_test_recipe, resolve_test_recipe
+        s = SessionLocal()
+        try:
+            recipe = get_or_create_test_recipe(s, self._loose(kind="statistical"))
+            s.commit()
+            r1 = resolve_test_recipe(s, recipe, self.FLEET, default_expectation=None)
+            s.commit()
+            r2 = resolve_test_recipe(s, recipe, self.FLEET, default_expectation=None)
+            s.commit()
+            self.assertEqual(r1.id, r2.id)                  # content-addressed
+            self.assertEqual(len(recipe.resolved_instances), 1)
+        finally:
+            s.close()
+
+    def test_resolve_rejects_already_resolved(self):
+        from opp_ci.persistence import resolve_test_recipe
+        s = SessionLocal()
+        try:
+            full = get_or_create_test(s, _coord(commit_sha="f" * 40))
+            s.commit()
+            self.assertTrue(full.is_resolved)
+            with self.assertRaises(ValueError):
+                resolve_test_recipe(s, full, self.FLEET)
+        finally:
+            s.close()
+
+
 if __name__ == "__main__":
     unittest.main()

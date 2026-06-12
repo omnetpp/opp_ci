@@ -230,6 +230,76 @@ def get_or_create_test(session, coord, *, default_expectation=_UNSET,
     return test
 
 
+def test_coord_is_recipe(coord):
+    """True if a Test coordinate is a *recipe* — underspecified along a
+    fleet-resolvable axis (no compiler, no arch, or no platform), so it must be
+    resolved (pinned against the fleet/host) before it can run. Mirrors
+    `scheduler.matrix_is_recipe` for a single Test coordinate.
+    """
+    coord = coord or {}
+    has_platform = coord.get("os") or coord.get("distro") or coord.get("flavor")
+    return not (coord.get("compiler") and coord.get("arch") and has_platform)
+
+
+def get_or_create_test_recipe(session, coord):
+    """Return the unresolved Test (recipe) matching the loose `coord`, creating
+    it if missing.
+
+    A recipe is intentionally under-specified, so this *skips*
+    `validate_test_coord` (which a recipe would fail) and creates the row with
+    `is_resolved=False`. Its `coord_hash` keys on the loose coordinate, so two
+    distinct loose specs are distinct recipes and re-submitting one dedups.
+    No default expectation is stamped — a recipe never runs; its resolved
+    snapshots carry expectations. Caller commits/flushes.
+    """
+    h = compute_test_coord_hash(coord)
+    existing = session.execute(
+        select(Test).where(Test.coord_hash == h)
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    fields = {field: coord.get(field) for field in TEST_COORD_FIELDS}
+    recipe = Test(coord_hash=h, resolved_deps=coord.get("resolved_deps"),
+                  is_resolved=False, **fields)
+    session.add(recipe)
+    session.flush()
+    return recipe
+
+
+def resolve_test_recipe(session, recipe, tags, *, source_commit=None,
+                        default_expectation=_UNSET, expectation_set_by="system"):
+    """Resolve a recipe Test into a pinned resolved Test, returning it.
+
+    Pins the recipe's loose coordinate axes (compiler/arch/platform/mode)
+    against `tags` (fleet or local-host capability tags) and, when given, the
+    source commit; then `get_or_create_test` mints the resolved Test
+    (`is_resolved=True`) and `resolved_from` is linked back to the recipe.
+
+    Unlike a matrix snapshot (always a new row), a resolved Test is
+    content-addressed: re-resolving to the *same* coordinate reuses the existing
+    Test, while a different result (fleet/source changed) yields a new one — so a
+    recipe's `resolved_instances` is the set of distinct pinned Tests it has
+    produced over time. Raises ValueError if already resolved or the fleet/host
+    can't satisfy a loose axis (reject-incomplete).
+    """
+    if recipe.is_resolved:
+        raise ValueError("Test is already resolved.")
+    from opp_ci.fleet import resolve_loose_axes
+    coord = {field: getattr(recipe, field) for field in TEST_COORD_FIELDS}
+    coord["resolved_deps"] = recipe.resolved_deps
+    resolve_loose_axes(coord, tags)   # strict: explicit resolve must complete
+    if source_commit:
+        coord["commit_sha"] = source_commit
+    validate_test_coord(coord)
+    resolved = get_or_create_test(
+        session, coord, default_expectation=default_expectation,
+        expectation_set_by=expectation_set_by)
+    if resolved.id != recipe.id and resolved.resolved_from is None:
+        resolved.resolved_from = recipe.id
+    session.flush()
+    return resolved
+
+
 def create_matrix_run(session, *, matrix_id, trigger="manual", ref=None,
                       github_owner=None, github_repo=None,
                       github_commit_sha=None, github_pr_number=None,
