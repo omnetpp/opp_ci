@@ -29,8 +29,8 @@
             <div class="form-group">
                 <label for="kind">Kind</label>
                 <select name="kind" id="kind" required>
-                    {% for k in ["smoke", "fingerprint", "statistical", "build", "module", "unit", "chart", "feature", "packet", "queueing", "protocol", "validation", "sanitizer", "speed", "opp"] %}
-                    <option value="{{ k }}"{% if values.kind == k %} selected{% endif %}>{{ k }}</option>
+                    {% for k in ["build", "chart", "feature", "fingerprint", "module", "opp", "packet", "protocol", "queueing", "sanitizer", "smoke", "speed", "statistical", "unit", "validation"] %}
+                    <option value="{{ k }}"{% if values.kind == k or (not values.kind and k == "smoke") %} selected{% endif %}>{{ k }}</option>
                     {% endfor %}
                 </select>
             </div>
