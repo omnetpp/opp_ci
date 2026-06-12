@@ -5,32 +5,32 @@ outside podman** — organised into ordered **stages** (container prepare,
 bootstrap, dependency install, compilation, test run, …), and stream them
 **live** to the run-detail page as the run progresses.
 
-> **Status:** Phases 1 + 3 done and tested (`opp_ci/stages.py`, executor
-> build/test split, worker stage events, stage-aware `run_output.py`,
-> `TestRunStage`, run-detail live + finished views).
+> **Status: DONE.** All paths capture runs as live, persisted stages
+> (`opp_ci/stages.py`, executor splits, worker stage events, stage-aware
+> `run_output.py`, `TestRunStage`, run-detail live + finished views,
+> ~300 tests). Stages per path:
 >
-> **Phase 2 (podman option b): lifecycle implemented, NOT yet validated on a
-> real podman host.** `_run_test_in_podman` now starts the container detached
-> (`--entrypoint sleep`) and drives it with separate `podman exec`s — a
-> `runner.bootstrap` stage (entry script `--bootstrap-only`) then one or more
-> run stages (`--skip-bootstrap` + args) — with a guaranteed `podman rm -f`
-> teardown in a `finally`. The entry scripts gained `--bootstrap-only` /
-> `--skip-bootstrap` modes. The in-container build/test split is implemented
-> for the **nix** path (project.build = `opp_build_project`, test.run = the
-> test command with `--no-build`, as two `opp_env run` execs over the
-> persistent workspace; a build failure skips test); the **host** path stays
-> one combined `test.run` because its `internal run-direct` builds + tests in
-> a single shared-worktree process the host recorder can't see split.
-> The image build/bake is wrapped as a `container.prepare` stage (its build
-> output streams into the stage; near-silent when layer-cached). A nix podman
-> run records: container.prepare (omnetpp baked here) → runner.bootstrap →
-> deps.install (project install/resolve) → project.build (opp_build_project) →
-> test.run. deps.install front-loads the idempotent `opp_env run --install`
-> (build/test commands unchanged); an install failure is attributed there and
-> skips build+test. Lifecycle / teardown / skip / split / prepare logic is unit-tested
-> with mocked podman (`tests/test_podman_staged.py`), but **the real container
-> run needs validation on a podman host, and images must be rebuilt** to pick
-> up the new entry scripts.
+> - **host-nix:** Install → Build → Test
+> - **direct (in-process):** Checkout → Build → Test
+> - **podman nix:** Prepare → Checkout → Bootstrap → Install → Build → Test → Cleanup
+> - **podman host:** Prepare → Checkout → Bootstrap → Build → Test → Cleanup
+>
+> Podman option (b): detached container (`--entrypoint sleep`) driven by one
+> `podman exec` per stage with a guaranteed `podman rm -f` teardown; the entry
+> scripts gained `--bootstrap-only`/`--skip-bootstrap` and `set -x` (so each
+> exec's sub-commands are captured). Both nix and host paths split build from
+> test (nix via two `opp_env run` execs; host via two `internal run-direct`
+> execs, `--kind build` then `--no-build`, sharing the bind-mounted /work).
+> Leaked `opp_ci_run_*` containers are reaped at worker startup. Podman
+> lifecycle was confirmed working on a real host; **rebuild the runner images**
+> after deploying so the new entry-script modes (`--bootstrap-only`/
+> `--skip-bootstrap`/`set -x`) take effect.
+>
+> Deliberately out of scope: mixed-version-fleet back-compat for the live
+> append (only matters for rolling worker deploys), and the UI nice-to-haves
+> listed at the end (timing gutter, raw/download, sticky headers, deep-links).
+> The "commands inline as collapsible wrappers" UI idea was superseded by the
+> three independent Commands/stdout/stderr stream toggles.
 
 Builds directly on the remote-worker log view (see
 `plan/done/remote-worker-log-view.md`):
