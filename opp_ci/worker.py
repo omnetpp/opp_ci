@@ -295,6 +295,14 @@ class WorkerAgent:
             if resp.status_code != 200:
                 _logger.warning("Heartbeat failed: %s %s", resp.status_code, resp.text)
                 return
+            # A busy worker isn't polling, so the heartbeat is its path to learn
+            # of an admin-requested shutdown. Parse defensively — a malformed
+            # body must never break heartbeating.
+            try:
+                if resp.json().get("command") == "shutdown":
+                    self._request_stop("coordinator requested shutdown")
+            except ValueError:
+                pass
         except requests.RequestException as e:
             _logger.warning("Heartbeat error: %s", e)
             return
@@ -314,6 +322,9 @@ class WorkerAgent:
                 _logger.warning("Poll failed: %s %s", resp.status_code, resp.text)
                 return None
             data = resp.json()
+            if data.get("command") == "shutdown":
+                self._request_stop("coordinator requested shutdown")
+                return None
             return data.get("job")
         except requests.RequestException as e:
             _logger.warning("Poll error: %s", e)
@@ -459,7 +470,17 @@ class WorkerAgent:
         except requests.RequestException as e:
             _logger.error("Result report error for run #%d: %s", run_id, e)
 
-    def _handle_signal(self, signum, frame):
-        _logger.info("Received signal %d, shutting down...", signum)
+    def _request_stop(self, reason):
+        """Stop the main loop and heartbeat thread gracefully.
+
+        A job already executing runs to completion (the main loop just won't
+        poll again once `_running` is False); the heartbeat thread's
+        `_stop_event.wait` returns and it exits too. Shared by the signal
+        handler and the coordinator-requested shutdown path.
+        """
+        _logger.info("Shutting down: %s", reason)
         self._running = False
         self._stop_event.set()
+
+    def _handle_signal(self, signum, frame):
+        self._request_stop(f"received signal {signum}")

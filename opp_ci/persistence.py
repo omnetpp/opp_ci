@@ -973,8 +973,8 @@ def mark_stale_workers_offline(session, now, timeout_seconds, max_reclaims):
 
 
 def update_worker(session, worker_id, *, concurrency=None, tags=None,
-                  enabled=None):
-    """Patch a worker's concurrency, tags, and/or enabled flag (admin).
+                  enabled=None, shutdown_requested=None):
+    """Patch a worker's concurrency, tags, enabled, and/or shutdown flag (admin).
 
     Only the fields passed (non-None) are changed. Returns the Worker, or
     None if no worker has that id. Raises ValueError on an invalid value.
@@ -993,6 +993,8 @@ def update_worker(session, worker_id, *, concurrency=None, tags=None,
         worker.tags = list(tags)
     if enabled is not None:
         worker.enabled = bool(enabled)
+    if shutdown_requested is not None:
+        worker.shutdown_requested = bool(shutdown_requested)
     return worker
 
 

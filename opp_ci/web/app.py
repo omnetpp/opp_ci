@@ -2508,6 +2508,24 @@ def worker_toggle_web(worker_id: int,
         session.close()
 
 
+@web_router.post("/workers/{worker_id}/shutdown", dependencies=[Depends(require_csrf)])
+def worker_shutdown_web(worker_id: int,
+                        current_user: User = Depends(require_user("admin"))):
+    """Ask a worker to terminate; the coordinator relays it on the next
+    poll/heartbeat and the service manager restarts the worker."""
+    session = SessionLocal()
+    try:
+        worker = update_worker(session, worker_id, shutdown_requested=True)
+        if worker is None:
+            return RedirectResponse(url="/workers?error=Worker+not+found", status_code=303)
+        session.commit()
+        return RedirectResponse(
+            url=f"/workers/{worker_id}?message=Shutdown+requested+%E2%80%94+the+worker+will+restart+shortly",
+            status_code=303)
+    finally:
+        session.close()
+
+
 @web_router.post("/workers/{worker_id}/delete", dependencies=[Depends(require_csrf)])
 def worker_delete_web(worker_id: int,
                       current_user: User = Depends(require_user("admin"))):
@@ -3014,6 +3032,23 @@ def admin_create_token(
         return RedirectResponse(url=f"/admin?new_token={token.token}", status_code=303)
     finally:
         session.close()
+
+
+@web_router.post("/admin/coordinator/shutdown", dependencies=[Depends(require_csrf)])
+def admin_coordinator_shutdown(current_user: User = Depends(require_user("admin"))):
+    """Terminate the coordinator process; the service manager restarts it."""
+    import os
+    import signal
+    import threading
+    who = current_user.username or current_user.github_username or f"id={current_user.id}"
+    _logger.warning("Coordinator shutdown requested by admin '%s'", who)
+    # Send SIGTERM (uvicorn's graceful-shutdown signal) to our own process, but
+    # only after this response is flushed — otherwise the browser sees a dropped
+    # connection instead of the redirect.
+    threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+    return RedirectResponse(
+        url="/admin?message=Coordinator+shutting+down+%E2%80%94+the+service+will+restart+it",
+        status_code=303)
 
 
 @web_router.post("/admin/tokens/{token_id}/revoke", dependencies=[Depends(require_csrf)])

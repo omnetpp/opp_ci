@@ -149,6 +149,76 @@ class RestWorkerAdminTests(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
 
+class ShutdownDirectiveTests(unittest.TestCase):
+    """A shutdown_requested worker is told to stop via poll & heartbeat, takes
+    no new work, and clears the flag when it re-registers (fetches /me)."""
+
+    @classmethod
+    def setUpClass(cls):
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+        cls.client = TestClient(_make_app())
+        cls.admin = _mint_token("admin")
+
+    def _h(self, token):
+        return {"Authorization": f"Bearer {token}"}
+
+    def _register(self, name):
+        r = self.client.post("/api/workers/register",
+                             json={"name": name, "tags": ["os:linux"], "concurrency": 1},
+                             headers=self._h(self.admin))
+        self.assertEqual(r.status_code, 200, r.text)
+        wid = r.json()["id"]
+        session = SessionLocal()
+        try:
+            token = session.get(Worker, wid).token
+        finally:
+            session.close()
+        return wid, token
+
+    def _set_shutdown(self, wid):
+        session = SessionLocal()
+        try:
+            update_worker(session, wid, shutdown_requested=True)
+            session.commit()
+        finally:
+            session.close()
+
+    def test_poll_returns_shutdown_and_no_job(self):
+        wid, wtok = self._register("w-shutdown-poll")
+        self._set_shutdown(wid)
+        r = self.client.post("/api/workers/poll", headers=self._h(wtok))
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["command"], "shutdown")
+        self.assertIsNone(body["job"])
+
+    def test_heartbeat_relays_shutdown(self):
+        wid, wtok = self._register("w-shutdown-hb")
+        # No directive while the flag is unset.
+        r = self.client.post("/api/workers/heartbeat", json={}, headers=self._h(wtok))
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertNotIn("command", r.json())
+        self._set_shutdown(wid)
+        r = self.client.post("/api/workers/heartbeat", json={}, headers=self._h(wtok))
+        self.assertEqual(r.json().get("command"), "shutdown")
+
+    def test_me_clears_flag(self):
+        wid, wtok = self._register("w-shutdown-me")
+        self._set_shutdown(wid)
+        # Re-registration (a fresh process) clears the flag...
+        r = self.client.get("/api/workers/me", headers=self._h(wtok))
+        self.assertEqual(r.status_code, 200, r.text)
+        session = SessionLocal()
+        try:
+            self.assertFalse(session.get(Worker, wid).shutdown_requested)
+        finally:
+            session.close()
+        # ...so the next poll hands out work normally (no shutdown loop).
+        r = self.client.post("/api/workers/poll", headers=self._h(wtok))
+        self.assertNotIn("command", r.json())
+
+
 class ClientMethodTests(unittest.TestCase):
     """OppCiClient.update_worker / delete_worker hit the right verb/URL/payload."""
 

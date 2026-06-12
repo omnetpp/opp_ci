@@ -124,9 +124,13 @@ class WorkerLogStoreTests(unittest.TestCase):
 
 
 class _FakeResp:
-    def __init__(self, status_code=200, text=""):
+    def __init__(self, status_code=200, text="", body=None):
         self.status_code = status_code
         self.text = text
+        self._body = body if body is not None else {}
+
+    def json(self):
+        return self._body
 
 
 class _FakeSession:

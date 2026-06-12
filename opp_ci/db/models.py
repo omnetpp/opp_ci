@@ -134,6 +134,10 @@ class Worker(Base):
     registered_at = Column(DateTime, default=datetime.datetime.utcnow)
     current_job_count = Column(Integer, default=0)
     software_version = Column(String, nullable=True)  # opp_ci version last reported by the worker
+    # Set by an admin to terminate the worker process; the coordinator relays it
+    # as a shutdown directive on the next poll/heartbeat, and the worker clears
+    # it when it re-registers after the service manager restarts it.
+    shutdown_requested = Column(Boolean, default=False, nullable=False)
 
     def __repr__(self):
         return f"<Worker(name={self.name!r}, status={self.status!r}, tags={self.tags})>"

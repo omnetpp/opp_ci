@@ -506,6 +506,12 @@ async def worker_me(
         ).scalar_one_or_none()
         if worker is None:
             raise HTTPException(status_code=401, detail="Worker not found")
+        # A fresh process re-registering: clear any pending shutdown request so
+        # a restarted worker isn't immediately told to shut down again (which
+        # would loop). The flag stays set until the worker actually restarts.
+        if worker.shutdown_requested:
+            worker.shutdown_requested = False
+            session.commit()
         return {
             "id": worker.id,
             "name": worker.name,
@@ -527,12 +533,14 @@ async def worker_heartbeat(
     (``{"logs": {"entries": [...]}}``) for the per-worker log view; older
     workers send no body, so the field is optional.
     """
+    shutdown = False
     session = SessionLocal()
     try:
         worker = session.execute(
             select(Worker).where(Worker.id == worker_info["worker_id"])
         ).scalar_one_or_none()
         if worker:
+            shutdown = bool(worker.shutdown_requested)
             actual = session.execute(
                 select(func.count(TestRun.id)).where(
                     TestRun.worker_id == worker.id,
@@ -561,7 +569,12 @@ async def worker_heartbeat(
         from opp_ci.worker_logs import STORE
         STORE.append(worker_info["worker_id"], logs["entries"])
 
-    return {"status": "ok", "worker_id": worker_info["worker_id"]}
+    resp = {"status": "ok", "worker_id": worker_info["worker_id"]}
+    # Relay an admin-requested shutdown so a busy worker (not polling) still
+    # learns to stop on its next heartbeat.
+    if shutdown:
+        resp["command"] = "shutdown"
+    return resp
 
 
 @router.post("/workers/poll")
@@ -581,6 +594,11 @@ async def worker_poll(
         ).scalar_one_or_none()
         if worker is None:
             raise HTTPException(status_code=401, detail="Worker not found")
+
+        # An admin asked this worker to terminate — hand out no new work and
+        # tell it to shut down (it exits, the service manager restarts it).
+        if worker.shutdown_requested:
+            return {"job": None, "command": "shutdown", "reason": "shutdown requested"}
 
         if not worker.is_available:
             return {"job": None, "reason": "worker at capacity"}

@@ -161,6 +161,20 @@
     </form>
 </div>
 
+<div class="card">
+    <h2>Coordinator</h2>
+    <p style="color:var(--muted); margin-bottom:0.75rem;">
+        Shuts down the coordinator process. The systemd/launchd service restarts
+        it automatically a moment later — use this to pick up a new build or
+        configuration. The web UI will be briefly unavailable.
+    </p>
+    <form method="post" action="/admin/coordinator/shutdown"
+          onsubmit="return confirm('Shut down the coordinator now? The service will restart it, but the UI will be briefly unavailable.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-danger btn-sm">Shut down coordinator</button>
+    </form>
+</div>
+
 {% if recent_errors %}
 <div class="card">
     <h2>Recent Errors</h2>

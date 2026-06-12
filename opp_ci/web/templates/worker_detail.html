@@ -80,6 +80,12 @@
             {% endif %}
         </form>
 
+        <form method="post" action="/workers/{{ w.id }}/shutdown" class="inline-form"
+              onsubmit="return confirm('Shut down worker {{ w.name }}? It finishes its current job, then the service restarts it.');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-danger btn-sm">Shut down</button>
+        </form>
+
         <form method="post" action="/workers/{{ w.id }}/delete" class="inline-form"
               onsubmit="return confirm('Delete worker {{ w.name }}? In-flight jobs are re-queued for other workers. This cannot be undone.');">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -88,8 +94,10 @@
     </div>
     <p style="color:var(--muted); font-size:0.85rem; margin-top:0.75rem;">
         Disabling drains the worker: it keeps heartbeating but is assigned no new
-        jobs, and its in-flight jobs run to completion. Deleting removes it and
-        re-queues any jobs it was still running.
+        jobs, and its in-flight jobs run to completion. Shutting down terminates
+        the worker process (finishing any in-flight job first); the service
+        manager restarts it a moment later — use this to pick up a new build.
+        Deleting removes it and re-queues any jobs it was still running.
     </p>
 </div>
 {% endif %}
