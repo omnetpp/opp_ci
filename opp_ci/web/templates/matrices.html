@@ -39,6 +39,7 @@
         <tr>
             <th>ID</th>
             <th>Name</th>
+            <th>State</th>
             <th>Project</th>
             <th>Kinds</th>
             <th>Modes</th>
@@ -53,6 +54,7 @@
         <tr data-href="/test-matrices/{{ m.id }}" style="cursor:pointer;">
             <td>{{ m.id }}</td>
             <td>{{ m.display_name }}</td>
+            <td><span class="badge badge-{{ m.state_label }}">{% if m.is_recipe %}✎ recipe{% else %}🔒 resolved{% endif %}</span></td>
             <td>{{ m.project }}</td>
             <td>{{ m.config.get("kinds", [])|join(", ") }}</td>
             <td>{{ m.config.get("modes", [])|join(", ") }}</td>

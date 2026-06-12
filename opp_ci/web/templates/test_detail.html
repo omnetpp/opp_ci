@@ -2,12 +2,18 @@
 {% block title %}opp_ci — Test #{{ test.id }}{% endblock %}
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
-    <h2 style="margin:0;">Test #{{ test.id }}{% if test.name %} — {{ test.name }}{% else %} <span style="color:var(--muted); font-weight:400;">(anonymous)</span>{% endif %}</h2>
+    <h2 style="margin:0;">Test #{{ test.id }}{% if test.name %} — {{ test.name }}{% else %} <span style="color:var(--muted); font-weight:400;">(anonymous)</span>{% endif %}
+        <span class="badge badge-{{ test.state_label }}">{% if test.is_recipe %}✎ recipe{% else %}🔒 resolved{% endif %}</span>
+    </h2>
     {% if current_user and current_user.role in ("submitter", "admin") %}
+    {% if test.is_resolved %}
     <form method="post" action="/tests/{{ test.id }}/run" class="inline-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn btn-success btn-sm">Run this test</button>
     </form>
+    {% else %}
+    <span style="color:var(--muted);" title="Resolve the recipe to a pinned Test before running">resolve to run</span>
+    {% endif %}
     {% endif %}
 </div>
 
@@ -35,6 +41,7 @@
     <h2>Coordinate</h2>
     <table>
         <tr><th style="width:170px;">Project</th><td><a href="/projects/{{ test.project }}">{{ test.project }}</a></td></tr>
+        <tr><th>Source commit</th><td>{% if test.commit_sha %}<code>{{ test.short_commit }}</code>{% else %}<span style="color:var(--muted);">unpinned (recipe / legacy)</span>{% endif %}</td></tr>
         <tr><th>Kind</th><td>{{ test.kind }}</td></tr>
         <tr><th>Mode</th><td>{{ test.mode or "-" }}</td></tr>
         <tr><th>OS</th><td>{% if test.os %}{{ test.os }}{% if test.os_version %} {{ test.os_version }}{% endif %}{% else %}-{% endif %}</td></tr>
@@ -53,6 +60,9 @@
     <table>
         <tr><th style="width:170px;">ID</th><td>{{ test.id }}</td></tr>
         <tr><th>Name</th><td>{{ test.name or "-" }}</td></tr>
+        <tr><th>State</th><td><span class="badge badge-{{ test.state_label }}">{{ test.state_label }}</span></td></tr>
+        {% if test.resolved_from %}<tr><th>Resolved from</th><td><a href="/tests/{{ test.resolved_from }}">recipe #{{ test.resolved_from }}</a></td></tr>{% endif %}
+        {% if test.resolved_instances %}<tr><th>Resolved snapshots</th><td>{% for r in test.resolved_instances %}<a href="/tests/{{ r.id }}">#{{ r.id }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>{% endif %}
         <tr><th>Coord hash <span class="derived-tag" title="derived: SHA-256 of the coordinate fields above (project, kind, mode, os/_version, distro/_version, flavor/_version, arch, compiler/_version, isolation, toolchain, opp_file) plus resolved_deps. Used for dedup; excludes name.">derived</span></th><td><code>{{ test.coord_hash }}</code></td></tr>
         <tr><th>Created at</th><td>{{ test.created_at.strftime("%Y-%m-%d %H:%M:%S") if test.created_at else "-" }}</td></tr>
     </table>

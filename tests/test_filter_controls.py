@@ -209,6 +209,20 @@ class FilterPageTests(unittest.TestCase):
                     "/os", "/compilers"):
             self._get(url)
 
+    def test_detail_pages_render_with_state_badge(self):
+        # The Test/Matrix detail pages render the resolve-in-place state badge.
+        from sqlalchemy import select
+        s = SessionLocal()
+        try:
+            tid = s.execute(select(Test.id).order_by(Test.id).limit(1)).scalar_one()
+            mid = s.execute(select(TestMatrix.id).order_by(TestMatrix.id).limit(1)).scalar_one()
+        finally:
+            s.close()
+        body = self._get(f"/tests/{tid}")
+        self.assertIn("badge-resolved", body)
+        self.assertIn("Source commit", body)
+        self._get(f"/test-matrices/{mid}")
+
     def test_matrix_runs_axis_filter_survives_limit(self):
         # The smoke matrix run is the oldest (lowest id); 5 newer fingerprint
         # runs sit above it. With limit=2 the smoke run is outside the window,

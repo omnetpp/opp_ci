@@ -2,8 +2,11 @@
 {% block title %}opp_ci — Matrix: {{ matrix.display_name }}{% endblock %}
 {% block content %}
 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
-    <h2 style="margin:0;">Matrix: {{ matrix.display_name }}</h2>
+    <h2 style="margin:0;">Matrix: {{ matrix.display_name }}
+        <span class="badge badge-{{ matrix.state_label }}">{% if matrix.is_recipe %}✎ recipe{% else %}🔒 resolved{% endif %}</span>
+    </h2>
     {% if current_user and current_user.role in ("submitter", "admin") %}
+    {% if matrix.is_resolved %}
     <form method="post" action="/test-matrices/{{ matrix.id }}/run" class="inline-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <select name="expected_result_code" title="Expected result stamped on newly-created tests">
@@ -14,6 +17,9 @@
         </select>
         <button type="submit" class="btn btn-success btn-sm">Run this matrix</button>
     </form>
+    {% else %}
+    <span style="color:var(--muted);" title="Resolve + expand the recipe into pinned Tests before running">resolve to run</span>
+    {% endif %}
     {% endif %}
 </div>
 

@@ -85,6 +85,10 @@
         /* "finished" is the lifecycle state, not an outcome — neutral done. */
         .badge-finished { background: #d1e7dd; color: var(--pass); }
         .badge-compatible { background: #cfe2ff; color: var(--primary); }
+        /* Resolve-in-place state (Phase 5): recipe = amber + dashed (provisional,
+           not runnable); resolved = green solid (pinned, runnable). */
+        .badge-resolved { background: #d1e7dd; color: var(--pass); }
+        .badge-recipe { background: #fff3cd; color: var(--warn); border: 1px dashed var(--warn); }
 
         .compat-matrix { width: auto; }
         .compat-matrix th, .compat-matrix td { padding: 0.2rem 0.4rem; text-align: center; font-size: 0.8rem; }

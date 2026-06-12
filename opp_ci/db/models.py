@@ -103,6 +103,15 @@ class TestMatrix(Base):
         """Human label that never renders blank for anonymous matrices."""
         return self.name or f"(anonymous #{self.id})"
 
+    @property
+    def is_recipe(self):
+        """A recipe matrix carries moving refs/ranges; resolve+expand to run."""
+        return not self.is_resolved
+
+    @property
+    def state_label(self):
+        return "recipe" if self.is_recipe else "resolved"
+
 
 class Worker(Base):
     __tablename__ = "workers"
@@ -350,6 +359,22 @@ class Test(Base):
 
     def __repr__(self):
         return f"<Test(id={self.id}, project={self.project!r}, kind={self.kind!r})>"
+
+    # ── Resolve-in-place view helpers (Phase 5) ───────────────────────
+    @property
+    def is_recipe(self):
+        """A recipe (unresolved) carries loose/moving inputs and can't run."""
+        return not self.is_resolved
+
+    @property
+    def state_label(self):
+        """'recipe' or 'resolved' — drives the UI state badge / action."""
+        return "recipe" if self.is_recipe else "resolved"
+
+    @property
+    def short_commit(self):
+        """First 8 chars of the pinned source commit, or None on a recipe."""
+        return self.commit_sha[:8] if self.commit_sha else None
 
 
 class TestMatrixRun(Base):

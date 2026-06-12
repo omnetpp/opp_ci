@@ -69,8 +69,21 @@ class ResolveStateTests(unittest.TestCase):
             s.commit()
             self.assertTrue(t.is_resolved)
             self.assertIsNone(t.resolved_from)
+            # View helpers used by the badges / templates.
+            self.assertFalse(t.is_recipe)
+            self.assertEqual(t.state_label, "resolved")
+            self.assertEqual(t.short_commit, "c" * 8)
         finally:
             s.close()
+
+    def test_recipe_view_helpers(self):
+        recipe = Test(project="inet", kind="smoke", coord_hash="recipe-helpers",
+                      is_resolved=False)
+        self.assertTrue(recipe.is_recipe)
+        self.assertEqual(recipe.state_label, "recipe")
+        self.assertIsNone(recipe.short_commit)
+        m = TestMatrix(project="inet", config={}, is_resolved=False)
+        self.assertEqual(m.state_label, "recipe")
 
     def test_resolved_from_lineage(self):
         s = SessionLocal()
