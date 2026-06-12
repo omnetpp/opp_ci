@@ -869,6 +869,14 @@ def enqueue_job(session, job, *, project, opp_file=None, matrix_run_id=None,
     only when no `matrix_run_id` was given.
     """
     coord = job_to_coord(job, project=project, opp_file=opp_file)
+    # Always persist the complete transitive lock (Phase 1): the dep versions
+    # the matrix cell named are pins *into* the closure, not the whole lock.
+    # opp_env builds the full closure, so a deeper version still keys identity.
+    from opp_ci.dependency import complete_lock_for_submit
+    lock = complete_lock_for_submit(
+        project, version=job.get("version"),
+        pins=job.get("resolved_deps") or None) or None
+    coord["resolved_deps"] = lock
     validate_test_coord(coord)
     test = get_or_create_test(session, coord,
                               default_expectation=default_expectation,
@@ -913,7 +921,7 @@ def enqueue_job(session, job, *, project, opp_file=None, matrix_run_id=None,
         commit_sha=None,
         git_ref=job.get("git_ref"),
         version=job.get("version"),
-        resolved_deps=job.get("resolved_deps"),
+        resolved_deps=coord["resolved_deps"],
         cache_fingerprint=cache_fingerprint,
     )
     tv = None

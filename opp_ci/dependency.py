@@ -219,6 +219,38 @@ def resolve_dependencies(project_version, pins=None, *, transitive=True,
     return resolved
 
 
+def complete_lock_for_submit(project, version=None, pins=None, *,
+                             require_complete=False):
+    """The complete transitive dependency lock to persist for one submission.
+
+    The single helper every submit path calls so the lock that keys Test
+    identity is always present, complete, and transitive — never just the
+    direct deps, never "latest at build time". `version` is the opp_env
+    version id (e.g. "inet-4.5") when known, else the bare project name
+    (opp_env's newest). `pins` (a --pin, the web omnetpp field, or a matrix
+    deps-axis cell) constrains the resolution; an explicit pin always lands in
+    the lock even for a custom project opp_env can't describe (e.g. mm1k) —
+    the user named that version.
+
+    `require_complete=True` enforces reject-incomplete (raise
+    `DependencyResolutionError` rather than persist a partial lock). It
+    defaults False so custom/unregistered projects still submit; flip it on
+    once every submittable project is opp_env-known.
+    """
+    pins = pins or {}
+    if not version:
+        pv = project
+    elif version.startswith(f"{project}-"):
+        pv = version
+    else:
+        pv = f"{project}-{version}"
+    lock = resolve_dependencies(pv, pins=pins, transitive=True,
+                                require_complete=require_complete)
+    for name, ver in pins.items():
+        lock.setdefault(name, ver)
+    return lock
+
+
 def parse_pins(pin_strings):
     """
     Parse pin strings like ["omnetpp=6.1", "inet=4.5"] into a dict.

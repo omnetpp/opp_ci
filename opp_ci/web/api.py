@@ -161,22 +161,18 @@ async def submit_run(
             distro_ver = req.distro_version if resolved_distro else None
             flavor_ver = req.flavor_version if resolved_flavor else None
 
-            if req.pins:
-                # Resolve pins server-side so --remote works without the
-                # opp_env catalog on the client. resolve_dependencies validates
-                # against the project's compatible versions when registered;
-                # the setdefault loop still honours an explicit pin for custom
-                # projects (e.g. mm1k) that have no registered dep metadata.
-                # Resolved before get_or_create_test: deps are part of Test
-                # identity, so they must be in the coord that keys the hash.
-                from opp_ci.dependency import resolve_dependencies, parse_pins
-                try:
-                    pin_dict = parse_pins(req.pins)
-                    resolved_deps = dict(resolve_dependencies(req.project, pins=pin_dict) or {})
-                except ValueError as e:
-                    raise HTTPException(status_code=400, detail=str(e))
-                for name, ver in pin_dict.items():
-                    resolved_deps.setdefault(name, ver)
+            # Always pin the complete transitive lock server-side (so --remote
+            # works without the opp_env catalog on the client, and so deps are
+            # in the coord that keys the hash). complete_lock_for_submit honours
+            # explicit pins even for custom projects (e.g. mm1k) opp_env has no
+            # dep metadata for.
+            from opp_ci.dependency import complete_lock_for_submit, parse_pins
+            try:
+                pin_dict = parse_pins(req.pins) if req.pins else {}
+                resolved_deps = complete_lock_for_submit(
+                    req.project, version=req.version, pins=pin_dict) or None
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
 
             coord = {
                 "project": req.project,

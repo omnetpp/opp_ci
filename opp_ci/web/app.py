@@ -953,9 +953,18 @@ def test_new_submit(
                 request, session, current_user, values=values, status_code=400,
                 message=f"Invalid expected result: {expected_result_code!r}.",
                 message_type="error")
-        resolved_deps = None
+        # Always pin the complete transitive lock; the omnetpp form field is a
+        # pin into the closure, not the whole lock.
+        from opp_ci.dependency import complete_lock_for_submit
+        pins = {}
         if omnetpp_version and project != "omnetpp":
-            resolved_deps = {"omnetpp": omnetpp_version}
+            pins["omnetpp"] = omnetpp_version
+        try:
+            resolved_deps = complete_lock_for_submit(project, pins=pins) or None
+        except ValueError as e:
+            return _render_test_form(
+                request, session, current_user, values=values,
+                message=str(e), message_type="error", status_code=400)
         try:
             r_os, r_distro, r_flavor = platforms.resolve_platform(
                 os=os or None, distro=distro or None, flavor=flavor or None,

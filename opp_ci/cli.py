@@ -911,7 +911,7 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
         )
         return
 
-    from opp_ci.dependency import resolve_dependencies, parse_pins, format_resolved_deps
+    from opp_ci.dependency import complete_lock_for_submit, parse_pins, format_resolved_deps
     from opp_ci.persistence import parse_expectation_override
     try:
         default_expectation = parse_expectation_override(expected_result_code)
@@ -921,16 +921,16 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
     Base.metadata.create_all(engine)
     session = SessionLocal()
     try:
-        resolved_deps = None
-        if pins:
-            try:
-                pin_dict = parse_pins(pins)
-                resolved_deps = resolve_dependencies(project, pins=pin_dict)
-                if resolved_deps:
-                    click.echo(f"Resolved dependencies: {format_resolved_deps(resolved_deps)}")
-            except ValueError as e:
-                click.echo(f"ERROR: {e}")
-                return
+        try:
+            pin_dict = parse_pins(pins) if pins else {}
+            # Always pin the complete transitive lock — not only when --pin is
+            # given (that gap is how unpinned runs used to slip through).
+            resolved_deps = complete_lock_for_submit(project, pins=pin_dict) or None
+            if resolved_deps:
+                click.echo(f"Resolved dependencies: {format_resolved_deps(resolved_deps)}")
+        except ValueError as e:
+            click.echo(f"ERROR: {e}")
+            return
 
         if not skip_install:
             try:
