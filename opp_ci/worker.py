@@ -317,10 +317,11 @@ class WorkerAgent:
         from opp_ci.persistence import capture_system_snapshot
 
         run_id = job["run_id"]
-        # If the run has a specific version (e.g. "inet-4.5"), use it as the
-        # opp_env project identifier; otherwise fall back to the bare project
-        # name (e.g. "mm1k") for projects with a single version.
-        project = job.get("version") or job["project"]
+        # Build the full opp_env project id from (project, version) — `version`
+        # is opp_env's version *field* (e.g. "git"), so "mm1k" + "git" -> the
+        # id "mm1k-git", not "git". (Fixes opp_env install … git-latest.)
+        from opp_ci.executor import opp_env_project_id
+        project = opp_env_project_id(job["project"], job.get("version"))
         kind = job["kind"]
         git_ref = job.get("git_ref")
         opp_file = job.get("opp_file")

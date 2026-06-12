@@ -303,6 +303,22 @@ def resolve_opp_env_id(project, git_ref=None, *, toolchain="nix"):
     return f"{effective_project}-latest", None
 
 
+def opp_env_project_id(project, version):
+    """Combine a project name and an opp_env *version field* into the full
+    opp_env project id.
+
+    opp_env's per-version ``version`` field is just the suffix (e.g. ``"git"``
+    for mm1k, ``"4.5"`` for inet), while its install/run id is ``name-version``
+    (``mm1k-git``, ``inet-4.5``). So combine them — unless `version` is already a
+    full id (``mm1k-git``) or absent (then the bare project name, which
+    ``resolve_opp_env_id`` later maps to the ``-latest`` alias). This is the fix
+    for "opp_env install … git-latest: Unknown project 'git'".
+    """
+    if not version:
+        return project
+    return version if version.startswith(f"{project}-") else f"{project}-{version}"
+
+
 def _remove_git_worktree(worktree_path):
     """Remove a git worktree directory."""
     try:

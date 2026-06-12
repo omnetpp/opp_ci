@@ -172,6 +172,18 @@ class RestRunByNameTests(unittest.TestCase):
         self.assertEqual(r2.status_code, 200, r2.text)
         self.assertIn("id", r2.json())
 
+        # The run-by-name run inherits the Test's resolved deps (not None) —
+        # otherwise the worker would build without the pinned omnetpp version.
+        from opp_ci.db.models import Test, TestRun
+        s = SessionLocal()
+        try:
+            run2 = s.get(TestRun, r2.json()["id"])
+            test = s.get(Test, run2.test_id)
+            self.assertIsNotNone(test.resolved_deps)        # inet → omnetpp pinned
+            self.assertEqual(run2.resolved_deps, test.resolved_deps)
+        finally:
+            s.close()
+
         # unknown name → 404
         r3 = self.client.post("/api/runs", headers=self._h(), json={"test_name": "nope"})
         self.assertEqual(r3.status_code, 404)

@@ -223,7 +223,9 @@ async def submit_run(
             commit_sha=test.commit_sha,
             git_ref=req.git_ref,
             version=req.version,
-            resolved_deps=resolved_deps,
+            # The Test's lock is the source of truth (and is None-safe for the
+            # run-by-name path, where no fresh lock was computed).
+            resolved_deps=test.resolved_deps,
         )
         session.commit()
         _logger.info("Run #%d submitted by %s", run.id, identity.get("name"))

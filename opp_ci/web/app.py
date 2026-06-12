@@ -1050,6 +1050,7 @@ def test_new_submit(
             run = create_test_run(
                 session,
                 test_id=test.id,
+                commit_sha=test.commit_sha,
                 git_ref=git_ref or None,
                 version=version or None,
                 resolved_deps=resolved_deps,
@@ -1112,6 +1113,10 @@ def test_run(test_id: int,
             run = create_test_run(
                 session,
                 test_id=test.id,
+                # Inherit the Test's pinned identity — its resolved dependency
+                # lock and source commit — so the run builds what the Test *is*.
+                commit_sha=test.commit_sha,
+                resolved_deps=test.resolved_deps,
                 git_ref=git_ref or None,
                 version=version or None,
             )
