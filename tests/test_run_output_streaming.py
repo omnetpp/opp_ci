@@ -200,6 +200,25 @@ class DirectBuildTestSplitTests(unittest.TestCase):
         self.assertEqual([s["name"] for s in rec.stages], [Stage.PROJECT_BUILD])
         self.assertEqual(outcome["result_code"], "PASS")
 
+    def test_skip_build_runs_test_only(self):
+        sim = mock.MagicMock()
+        captured = {}
+
+        def fake_func(**kw):
+            captured["build"] = kw.get("build")
+            return None
+
+        rec = StageRecorder()
+        with contextlib.ExitStack() as es:
+            for p in self._patches(sim, {"smoke": fake_func}):
+                es.enter_context(p)
+            outcome = executor._run_test_direct(
+                "mm1k", "smoke", recorder=rec, skip_build=True)
+        self.assertEqual([s["name"] for s in rec.stages], [Stage.TEST_RUN])  # no build
+        sim.build.assert_not_called()
+        self.assertIs(captured["build"], False)
+        self.assertEqual(outcome["result_code"], "PASS")
+
 
 class RunOutputStoreTests(unittest.TestCase):
     def test_events_build_stages_and_lines(self):

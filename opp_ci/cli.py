@@ -3102,17 +3102,25 @@ def internal_group():
 @click.option("--mode", default=None)
 @click.option("--opp-file", default=None)
 @click.option("--git-ref", default=None)
+@click.option("--no-build", is_flag=True, default=False,
+              help="Skip the build stage and run the test against an already-built "
+                   "project (the build ran as a separate step).")
 @remoteable(_refuse_remote("internal run-direct"))
-def internal_run_direct(project, kind, mode, opp_file, git_ref):
+def internal_run_direct(project, kind, mode, opp_file, git_ref, no_build):
     """Run a single test by calling opp_repl directly (host-toolchain path).
 
     Designed to be invoked inside an opp-ci-runner image whose base OS already
     has the requested compiler installed. Writes the test's stdout/stderr to
     this process's stdout/stderr and exits 0 on PASS, 1 otherwise.
+
+    The podman host path drives this twice — once with ``--kind build`` (the
+    build) and once with ``--no-build`` (the test) — so each shows as its own
+    stage; both share the bind-mounted /work so the build's artifacts persist.
     """
     from opp_ci.executor import _run_test_direct
     outcome = _run_test_direct(
         project, kind, opp_file=opp_file, git_ref=git_ref, mode=mode,
+        skip_build=no_build,
     )
     if outcome.get("stdout"):
         click.echo(outcome["stdout"], nl=False)

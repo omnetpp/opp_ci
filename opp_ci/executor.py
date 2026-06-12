@@ -1348,21 +1348,28 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         pinned_deps = [t for t in dep_tokens if not t.startswith(f"{repl_project}-")]
         if pinned_deps:
             run_flags += ["-e", f"OPP_CI_PIN_DEPS={' '.join(pinned_deps)}"]
-        container_args = ["internal", "run-direct",
-                          "--project", repl_project, "--kind", kind]
+        # Split build from test as two `internal run-direct` execs over the same
+        # container. They share the source — bind-mounted /work for a
+        # SimulationProject, or the installed dir for a catalog project — which
+        # persists across execs, so the build's artifacts are reused by the
+        # test. The build exec is `--kind build` (build-only); the test exec is
+        # the real kind with `--no-build`. (No --git-ref: the worktree was
+        # already checked out on the host and bind-mounted, see Checkout.)
+        common = ["internal", "run-direct", "--project", repl_project]
+        extra = []
         if mode:
-            container_args += ["--mode", mode]
+            extra += ["--mode", mode]
         if opp_file:
-            container_args += ["--opp-file", "/work/" + os.path.basename(opp_file)]
-        # Catalog runs deliberately omit --opp-file: opp_repl's _load_workspace
-        # auto-discovers any .opp in cwd (the install dir, set by entrypoint),
-        # else falls back to a default SimulationProject rooted there.
-        # The host path runs build+test in one in-container `internal run-direct`
-        # process; they share a worktree, so they can't be split into separate
-        # execs without losing the build's artifacts. Keep it one test.run
-        # stage (its internal build/test split isn't visible to the host).
-        bare = COMMAND_MAP.get(kind, kind) + (f" --mode {mode}" if mode else "")
-        run_stages = [(Stage.TEST_RUN, container_args, bare)]
+            # Catalog runs omit --opp-file: opp_repl auto-discovers the .opp in
+            # cwd (the install dir set by the entrypoint).
+            extra += ["--opp-file", "/work/" + os.path.basename(opp_file)]
+        mode_suffix = f" --mode {mode}" if mode else ""
+        run_stages = [
+            (Stage.PROJECT_BUILD, common + ["--kind", "build"] + extra,
+             "opp_build_project" + mode_suffix),
+            (Stage.TEST_RUN, common + ["--kind", kind, "--no-build"] + extra,
+             COMMAND_MAP.get(kind, kind) + mode_suffix + " --no-build"),
+        ]
         entry_script = "/opt/opp_ci_entry.sh"
 
     return _run_podman_staged(
@@ -1580,7 +1587,7 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
 
 
 def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
-                     recorder=None, **_unused):
+                     recorder=None, skip_build=False, **_unused):
     """Run a test by calling opp_repl functions directly (no subprocess).
 
     When *git_ref* is set, an isolated git worktree is created for that
@@ -1638,46 +1645,49 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
     start = time.time()
     try:
         # ── project.build ─────────────────────────────────────────────
-        if recorder is not None:
-            recorder.begin(Stage.PROJECT_BUILD, command="opp_build_project (direct)")
-        try:
-            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                build_result = simulation_project.build(mode=build_mode)
-        except Exception as e:
-            _logger.error("Build for %s raised: %s", project, e)
+        # Skipped when skip_build is set (the podman host path runs the build
+        # as a separate exec; the test exec then runs build-less here).
+        if not skip_build:
             if recorder is not None:
-                recorder.output("err", repr(e))
-                recorder.end(1, status="failed")
-                if not build_only:
+                recorder.begin(Stage.PROJECT_BUILD, command="opp_build_project (direct)")
+            try:
+                with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+                    build_result = simulation_project.build(mode=build_mode)
+            except Exception as e:
+                _logger.error("Build for %s raised: %s", project, e)
+                if recorder is not None:
+                    recorder.output("err", repr(e))
+                    recorder.end(1, status="failed")
+                    if not build_only:
+                        recorder.skip(Stage.TEST_RUN, reason="skipped: build failed")
+                return {
+                    "result_code": "ERROR", "test_exec_seconds": time.time() - start,
+                    "stdout": stdout_buf.getvalue(),
+                    "stderr": stderr_buf.getvalue() + "\n" + repr(e),
+                    "details": None, "commit_sha": git_ref,
+                }
+            build_failed = (build_result is not None
+                            and hasattr(build_result, "is_all_results_expected")
+                            and not build_result.is_all_results_expected())
+            if recorder is not None:
+                recorder.end(1 if build_failed else 0,
+                             status="failed" if build_failed else None)
+            if build_failed:
+                if recorder is not None and not build_only:
                     recorder.skip(Stage.TEST_RUN, reason="skipped: build failed")
-            return {
-                "result_code": "ERROR", "test_exec_seconds": time.time() - start,
-                "stdout": stdout_buf.getvalue(),
-                "stderr": stderr_buf.getvalue() + "\n" + repr(e),
-                "details": None, "commit_sha": git_ref,
-            }
-        build_failed = (build_result is not None
-                        and hasattr(build_result, "is_all_results_expected")
-                        and not build_result.is_all_results_expected())
-        if recorder is not None:
-            recorder.end(1 if build_failed else 0,
-                         status="failed" if build_failed else None)
-        if build_failed:
-            if recorder is not None and not build_only:
-                recorder.skip(Stage.TEST_RUN, reason="skipped: build failed")
-            return {
-                "result_code": "FAIL", "test_exec_seconds": time.time() - start,
-                "stdout": stdout_buf.getvalue(), "stderr": stderr_buf.getvalue(),
-                "details": None, "commit_sha": git_ref or resolve_commit_sha(project, opp_file=opp_file),
-            }
-        if build_only:
-            # The build is the whole job — no test stage.
-            commit_sha = git_ref or resolve_commit_sha(project, opp_file=opp_file)
-            return {
-                "result_code": "PASS", "test_exec_seconds": time.time() - start,
-                "stdout": stdout_buf.getvalue(), "stderr": stderr_buf.getvalue(),
-                "details": None, "commit_sha": commit_sha,
-            }
+                return {
+                    "result_code": "FAIL", "test_exec_seconds": time.time() - start,
+                    "stdout": stdout_buf.getvalue(), "stderr": stderr_buf.getvalue(),
+                    "details": None, "commit_sha": git_ref or resolve_commit_sha(project, opp_file=opp_file),
+                }
+            if build_only:
+                # The build is the whole job — no test stage.
+                commit_sha = git_ref or resolve_commit_sha(project, opp_file=opp_file)
+                return {
+                    "result_code": "PASS", "test_exec_seconds": time.time() - start,
+                    "stdout": stdout_buf.getvalue(), "stderr": stderr_buf.getvalue(),
+                    "details": None, "commit_sha": commit_sha,
+                }
 
         # ── test.run (build already done; don't rebuild) ──────────────
         if recorder is not None:

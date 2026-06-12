@@ -178,6 +178,25 @@ class ContainerPrepareStageTests(unittest.TestCase):
                          [Stage.CONTAINER_PREPARE, Stage.CHECKOUT])
         wt.assert_called_once()
 
+    def test_host_path_splits_build_and_test(self):
+        rec = StageRecorder()
+        with mock.patch("opp_ci.executor._podman_image_tag", return_value="img"), \
+             mock.patch("opp_ci.executor._ensure_runner_image"), \
+             mock.patch("opp_ci.executor._resolve_project_dir", return_value="/proj"), \
+             mock.patch("opp_ci.executor._run_podman_staged",
+                        return_value=self._STAGED_OK) as staged:
+            executor._run_test_in_podman(
+                "mm1k", "smoke", toolchain="none", recorder=rec,
+                opp_file="mm1k.opp", resolved_deps={})
+        run_stages = staged.call_args.kwargs["run_stages"]
+        self.assertEqual([s[0] for s in run_stages],
+                         [Stage.PROJECT_BUILD, Stage.TEST_RUN])
+        build_args, test_args = run_stages[0][1], run_stages[1][1]
+        self.assertIn("build", build_args)        # --kind build
+        self.assertNotIn("--no-build", build_args)
+        self.assertIn("smoke", test_args)         # --kind smoke
+        self.assertIn("--no-build", test_args)    # test exec skips the rebuild
+
     def test_prepare_failure_recorded_and_raised(self):
         rec = StageRecorder()
         with mock.patch("opp_ci.executor._podman_image_tag", return_value="img"), \
