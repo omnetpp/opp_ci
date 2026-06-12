@@ -96,11 +96,13 @@ class PodmanStagedTests(unittest.TestCase):
         self.assertEqual([s["name"] for s in rec.stages],
                          [Stage.RUNNER_BOOTSTRAP, Stage.PROJECT_BUILD,
                           Stage.TEST_RUN, Stage.CLEANUP])
-        # the stage view shows the bare command, not the executed `run -c …` argv
+        # No curated headline on the run stages — the stage title names them and
+        # the real commands stream in green via the entry script's run_cmd
+        # markers, so the recorded stage command is None.
         self.assertEqual(
             [s["command"] for s in rec.stages
              if s["name"] not in (Stage.RUNNER_BOOTSTRAP, Stage.CLEANUP)],
-            ["opp_build_project", "opp_run_smoke_tests"])
+            [None, None])
         self.assertEqual(len([c for c in calls if "--skip-bootstrap" in c]), 2)
         self.assertEqual(out["result_code"], "PASS")
 

@@ -1471,9 +1471,12 @@ def _run_podman_staged(*, image, run_stages, entry_script, run_flags,
             result = boot
         else:
             ran = 0
-            for stage_name, args, display in run_stages:
+            for stage_name, args, _display in run_stages:
                 if recorder is not None:
-                    recorder.begin(stage_name, command=display)
+                    # No curated headline — the stage title already says what
+                    # this is, and the real commands show in green via the entry
+                    # script's run_cmd markers (cmd stream).
+                    recorder.begin(stage_name, command=None)
                 result = _exec([entry_script, "--skip-bootstrap"] + args,
                                label=f"podman:{image}:{stage_name}")
                 if recorder is not None:
