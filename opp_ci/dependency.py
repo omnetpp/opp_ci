@@ -21,13 +21,15 @@ import subprocess
 _logger = logging.getLogger(__name__)
 
 
-class DependencyResolutionError(Exception):
+class DependencyResolutionError(ValueError):
     """A complete transitive dependency lock could not be produced.
 
     Raised by ``resolve_dependencies(..., require_complete=True)`` when
     opp_env cannot be queried for a node in the closure, a required project
     lists no compatible versions, or two nodes demand incompatible versions
-    of the same dependency. Submit paths surface this as a hard rejection.
+    of the same dependency. Subclasses ``ValueError`` so the submit paths'
+    existing ``except ValueError`` handlers surface it as a 400 / CLI error
+    without extra plumbing.
     """
 
 
@@ -220,7 +222,7 @@ def resolve_dependencies(project_version, pins=None, *, transitive=True,
 
 
 def complete_lock_for_submit(project, version=None, pins=None, *,
-                             require_complete=False):
+                             require_complete=True):
     """The complete transitive dependency lock to persist for one submission.
 
     The single helper every submit path calls so the lock that keys Test
@@ -232,10 +234,9 @@ def complete_lock_for_submit(project, version=None, pins=None, *,
     the lock even for a custom project opp_env can't describe (e.g. mm1k) —
     the user named that version.
 
-    `require_complete=True` enforces reject-incomplete (raise
-    `DependencyResolutionError` rather than persist a partial lock). It
-    defaults False so custom/unregistered projects still submit; flip it on
-    once every submittable project is opp_env-known.
+    `require_complete=True` (the default) enforces reject-incomplete (raise
+    `DependencyResolutionError` rather than persist a partial lock) — the
+    plan's decision #7. Pass False only for a deliberately best-effort lock.
     """
     pins = pins or {}
     if not version:
