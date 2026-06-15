@@ -10,7 +10,7 @@ except ImportError:
     _VERSION = "0.0.0"
 from sqlalchemy import select
 
-from opp_ci.db.connection import engine, SessionLocal
+from opp_ci.db.connection import get_engine, SessionLocal
 from opp_ci.db.models import (
     ApiToken, AutoTestRule, Base, ExpectedTestResult, Project, Test,
     TestMatrix, TestMatrixRun, TestResultCode, TestRun, TestRunLifecycle,
@@ -701,7 +701,7 @@ def _build_matrix_images(jobs, matrix_name, push):
 @remoteable(_refuse_remote("init-db"))
 def init_db():
     """Create database tables."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     click.echo("Database tables created.")
 
 
@@ -719,7 +719,7 @@ def reset_db(yes, preserve_tokens):
     saved_api_tokens = []
     saved_workers = []
     if preserve_tokens:
-        Base.metadata.create_all(engine)
+        Base.metadata.create_all(get_engine())
         session = SessionLocal()
         try:
             saved_api_tokens = _snapshot_rows(session, ApiToken)
@@ -727,8 +727,8 @@ def reset_db(yes, preserve_tokens):
         finally:
             session.close()
 
-    _drop_everything(engine)
-    Base.metadata.create_all(engine)
+    _drop_everything(get_engine())
+    Base.metadata.create_all(get_engine())
 
     if preserve_tokens and (saved_api_tokens or saved_workers):
         session = SessionLocal()
@@ -738,7 +738,7 @@ def reset_db(yes, preserve_tokens):
             for row in saved_workers:
                 session.add(Worker(**row))
             session.commit()
-            _resync_sequences(engine)
+            _resync_sequences(get_engine())
             click.echo("Database reset.")
             token_names = ", ".join(r["name"] for r in saved_api_tokens) or "(none)"
             worker_names = ", ".join(r["name"] for r in saved_workers) or "(none)"
@@ -872,7 +872,7 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
             raise click.ClickException("--test (run by name) is not supported with --remote.")
         # Unpack the named test's coordinate into the run variables; the
         # stored fields are already canonical, so skip resolve_platform.
-        Base.metadata.create_all(engine)
+        Base.metadata.create_all(get_engine())
         _s = SessionLocal()
         try:
             named = get_test_by_name(_s, test_name)
@@ -940,7 +940,7 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
     except ValueError:
         raise click.ClickException(f"Invalid --expect value: {expected_result_code!r}")
 
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         try:
@@ -1152,7 +1152,7 @@ def _coordinator_run(host, port, cert_file, key_file):
     import uvicorn
     from opp_ci.web.app import app
     from opp_ci import config as cfg
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     if host is None:
         host = cfg.COORDINATOR_HOST
     if port is None:
@@ -1579,7 +1579,7 @@ def show_results(project, git_ref, kind, status, limit):
 def seed_projects_cmd():
     """Seed the database with core projects from the catalog."""
     from opp_ci.catalog import seed_projects
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         seed_projects(session)
@@ -1599,7 +1599,7 @@ def seed_platforms_cmd():
     /runs/new autocomplete dropdowns.
     """
     from opp_ci.catalog import seed_platforms
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         os_n, comp_n = seed_platforms(session)
@@ -1617,7 +1617,7 @@ def seed_platforms_cmd():
 @remoteable(_add_project_remote)
 def add_project_cmd(name, github, git_url, opp_env_name, deps):
     """Register a new project in the database."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         existing = session.execute(
@@ -1663,7 +1663,7 @@ def sync_catalog_cmd():
     versions, and creates a default test matrix for each new project.
     """
     from opp_ci.opp_env_adapter import sync_catalog
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         new_projects, new_versions = sync_catalog(session)
@@ -1676,7 +1676,7 @@ def sync_catalog_cmd():
 @remoteable(_list_projects_remote)
 def list_projects():
     """List known projects with last test status and GitHub info."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         projects = session.execute(
@@ -1772,7 +1772,7 @@ def create_matrix(name, project, kinds, modes, os_names, os_versions,
     except ValueError as e:
         raise click.ClickException(str(e))
 
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         existing = session.execute(
@@ -1812,7 +1812,7 @@ def create_matrix(name, project, kinds, modes, os_names, os_versions,
 @remoteable(_list_matrices_remote)
 def list_matrices():
     """List defined test matrices."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         matrices = session.execute(
@@ -1945,7 +1945,7 @@ def run_matrix(matrix_name, new_name, spec_file, project, kinds, modes, refs, si
             "Pick exactly one of: --matrix NAME, --spec-file FILE, or inline axis flags."
         )
 
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         if matrix_name:
@@ -2159,7 +2159,7 @@ def run_matrix(matrix_name, new_name, spec_file, project, kinds, modes, refs, si
 @click.option("--limit", default=20, type=int, help="Max rows to show (default: 20)")
 def list_matrix_runs(project, verdict, since, limit):
     """List recent TestMatrixRun rows with their rollup verdict."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         query = (
@@ -2262,7 +2262,7 @@ def set_expectation_cmd(project, wheres, expected, reason, set_by, limit, dry_ru
 
     code = None if expected.lower() == "none" else TestResultCode(expected.upper())
 
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         query = select(Test)
@@ -2348,7 +2348,7 @@ def show_expectations(test_id, limit):
               help="Show only cells whose verdict diverged from expectation")
 def show_matrix_run(matrix_run_id, unexpected_only):
     """Print rollup + per-cell table for one TestMatrixRun."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         mr = session.execute(
@@ -2431,7 +2431,7 @@ def seed_matrices_cmd():
     """Seed the database with default matrix configurations."""
     from opp_ci.scheduler import DEFAULT_MATRICES
 
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         for name, mdef in DEFAULT_MATRICES.items():
@@ -2456,7 +2456,7 @@ def seed_matrices_cmd():
 def add_version(project, label, git_ref, opp_env_version, deps):
     """Register a version (git ref / opp_env version) for a project."""
     import json as _json
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         proj = session.execute(
@@ -2486,7 +2486,7 @@ def add_version(project, label, git_ref, opp_env_version, deps):
 @remoteable(_list_versions_remote)
 def list_versions(project):
     """List registered versions for projects."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         query = select(Version)
@@ -2585,7 +2585,7 @@ def user_create(username, role, password, update_password):
     if password is None:
         password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
 
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         existing = session.execute(
@@ -2624,7 +2624,7 @@ def user_list():
     """List web UI users."""
     from opp_ci.db.models import User
 
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         users = session.execute(select(User).order_by(User.id)).scalars().all()
@@ -2838,7 +2838,7 @@ def worker_start(coordinator, token, poll_interval, heartbeat_interval, niceness
 @remoteable(_worker_register_remote)
 def worker_register(name, tags, auto_tags, concurrency):
     """Register a new worker in the local database and print its token."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         existing = session.execute(
@@ -2877,7 +2877,7 @@ def worker_register(name, tags, auto_tags, concurrency):
 @remoteable(_worker_list_remote)
 def worker_list():
     """List registered workers."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         workers = session.execute(
@@ -2919,7 +2919,7 @@ def worker_update(worker_id, concurrency, tags, add_tags, remove_tags, auto_tags
             "Nothing to update: pass --concurrency and/or "
             "--tags/--add-tags/--remove-tags/--auto-tags.")
     detected = _detect_capability_tags() if auto_tags else None
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         worker = session.execute(
@@ -2944,7 +2944,7 @@ def worker_update(worker_id, concurrency, tags, add_tags, remove_tags, auto_tags
 
 
 def _set_worker_enabled(worker_id, enabled):
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         worker = update_worker(session, worker_id, enabled=enabled)
@@ -2987,7 +2987,7 @@ def worker_delete(worker_id, yes):
     import datetime as _dt
     from opp_ci.config import MAX_RECLAIMS
 
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         worker = session.execute(
@@ -3095,7 +3095,7 @@ def token_group():
 @remoteable(_token_create_remote)
 def token_create(name, role):
     """Create a new API token."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         token = ApiToken(name=name, role=role)
@@ -3113,7 +3113,7 @@ def token_create(name, role):
 @remoteable(_token_list_remote)
 def token_list():
     """List API tokens."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         tokens = session.execute(
@@ -3139,7 +3139,7 @@ def token_list():
 @remoteable(_token_revoke_remote)
 def token_revoke(token_id):
     """Disable an API token by ID."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         token = session.execute(
@@ -3172,7 +3172,7 @@ def rule_group():
 @remoteable(_rule_create_remote)
 def rule_create(project, rule_type, pattern, matrix_name, replace):
     """Create an auto-test rule for GitHub events."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         proj = session.execute(
@@ -3224,7 +3224,7 @@ def rule_create(project, rule_type, pattern, matrix_name, replace):
 @remoteable(_rule_list_remote)
 def rule_list():
     """List auto-test rules."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         rules = session.execute(
@@ -3250,7 +3250,7 @@ def rule_list():
 @remoteable(_rule_delete_remote)
 def rule_delete(rule_id):
     """Delete an auto-test rule by ID."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         rule = session.execute(
@@ -3275,7 +3275,7 @@ def rule_delete(rule_id):
 @remoteable(_rule_test_webhook_remote)
 def rule_test_webhook(project, ref, event_type, sha, pr_number):
     """Simulate a webhook event to test rule matching (dry-run style)."""
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
         proj = session.execute(
