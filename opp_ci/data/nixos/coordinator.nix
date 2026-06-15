@@ -16,12 +16,15 @@ let
   stateDir = "/var/lib/opp_ci";
 
   # uvx ExecStart: pin opp_ci@ref with the coordinator extras, supply opp_repl
-  # from its opp_ci branch, and force a re-resolve of both on every start
-  # (--refresh-package) so a restart picks up the latest code on the ref.
+  # and opp_env from their opp_ci branches, and force a re-resolve of all three
+  # on every start (--refresh-package) so a restart picks up the latest code on
+  # the ref. opp_env is bundled (for dependency-lock / compatibility queries);
+  # the coordinator's env sets OPP_CI_OPP_ENV_CMD=opp_env to use it.
   execStart = "${cfg.uvPackage}/bin/uvx"
     + " --from \"opp_ci[web,postgres,client,podman] @ git+https://github.com/omnetpp/opp_ci.git@${cfg.ref}\""
     + " --with \"opp_repl[all] @ git+https://github.com/omnetpp/opp_repl.git@opp_ci\""
-    + " --refresh-package opp_ci --refresh-package opp_repl"
+    + " --with \"opp-env @ git+https://github.com/omnetpp/opp_env.git@opp_ci\""
+    + " --refresh-package opp_ci --refresh-package opp_repl --refresh-package opp-env"
     + " opp_ci coordinator start";
 
   # Typed non-secret options projected onto their OPP_CI_* vars. Nulls are
@@ -45,6 +48,9 @@ let
     # Workers run as opp_ci-worker-<name>.service (see worker.nix), so tell
     # the log viewer how to resolve their journals. Overridable via settings.
     OPP_CI_WORKER_UNIT_TEMPLATE             = "opp_ci-worker-{instance}.service";
+    # Dependency-lock / compatibility resolution shells out to `opp_env info`;
+    # use the opp_env bundled into the uvx env at the opp_ci branch.
+    OPP_CI_OPP_ENV_CMD                      = "opp_env";
   };
 in {
   options.services.opp_ci.coordinator = {

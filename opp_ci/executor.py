@@ -481,13 +481,12 @@ def run_test(project, kind, *, isolation=None, toolchain=None, recorder=None, **
 def _opp_env_cmd():
     """The argv prefix for invoking opp_env on the host-nix path.
 
-    Reads OPP_CI_OPP_ENV_CMD (default ``opp_env``) and shlex-splits it, so a
-    uvx-based service install can set ``uvx --from opp-env opp_env`` to run
-    opp_env from its own isolated venv. Read at call time so an env-file
-    override applied after import still takes effect.
+    Thin wrapper over :func:`config.opp_env_argv` (shared with the coordinator's
+    dependency resolution in opp_ci/dependency.py). Read at call time so an
+    env-file override applied after import still takes effect.
     """
     from opp_ci import config as cfg
-    return shlex.split(cfg.OPP_ENV_CMD)
+    return cfg.opp_env_argv()
 
 
 def _opp_env_pin_args(resolved_deps):
@@ -890,9 +889,9 @@ def _resolve_remote_head(url, ref="HEAD"):
     return line[0].split()[0]
 
 
+# Repo URLs / refs live in config (single source of truth, shared with
+# service.py). render_containerfile reads them via a lazy `cfg` import.
 _OPP_CI_REPO = "https://github.com/omnetpp/opp_ci.git"
-_OPP_REPL_REPO = "https://github.com/omnetpp/opp_repl.git"
-_OPP_ENV_REPO = "https://github.com/omnetpp/opp_env.git"
 
 
 def render_containerfile(toolchain, os_name, os_version, compiler, compiler_version,
@@ -926,6 +925,8 @@ def render_containerfile(toolchain, os_name, os_version, compiler, compiler_vers
     from jinja2 import Environment, FileSystemLoader
     import yaml
 
+    from opp_ci import config as cfg
+
     template_name = "host" if toolchain == "none" else toolchain
 
     # Containerfile templates pick package-manager rules off the *distro*
@@ -943,6 +944,10 @@ def render_containerfile(toolchain, os_name, os_version, compiler, compiler_vers
         "os_version": base_version,
         "compiler": compiler.lower() if compiler else None,
         "compiler_version": compiler_version,
+        # opp_repl is cloned + pip-installed by the entry script and (host
+        # image) baked for its [all] deps — both at the `opp_ci` branch.
+        "opp_repl_repo": cfg.OPP_REPL_REPO,
+        "opp_repl_ref": cfg.OPP_REPL_REF,
     }
     if template_name == "host":
         if not omnetpp_version:
@@ -959,9 +964,13 @@ def render_containerfile(toolchain, os_name, os_version, compiler, compiler_vers
         default_pkg = (f"g++-{ctx['compiler_version']}" if ctx['compiler'] == 'gcc'
                        else f"{ctx['compiler']}-{ctx['compiler_version']}")
         ctx["compiler_package"] = pkg_map.get(key, default_pkg)
-        ctx["opp_env_ref"] = _resolve_remote_head(_OPP_ENV_REPO) or "HEAD"
+        # Bake the SHA at the tip of opp_env's `opp_ci` branch (not its default
+        # branch HEAD), so the image tracks the same opp_env as the host paths.
+        ctx["opp_env_ref"] = (_resolve_remote_head(cfg.OPP_ENV_REPO, cfg.OPP_ENV_REF)
+                              or cfg.OPP_ENV_REF)
     elif template_name == "nix":
-        ctx["opp_env_ref"] = _resolve_remote_head(_OPP_ENV_REPO) or "HEAD"
+        ctx["opp_env_ref"] = (_resolve_remote_head(cfg.OPP_ENV_REPO, cfg.OPP_ENV_REF)
+                              or cfg.OPP_ENV_REF)
 
     files = {"Containerfile": jenv.get_template(f"Containerfile.{template_name}.j2").render(**ctx)}
     if template_name == "host":
@@ -1294,6 +1303,11 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         # The entrypoint reads this, opp_env-installs each project, and cd's
         # into the first one's install dir.
         run_flags += ["-e", f"OPP_CI_INSTALL_PROJECTS={catalog_install_id}"]
+    # opp_repl's --result-file writes result.to_dict() to this in-container path
+    # (a host dir is bind-mounted there at the tail) so we can read it into
+    # `details` afterwards — see plan §2.7. Build-only runs write nothing there,
+    # so details stays None.
+    container_result = "/opp_ci_result/result.json"
     if toolchain == "nix":
         run_flags += ["-v", f"{_NIX_STORE_VOLUME}:/nix"]
         if git_ref:
@@ -1346,7 +1360,9 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         # the build stage — see the taxonomy note in the plan.)
         repl_suffix = inner_cmd[len(COMMAND_MAP[kind]):]   # " --mode … --load … -p …"
         build_inner = "opp_build_project" + repl_suffix
-        test_inner = inner_cmd + " --no-build"
+        # --result-file captures the structured result into `details`; it is
+        # plumbing, so it stays out of the curated stage display below.
+        test_inner = inner_cmd + " --no-build" + f" --result-file {container_result}"
 
         def _oe_args(inner):
             return (["run", "--install", "--no-isolated", effective_project]
@@ -1381,22 +1397,40 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         pinned_deps = [t for t in dep_tokens if not t.startswith(f"{repl_project}-")]
         if pinned_deps:
             run_flags += ["-e", f"OPP_CI_PIN_DEPS={' '.join(pinned_deps)}"]
-        # Split build from test as two `internal run-direct` execs over the same
-        # container. They share the source — bind-mounted /work for a
-        # SimulationProject, or the installed dir for a catalog project — which
-        # persists across execs, so the build's artifacts are reused by the
-        # test. The build exec is `--kind build` (build-only); the test exec is
-        # the real kind with `--no-build`. (No --git-ref: the worktree was
-        # already checked out on the host and bind-mounted, see Checkout.)
-        common = ["internal", "run-direct", "--project", repl_project]
-        extra = []
-        if mode:
-            extra += ["--mode", mode]
-        if opp_file:
-            # Catalog runs omit --opp-file: opp_repl auto-discovers the .opp in
-            # cwd (the install dir set by the entrypoint).
-            extra += ["--opp-file", "/work/" + os.path.basename(opp_file)]
+        build_only = kind == "build"
+        test_command = COMMAND_MAP.get(kind)
+        if test_command is None:
+            raise ValueError(f"Unknown test kind: {kind!r}. Supported: {list(COMMAND_MAP.keys())}")
+        # Drive opp_repl's console scripts directly (no opp_ci inside the
+        # container — see plan §2.6), the same way the nix branch does. The
+        # entry script wraps the stage argv in `opp_env run -w <ws> <pins> -c`.
+        # Project-discovery flags mirror the nix branch:
+        #   --load @opp   bundled registry (omnetpp, inet, …)
+        #   --load <src>  the project's own .opp — its opp_env install-dir
+        #                 $<NAME>_ROOT for a catalog project (expanded by
+        #                 opp_env's -c shell), or the bind-mounted /work/<file>
+        #                 for a SimulationProject
+        #   -p <name>     select the project
+        repl_flags = ["--load", "@opp"]
+        if is_catalog:
+            root_var = repl_project.upper().replace("-", "_") + "_ROOT"
+            repl_flags += ["--load", f"${root_var}"]
+        else:
+            repl_flags += ["--load", "/work/" + os.path.basename(opp_file)]
+        repl_flags += ["-p", repl_project]
+        mode_flags = ["--mode", mode] if mode else []
         mode_suffix = f" --mode {mode}" if mode else ""
+        # Split build from test as two execs over the same container (shared
+        # source — bind-mounted /work or the catalog install dir — persists, so
+        # the test reuses the build's artifacts). opp_build_project for the
+        # build; the kind's test command with --no-build for the test. For
+        # kind=build the build is the whole job, so there is no test stage
+        # (opp_build_project has no --no-build flag).
+        build_args = ["opp_build_project"] + mode_flags + repl_flags
+        # --result-file captures the structured result into `details` (plumbing,
+        # kept out of the curated stage display).
+        test_args = ([test_command] + mode_flags + repl_flags
+                     + ["--no-build", "--result-file", container_result])
         run_stages = []
         if is_catalog:
             # Install the catalog project(s) once, as their own stage
@@ -1405,35 +1439,48 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
             # needs no install stage — its source is already at /work.
             run_stages.append(
                 (Stage.DEPS_INSTALL, ["--do-install"], f"opp_env install {repl_project}"))
-        run_stages += [
-            (Stage.PROJECT_BUILD, common + ["--kind", "build"] + extra,
-             "opp_build_project" + mode_suffix),
-            (Stage.TEST_RUN, common + ["--kind", kind, "--no-build"] + extra,
-             COMMAND_MAP.get(kind, kind) + mode_suffix + " --no-build"),
-        ]
+        run_stages.append(
+            (Stage.PROJECT_BUILD, build_args, "opp_build_project" + mode_suffix))
+        if not build_only:
+            run_stages.append(
+                (Stage.TEST_RUN, test_args, test_command + mode_suffix + " --no-build"))
         entry_script = "/opt/opp_ci_entry.sh"
 
-    return _run_podman_staged(
-        image=image, run_stages=run_stages, entry_script=entry_script,
-        run_flags=run_flags, recorder=recorder, git_ref=git_ref,
-        worktree_path=worktree_path, scratch_dir=scratch_dir)
+    # Create + bind-mount the host result dir now (after the branch logic, so an
+    # unknown-kind error can't leak it); read its result.json into `details`,
+    # then remove it.
+    result_dir = tempfile.mkdtemp(prefix="opp-ci-result-")
+    run_flags += ["-v", f"{result_dir}:/opp_ci_result:Z"]
+    try:
+        return _run_podman_staged(
+            image=image, run_stages=run_stages, entry_script=entry_script,
+            run_flags=run_flags, recorder=recorder, git_ref=git_ref,
+            worktree_path=worktree_path, scratch_dir=scratch_dir,
+            result_file=os.path.join(result_dir, "result.json"))
+    finally:
+        import shutil
+        shutil.rmtree(result_dir, ignore_errors=True)
 
 
 def _run_podman_staged(*, image, run_stages, entry_script, run_flags,
-                       recorder, git_ref, worktree_path, scratch_dir):
+                       recorder, git_ref, worktree_path, scratch_dir,
+                       result_file=None):
     """Run a podman job as a long-lived container driven stage by stage
     (option b of plan/pending/staged-execution-capture.md).
 
     Instead of one `podman run <image> <args>`, start the container detached
     (entrypoint overridden to idle) and drive it with separate `podman exec`s:
-    a runner.bootstrap stage (clone opp_ci/opp_repl + pip install via the
-    entry script's --bootstrap-only), then each (stage_name, args) in
-    *run_stages* via the entry script --skip-bootstrap. The nix path passes
-    two — project.build then test.run; the host path passes one combined
-    test.run. A failed stage aborts the rest (build fails → test skipped).
-    Each exec is captured like any host command. The container is always
-    removed in the finally — even if a stage fails or raises — so a crash
-    can't leak containers. Needs a real podman host to validate.
+    a runner.bootstrap stage (clone opp_repl + pip install via the entry
+    script's --bootstrap-only), then each (stage_name, args) in *run_stages*
+    via the entry script --skip-bootstrap. A failed stage aborts the rest
+    (build fails → test skipped). Each exec is captured like any host command.
+    The container is always removed in the finally — even if a stage fails or
+    raises — so a crash can't leak containers.
+
+    *result_file* (when given) is the host-side path of the opp_repl
+    ``--result-file`` JSON written by the test stage (via a bind-mounted
+    results dir); it is read into the returned ``details``. Needs a real podman
+    host to validate.
     """
     container = f"opp_ci_run_{uuid.uuid4().hex[:12]}"
     run_d = (["podman", "run", "-d", "--name", container]
@@ -1525,9 +1572,21 @@ def _run_podman_staged(*, image, run_stages, entry_script, run_flags,
         "test_exec_seconds": duration,
         "stdout": "".join(out_parts),
         "stderr": "".join(err_parts),
-        "details": None,
+        "details": _read_result_file(result_file) if result_file else None,
         "commit_sha": git_ref,
     }
+
+
+def _read_result_file(path):
+    """Read opp_repl's ``--result-file`` JSON (``result.to_dict()``) for the
+    out-of-process run paths (host-nix subprocess + podman), so it lands in
+    ``TestRun.details``. Missing/corrupt → None (the stage exit code still
+    drives PASS/FAIL); details only enriches."""
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
 
 
 def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwargs):
@@ -1622,13 +1681,26 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
                 "commit_sha": None,
             }
         # ── test.run ──────────────────────────────────────────────────
+        # opp_repl writes result.to_dict() to a temp file via --result-file; we
+        # read it into `details` (see plan §2.7). The flag is plumbing, so the
+        # recorder display keeps the clean `test_inner`.
         if recorder is not None:
             recorder.begin(Stage.TEST_RUN, command=test_inner)
+        fd, result_path = tempfile.mkstemp(prefix="opp-ci-result-", suffix=".json")
+        os.close(fd)
         start = time.time()
-        result = _opp_env_run(test_inner)
-        duration = time.time() - start
-        if recorder is not None:
-            recorder.end(result.returncode)
+        try:
+            result = _opp_env_run(
+                test_inner + f" --result-file {shlex.quote(result_path)}")
+            duration = time.time() - start
+            if recorder is not None:
+                recorder.end(result.returncode)
+            details = _read_result_file(result_path)
+        finally:
+            try:
+                os.remove(result_path)
+            except OSError:
+                pass
 
     result_code = "PASS" if result.returncode == 0 else "FAIL"
     return {
@@ -1636,7 +1708,7 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
         "test_exec_seconds": duration,
         "stdout": (build.stdout or "") + (result.stdout or ""),
         "stderr": (build.stderr or "") + (result.stderr or ""),
-        "details": None,
+        "details": details,
         "commit_sha": None,
     }
 

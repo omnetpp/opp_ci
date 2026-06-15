@@ -194,10 +194,17 @@ class ContainerPrepareStageTests(unittest.TestCase):
         self.assertEqual([s[0] for s in run_stages],
                          [Stage.PROJECT_BUILD, Stage.TEST_RUN])
         build_args, test_args = run_stages[0][1], run_stages[1][1]
-        self.assertIn("build", build_args)        # --kind build
+        # opp_ci is no longer used inside the container (plan §2.6): the host
+        # path drives opp_repl's console scripts directly, like the nix path.
+        self.assertNotIn("internal", build_args + test_args)
+        self.assertEqual(build_args[0], "opp_build_project")
         self.assertNotIn("--no-build", build_args)
-        self.assertIn("smoke", test_args)         # --kind smoke
+        self.assertEqual(test_args[0], "opp_run_smoke_tests")
         self.assertIn("--no-build", test_args)    # test exec skips the rebuild
+        # bind-mounted SimulationProject is loaded from /work, selected by name
+        self.assertIn("/work/mm1k.opp", test_args)
+        self.assertIn("-p", test_args)
+        self.assertIn("mm1k", test_args)
 
     def test_prepare_failure_recorded_and_raised(self):
         rec = StageRecorder()

@@ -107,7 +107,8 @@ Each worker is a named instance; the module creates one
 
 Per-instance options: `enable` (default true), `coordinatorUrl`,
 `pollInterval`, `heartbeatInterval`, `niceness`, `oppEnvCmd` (defaults to
-`uvx --from opp-env opp_env`), `settings`, and `environmentFiles` (carries
+`opp_env` — the bundled console script of the `opp_env` supplied to the uvx
+env at its `opp_ci` branch), `settings`, and `environmentFiles` (carries
 the worker token). The worker module enables rootless podman
 (`virtualisation.podman.enable`).
 

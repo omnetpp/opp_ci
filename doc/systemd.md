@@ -28,7 +28,8 @@ unit:
 ```
 uvx --from "opp_ci[web,postgres,client,podman] @ git+https://github.com/omnetpp/opp_ci.git@main" \
     --with "opp_repl[all] @ git+https://github.com/omnetpp/opp_repl.git@opp_ci" \
-    --refresh-package opp_ci --refresh-package opp_repl \
+    --with "opp-env @ git+https://github.com/omnetpp/opp_env.git@opp_ci" \
+    --refresh-package opp_ci --refresh-package opp_repl --refresh-package opp-env \
     opp_ci coordinator start
 ```
 
@@ -36,8 +37,12 @@ uvx --from "opp_ci[web,postgres,client,podman] @ git+https://github.com/omnetpp/
   `web,postgres,client,podman`; a worker gets `client,podman`.
 - `@main` is the opp_ci GitHub ref; set it with `--ref` at install time
   (a tag bounds surprise upgrades).
-- `opp_repl` is pulled from its **`opp_ci` branch** (it is not on PyPI).
-- `--refresh-package opp_ci opp_repl` is what delivers "latest each
+- `opp_repl` **and** `opp_env` are pulled from their **`opp_ci` branches**
+  (neither from PyPI). Bundling `opp_env` into the same uvx env puts its
+  `opp_env` console script on PATH for the worker (host-nix builds) and the
+  coordinator (dependency-lock / compatibility queries) — see
+  `OPP_CI_OPP_ENV_CMD` below.
+- `--refresh-package opp_ci opp_repl opp-env` is what delivers "latest each
   restart": without it, `uvx` caches the first resolved commit of a
   branch and reuses it forever.
 
@@ -122,11 +127,13 @@ Runtime options live in env files; the command line stays generic.
 | File | Read by | Mode | Keys |
 |---|---|---|---|
 | `/etc/opp_ci/opp_ci.env` | both | 0640 root:opp_ci | `OPP_CI_DATABASE_URL` |
-| `/etc/opp_ci/coordinator.env` | coordinator | 0640 root:opp_ci | `OPP_CI_COORDINATOR_HOST/PORT/TLS_CERT_FILE/TLS_KEY_FILE` |
+| `/etc/opp_ci/coordinator.env` | coordinator | 0640 root:opp_ci | `OPP_CI_COORDINATOR_HOST/PORT/TLS_CERT_FILE/TLS_KEY_FILE`, `OPP_CI_OPP_ENV_CMD` |
 | `/etc/opp_ci/workers/<name>.env` | one worker | 0600 opp_ci:opp_ci | `OPP_CI_COORDINATOR_URL`, `OPP_CI_WORKER_TOKEN`, `OPP_CI_WORKER_POLL_INTERVAL`, `OPP_CI_WORKER_HEARTBEAT_INTERVAL`, `OPP_CI_WORKER_NICENESS`, `OPP_CI_OPP_ENV_CMD` |
 
-`OPP_CI_OPP_ENV_CMD` is set to `uvx --from opp-env opp_env` so the
-host-nix opp_env path runs from its own isolated venv.
+`OPP_CI_OPP_ENV_CMD` is set to `opp_env` on both roles — the bare console
+script of the `opp_env` bundled into the uvx env at its `opp_ci` branch (see
+above). The worker uses it for host-nix builds; the coordinator for
+dependency-lock / compatibility resolution.
 
 To change a setting, edit the env file and restart:
 `sudo opp_ci worker service restart --name <name>`.

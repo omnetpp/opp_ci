@@ -33,8 +33,12 @@ from opp_ci import config as cfg
 # ── Constants ─────────────────────────────────────────────────────────────
 
 OPP_CI_GIT = "git+https://github.com/omnetpp/opp_ci.git"
-OPP_REPL_GIT = "git+https://github.com/omnetpp/opp_repl.git"
-OPP_REPL_REF = "opp_ci"  # opp_repl is pulled from this branch, not PyPI.
+# opp_repl and opp_env are pulled from their `opp_ci` branches (see config) —
+# not PyPI. Re-exported here for the renderers below.
+OPP_REPL_GIT = cfg.OPP_REPL_GIT
+OPP_REPL_REF = cfg.OPP_REPL_REF
+OPP_ENV_GIT = cfg.OPP_ENV_GIT
+OPP_ENV_REF = cfg.OPP_ENV_REF
 
 COORDINATOR_EXTRAS = "web,postgres,client,podman"
 WORKER_EXTRAS = "client,podman"
@@ -207,23 +211,28 @@ class InstallSpec:
 def uvx_argv(spec, *, uvx=None):
     """The full uvx argv that the unit's ExecStart runs.
 
-    Pins opp_ci to ``@<ref>`` with the role's extras, supplies opp_repl from
-    its ``opp_ci`` branch via ``--with``, and forces a re-resolve of both on
-    every start with ``--refresh-package`` (the "latest each restart"
+    Pins opp_ci to ``@<ref>`` with the role's extras and supplies both opp_repl
+    and opp_env from their ``opp_ci`` branches via ``--with`` (so the bundled
+    ``opp_env`` console script lands on PATH for the process and its children —
+    see ``OPP_CI_OPP_ENV_CMD=opp_env`` in the env renderers). ``--refresh-package``
+    forces a re-resolve of all three on every start (the "latest each restart"
     mechanism). The opp_ci subcommand carries no runtime options — all config
     comes from env files.
     """
     uvx = uvx or spec.uvx_path()
     from_spec = f"opp_ci[{spec.extras}] @ {OPP_CI_GIT}@{spec.ref}"
-    with_spec = f"opp_repl[all] @ {OPP_REPL_GIT}@{OPP_REPL_REF}"
+    repl_spec = f"opp_repl[all] @ {OPP_REPL_GIT}@{OPP_REPL_REF}"
+    env_spec = f"opp-env @ {OPP_ENV_GIT}@{OPP_ENV_REF}"
     subcommand = (["coordinator", "start"] if spec.role == "coordinator"
                   else ["worker", "start"])
     return [
         uvx,
         "--from", from_spec,
-        "--with", with_spec,
+        "--with", repl_spec,
+        "--with", env_spec,
         "--refresh-package", "opp_ci",
         "--refresh-package", "opp_repl",
+        "--refresh-package", "opp-env",
         "opp_ci", *subcommand,
     ]
 
@@ -259,13 +268,18 @@ def render_shared_env(spec, *, database_url=None):
 
 
 def render_coordinator_env(spec):
-    """``/etc/opp_ci/coordinator.env`` — coordinator runtime options."""
+    """``/etc/opp_ci/coordinator.env`` — coordinator runtime options.
+
+    Includes ``OPP_CI_OPP_ENV_CMD=opp_env`` so dependency-lock / compatibility
+    resolution (which shells out to ``opp_env info``) uses the opp_env bundled
+    into the coordinator's uvx env at the ``opp_ci`` branch (see uvx_argv)."""
     return _render_env(
         [
             ("OPP_CI_COORDINATOR_HOST", spec.host),
             ("OPP_CI_COORDINATOR_PORT", spec.port),
             ("OPP_CI_COORDINATOR_TLS_CERT_FILE", spec.cert),
             ("OPP_CI_COORDINATOR_TLS_KEY_FILE", spec.key),
+            ("OPP_CI_OPP_ENV_CMD", "opp_env"),
         ],
         header="/etc/opp_ci/coordinator.env — opp_ci-coordinator options (0640 root:opp_ci)",
     )
@@ -274,8 +288,9 @@ def render_coordinator_env(spec):
 def render_worker_env(spec):
     """``/etc/opp_ci/workers/<name>.env`` — one worker's runtime options.
 
-    Includes ``OPP_CI_OPP_ENV_CMD`` so the host-nix opp_env path runs through
-    its own uvx tool (isolated venv)."""
+    Includes ``OPP_CI_OPP_ENV_CMD=opp_env`` so the host-nix opp_env path uses
+    the opp_env bundled into the worker's uvx env at the ``opp_ci`` branch (see
+    uvx_argv), rather than a PyPI release."""
     return _render_env(
         [
             ("OPP_CI_COORDINATOR_URL", spec.coordinator),
@@ -283,7 +298,7 @@ def render_worker_env(spec):
             ("OPP_CI_WORKER_POLL_INTERVAL", spec.poll_interval),
             ("OPP_CI_WORKER_HEARTBEAT_INTERVAL", spec.heartbeat_interval),
             ("OPP_CI_WORKER_NICENESS", spec.niceness),
-            ("OPP_CI_OPP_ENV_CMD", "uvx --from opp-env opp_env"),
+            ("OPP_CI_OPP_ENV_CMD", "opp_env"),
         ],
         header=f"/etc/opp_ci/workers/{spec.name}.env — opp_ci worker (0600 opp_ci:opp_ci)",
     )

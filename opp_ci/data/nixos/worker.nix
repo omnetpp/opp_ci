@@ -18,7 +18,8 @@ let
   execStart = "${top.uvPackage}/bin/uvx"
     + " --from \"opp_ci[client,podman] @ git+https://github.com/omnetpp/opp_ci.git@${top.ref}\""
     + " --with \"opp_repl[all] @ git+https://github.com/omnetpp/opp_repl.git@opp_ci\""
-    + " --refresh-package opp_ci --refresh-package opp_repl"
+    + " --with \"opp-env @ git+https://github.com/omnetpp/opp_env.git@opp_ci\""
+    + " --refresh-package opp_ci --refresh-package opp_repl --refresh-package opp-env"
     + " opp_ci worker start";
 
   instanceModule = { name, ... }: {
@@ -35,8 +36,9 @@ let
       heartbeatInterval = lib.mkOption { type = lib.types.int; default = 30; };
       niceness = lib.mkOption { type = lib.types.int; default = 10; };
       oppEnvCmd = lib.mkOption {
-        type = lib.types.str; default = "uvx --from opp-env opp_env";
-        description = "opp_env launcher for the host-nix path → OPP_CI_OPP_ENV_CMD.";
+        type = lib.types.str; default = "opp_env";
+        description = "opp_env launcher for the host-nix path → OPP_CI_OPP_ENV_CMD. "
+          + "Defaults to the opp_env bundled into the worker's uvx env at the opp_ci branch.";
       };
       settings = lib.mkOption {
         type = settingsType; default = {};

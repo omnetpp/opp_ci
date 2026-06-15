@@ -1,13 +1,14 @@
 """Tests for opp_ci.service (uvx-based service management).
 
 Covers plan/pending/uvx-service-management.md §11:
-  * the embedded uvx command — right extras per role, @<ref>, opp_repl from
-    its opp_ci branch, and --refresh-package opp_ci opp_repl;
+  * the embedded uvx command — right extras per role, @<ref>, opp_repl and
+    opp_env from their opp_ci branches, and --refresh-package opp_ci opp_repl
+    opp-env;
   * option → env-var mapping in the rendered env files;
   * coordinator unit / worker template / target / plist / wrapper / newsyslog /
     env files render with the expected key lines;
   * the unprivileged manual recipe lists files + contents + commands;
-  * OPP_CI_OPP_ENV_CMD ("uvx --from opp-env opp_env") in the worker env;
+  * OPP_CI_OPP_ENV_CMD ("opp_env") in the worker and coordinator env;
   * the NixOS module/flake render correctly (right ExecStart, EnvironmentFile=
     references, pkgs.uv on path, no secrets in the module) and the NixOS
     detector picks the render-only branch even as root.
@@ -42,7 +43,10 @@ class UvxCommandTest(unittest.TestCase):
                       "git+https://github.com/omnetpp/opp_ci.git@main", cmd)
         self.assertIn("opp_repl[all] @ "
                       "git+https://github.com/omnetpp/opp_repl.git@opp_ci", cmd)
-        self.assertIn("--refresh-package opp_ci --refresh-package opp_repl", cmd)
+        self.assertIn("opp-env @ "
+                      "git+https://github.com/omnetpp/opp_env.git@opp_ci", cmd)
+        self.assertIn("--refresh-package opp_ci --refresh-package opp_repl "
+                      "--refresh-package opp-env", cmd)
         self.assertTrue(cmd.endswith("opp_ci coordinator start"))
         self.assertTrue(cmd.startswith(UVX))
 
@@ -81,7 +85,11 @@ class EnvFileTest(unittest.TestCase):
 
     def test_worker_env_has_opp_env_cmd(self):
         body = service.render_worker_env(worker_spec(name="w1"))
-        self.assertIn('OPP_CI_OPP_ENV_CMD="uvx --from opp-env opp_env"', body)
+        self.assertIn("OPP_CI_OPP_ENV_CMD=opp_env", body)
+
+    def test_coordinator_env_has_opp_env_cmd(self):
+        body = service.render_coordinator_env(coordinator_spec())
+        self.assertIn("OPP_CI_OPP_ENV_CMD=opp_env", body)
 
     def test_unset_options_omitted(self):
         body = service.render_coordinator_env(coordinator_spec())
@@ -150,7 +158,7 @@ class ManualTranscriptTest(unittest.TestCase):
         t = service.render_manual_transcript(plan)
         self.assertIn("workers/b1.env", t)
         self.assertIn("OPP_CI_WORKER_TOKEN=TK", t)
-        self.assertIn("uvx --from opp-env opp_env", t)
+        self.assertIn("OPP_CI_OPP_ENV_CMD=opp_env", t)
 
     def test_uv_copy_in_transcript_for_non_self_install(self):
         spec = worker_spec(name="b1", user="opp_ci")
@@ -215,7 +223,9 @@ class NixosRenderTest(unittest.TestCase):
         self.assertRegex(coord, r"OPP_CI_COORDINATOR_PORT\s*=\s*toString cfg\.port;")
         self.assertIn("path = [ cfg.uvPackage ];", coord)
         self.assertIn("${cfg.uvPackage}/bin/uvx", coord)
-        self.assertIn("--refresh-package opp_ci --refresh-package opp_repl", coord)
+        self.assertIn("opp-env @ git+https://github.com/omnetpp/opp_env.git@opp_ci", coord)
+        self.assertIn("--refresh-package opp_ci --refresh-package opp_repl "
+                      "--refresh-package opp-env", coord)
         self.assertIn("opp_ci coordinator start", coord)
         self.assertIn("EnvironmentFile = cfg.environmentFiles;", coord)
         self.assertIn("services.postgresql", coord)

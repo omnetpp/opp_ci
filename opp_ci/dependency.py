@@ -44,9 +44,10 @@ def query_opp_env_info(project_version):
         dict with project info including 'required_projects', or None on failure.
     """
     _logger.debug("Querying opp_env info for %s", project_version)
+    from opp_ci import config as cfg
     try:
         result = subprocess.run(
-            ["opp_env", "info", project_version, "--raw"],
+            cfg.opp_env_argv() + ["info", project_version, "--raw"],
             capture_output=True, text=True
         )
     except FileNotFoundError:
@@ -79,9 +80,10 @@ def query_opp_env_versions(project_name):
         list of version strings, or empty list on failure.
     """
     _logger.debug("Querying opp_env versions for %s", project_name)
+    from opp_ci import config as cfg
     try:
         result = subprocess.run(
-            ["opp_env", "info", project_name, "--raw"],
+            cfg.opp_env_argv() + ["info", project_name, "--raw"],
             capture_output=True, text=True
         )
     except FileNotFoundError:

@@ -7,6 +7,7 @@ Run with: python -m unittest tests.test_bare_metal_opp_env
 """
 
 import contextlib
+import json
 import os
 import subprocess
 import unittest
@@ -98,6 +99,57 @@ class BareMetalOppEnvTests(unittest.TestCase):
         self.assertNotIn("--no-build", self.calls[0][-1])
         self.assertIn("opp_run_smoke_tests", self.calls[1][-1])
         self.assertIn("--no-build", self.calls[1][-1])
+
+    def test_result_file_on_test_not_build(self):
+        # opp_repl's --result-file rides on the test command only; the build
+        # (opp_build_project) has no such flag.
+        executor.run_test(
+            "mm1k", "smoke", isolation="none", toolchain="none",
+            resolved_deps={"omnetpp": "6.4.0"})
+        self.assertNotIn("--result-file", self.calls[0][-1])
+        self.assertIn("--result-file", self.calls[1][-1])
+
+
+class HostNixResultCaptureTests(unittest.TestCase):
+    """The host-nix path reads opp_repl's --result-file JSON into details."""
+
+    def setUp(self):
+        self.details = {"results": [{"name": "Foo", "result": "PASS"}],
+                        "elapsed_wall_time": 2.0}
+
+        def _writing_run_external(args, **kwargs):
+            joined = " ".join(str(a) for a in args)
+            if "--result-file" in joined:
+                toks = joined.split()
+                path = toks[toks.index("--result-file") + 1]
+                with open(path, "w") as f:
+                    json.dump(self.details, f)
+            return _ok(args)
+
+        patches = [
+            mock.patch.object(executor, "run_external", _writing_run_external),
+            mock.patch.object(executor, "_opp_env_workspace",
+                              lambda **kw: "/tmp/ws-test"),
+            mock.patch.object(executor, "_gc_workspaces", lambda: None),
+            mock.patch.object(executor, "_workspace_lock",
+                              lambda ws: contextlib.nullcontext()),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_details_captured_from_result_file(self):
+        outcome = executor.run_test(
+            "mm1k", "smoke", isolation="none", toolchain="none",
+            resolved_deps={"omnetpp": "6.4.0"})
+        self.assertEqual(outcome["result_code"], "PASS")
+        self.assertEqual(outcome["details"], self.details)
+
+    def test_build_kind_has_no_details(self):
+        outcome = executor.run_test(
+            "mm1k", "build", isolation="none", toolchain="none",
+            resolved_deps={"omnetpp": "6.4.0"})
+        self.assertIsNone(outcome["details"])
 
 
 class ProjectInstallDirTests(unittest.TestCase):

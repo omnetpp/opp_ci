@@ -1,4 +1,5 @@
 import os
+import shlex
 import socket
 
 
@@ -125,10 +126,38 @@ WORKSPACE_ROOT = os.path.expanduser(
 WORKSPACE_MAX = int(os.environ.get("OPP_CI_WORKSPACE_MAX", "10"))
 
 # Command the worker shells out to for the host-nix opp_env path. Default is
-# the bare `opp_env` on PATH; a uvx-based service install sets this to
-# "uvx --from opp-env opp_env" so opp_env runs from its own isolated venv.
-# Parsed with shlex.split at the call sites in opp_ci/executor.py.
+# the bare `opp_env` on PATH (dev / bare-metal); a uvx-based service install
+# sets this to the bundled `opp_env` (see service.uvx_argv) or, in the isolated
+# fallback, "uvx --from <git+opp_env@opp_ci> opp_env".
+# Parsed with shlex.split at the call sites in opp_ci/executor.py and
+# opp_ci/dependency.py.
 OPP_ENV_CMD = os.environ.get("OPP_CI_OPP_ENV_CMD", "opp_env")
+
+
+def opp_env_argv():
+    """argv prefix for invoking opp_env, shared by the host-nix executor path
+    and the coordinator's dependency-lock / compatibility resolution.
+
+    Reads ``OPP_ENV_CMD`` (``OPP_CI_OPP_ENV_CMD``) at call time and shlex-splits
+    it, so an env-file override (or a test monkeypatch of this module's
+    ``OPP_ENV_CMD``) applied after import still takes effect."""
+    return shlex.split(OPP_ENV_CMD)
+
+
+# ── opp_repl / opp_env source pins ─────────────────────────────────────────
+#
+# opp_repl and opp_env are pulled from their `opp_ci` branches everywhere they
+# enter a worker or coordinator (uvx service env, NixOS modules, podman
+# images), never from PyPI. Centralised here so service.py (uvx --with / env)
+# and executor.py (podman image pins) share one source of truth. Each ref is
+# env-overridable so a dev or topic build can point elsewhere without code
+# edits; the default is the `opp_ci` branch.
+OPP_REPL_REPO = "https://github.com/omnetpp/opp_repl.git"   # plain: git clone / ls-remote
+OPP_ENV_REPO = "https://github.com/omnetpp/opp_env.git"
+OPP_REPL_GIT = "git+" + OPP_REPL_REPO                        # pip / uvx spec
+OPP_ENV_GIT = "git+" + OPP_ENV_REPO
+OPP_REPL_REF = os.environ.get("OPP_CI_OPP_REPL_REF", "opp_ci")
+OPP_ENV_REF = os.environ.get("OPP_CI_OPP_ENV_REF", "opp_ci")
 
 # Absolute path to the `uvx` binary baked into generated service units. Empty
 # → the service installer resolves/copies uvx for the service user and writes
