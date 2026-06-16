@@ -31,6 +31,12 @@
                     {% elif w.status == "busy" %}<span class="badge badge-running">busy</span>
                     {% else %}<span class="badge badge-queued">{{ w.status }}</span>{% endif %}
                 </td></tr>
+            <tr><th style="text-align:left;">Shutdown</th>
+                <td>
+                    {% if w.shutdown_requested %}<span class="badge badge-running">⏼ shutdown pending</span>
+                    <span style="color:var(--muted); font-size:0.85rem;">— relayed on the next poll; cleared when the worker re-registers</span>
+                    {% else %}<span style="color:var(--muted);">—</span>{% endif %}
+                </td></tr>
             <tr><th style="text-align:left;">Version</th>
                 <td>{% if w.software_version %}<code>{{ w.software_version }}</code>
                     {% else %}<span style="color:var(--muted);">unknown</span>{% endif %}</td></tr>

@@ -63,6 +63,7 @@
         <tr><th>Created</th><td>{{ run.created_at.strftime("%Y-%m-%d %H:%M:%S") if run.created_at else "-" }}</td></tr>
         <tr><th>Started</th><td>{{ run.started_at.strftime("%Y-%m-%d %H:%M:%S") if run.started_at else "-" }}</td></tr>
         <tr><th>Finished</th><td>{{ run.finished_at.strftime("%Y-%m-%d %H:%M:%S") if run.finished_at else "-" }}</td></tr>
+        <tr><th>Reclaims</th><td>{% if run.reclaim_count %}<strong>{{ run.reclaim_count }}</strong> <span style="color:var(--muted); font-size:0.85rem;">— re-queued after its worker went dark mid-run</span>{% else %}0{% endif %}</td></tr>
         <tr><th>Trigger <span class="derived-tag" title="derived: from matrix_run.trigger">derived</span></th><td>{{ run.trigger or "-" }}</td></tr>
         <tr><th>Cache fingerprint</th><td>{% if run.cache_fingerprint %}<code>{{ run.cache_fingerprint }}</code>{% else %}-{% endif %}</td></tr>
         {% if run.github_owner %}

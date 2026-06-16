@@ -86,6 +86,7 @@
         </td></tr>
         {% endif %}
         <tr><th>Expands to <span class="derived-tag" title="derived offline from the config (axis cardinalities × refs) — not stored; a base..topic range is counted per commit since its commits resolve at run time">derived</span></th><td>{{ expansion_summary }}</td></tr>
+        <tr><th>Matrix hash <span class="derived-tag" title="derived: SHA-256 of the matrix content (project, opp_file, canonical config). Content-addresses a resolved matrix so re-resolving to the same content reuses the snapshot. NULL on legacy rows.">derived</span></th><td>{% if matrix.matrix_hash %}<code>{{ matrix.matrix_hash }}</code>{% else %}-{% endif %}</td></tr>
         <tr><th>Created at</th><td>{{ matrix.created_at.strftime("%Y-%m-%d %H:%M:%S") if matrix.created_at else "-" }}</td></tr>
     </table>
 </div>

@@ -93,6 +93,7 @@
                 <th>Expected</th>
                 <th>Verdict</th>
                 <th>Cache</th>
+                <th>Recorded</th>
             </tr>
         </thead>
         <tbody>
@@ -138,10 +139,13 @@
                         -
                     {% endif %}
                 </td>
+                <td style="white-space:nowrap; font-size:0.85rem; color:var(--muted);">
+                    {% if c.verdict.recorded_at %}<span title="when the verdict was promoted (vs. created_at, when the cell row was inserted)">{{ c.verdict.recorded_at.strftime("%Y-%m-%d %H:%M:%S") }}</span>{% else %}-{% endif %}
+                </td>
             </tr>
             {% if current_user.role in ("submitter", "admin") and v in (None, "UNKNOWN", "UNEXPECTED") %}
             <tr>
-                <td colspan="11" style="padding:0.3rem 0.8rem;">
+                <td colspan="12" style="padding:0.3rem 0.8rem;">
                     <form method="post" action="/tests/{{ c.test.id }}/expectations" class="inline-form" style="display:flex; gap:0.5rem; align-items:center;">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <input type="hidden" name="return_to" value="/test-matrix-runs/{{ mr.id }}">
