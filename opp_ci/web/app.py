@@ -1740,7 +1740,8 @@ def _build_matrix_config_from_form(*, project, kinds, modes, versions,
                                    omnetpp_versions, refs, os, os_version,
                                    distro, distro_version, flavor, flavor_version,
                                    arch, compiler, compiler_version, isolation,
-                                   toolchain, ref_range_base, ref_range_head):
+                                   toolchain, ref_range_base, ref_range_head,
+                                   workers="", worker_tags=""):
     """Assemble a matrix `config` dict from the axis form fields.
 
     Used by `matrix_create` for both Save and Save & run so the CSV axes,
@@ -1775,6 +1776,12 @@ def _build_matrix_config_from_form(*, project, kinds, modes, versions,
         config["ref_range"] = {"base": ref_range_base.strip(), "head": ref_range_head.strip()}
         config.pop("refs", None)
 
+    # Routing constraint (not a product axis): worker names → worker:<name>,
+    # raw tags verbatim; mirrors scheduler._build_matrix_config.
+    selector = [f"worker:{w}" for w in _split_csv(workers)] + _split_csv(worker_tags)
+    if selector:
+        config["worker_selector"] = sorted(set(selector))
+
     return config
 
 
@@ -1800,6 +1807,8 @@ def matrix_create(
     compiler_version: str = Form(default=""),
     isolation: str = Form(default=""),
     toolchain: str = Form(default=""),
+    workers: str = Form(default=""),
+    worker_tags: str = Form(default=""),
     ref_range_base: str = Form(default=""),
     ref_range_head: str = Form(default=""),
     expected_result_code: str = Form(default=""),
@@ -1820,6 +1829,7 @@ def matrix_create(
             flavor=flavor, flavor_version=flavor_version, arch=arch,
             compiler=compiler, compiler_version=compiler_version,
             isolation=isolation, toolchain=toolchain,
+            workers=workers, worker_tags=worker_tags,
             ref_range_base=ref_range_base, ref_range_head=ref_range_head,
         )
         # An underspecified matrix (no compiler/arch) is a recipe: it must be

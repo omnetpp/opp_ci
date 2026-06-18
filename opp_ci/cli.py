@@ -363,7 +363,8 @@ def _list_matrices_remote():
 def _create_matrix_remote(name, project, kinds, modes, os_names, os_versions,
                           distros, distro_versions, flavors, flavor_versions,
                           compilers, compiler_versions, arches, versions, refs,
-                          ref_range, deps, isolation, toolchain, opp_file, replace):
+                          ref_range, deps, isolation, toolchain, workers,
+                          worker_tags, opp_file, replace):
     from opp_ci.scheduler import _build_matrix_config
 
     try:
@@ -375,6 +376,7 @@ def _create_matrix_remote(name, project, kinds, modes, os_names, os_versions,
             compilers=compilers, compiler_versions=compiler_versions,
             arches=arches, refs=refs, ref_range=ref_range,
             deps=deps, isolation=isolation, toolchain=toolchain,
+            workers=workers, worker_tags=worker_tags,
         )
     except ValueError as e:
         raise click.ClickException(str(e))
@@ -1862,13 +1864,18 @@ def list_projects():
 @click.option("--deps", default=None, help="Dependency versions axis (e.g. 'omnetpp=6.3.0,6.2.0;inet=4.5')")
 @click.option("--isolation", default=None, help="Comma-separated isolation values: 'none' and/or 'podman' (cross-product axis)")
 @click.option("--toolchain", default=None, help="Comma-separated toolchain values: 'none' and/or 'nix' (cross-product axis)")
+@click.option("--worker", "workers", default=None,
+              help="Limit to specific worker(s) by name (comma-separated). Routes every cell only to the named worker(s).")
+@click.option("--worker-tag", "worker_tags", default=None,
+              help="Limit to workers advertising tag(s) (comma-separated, e.g. 'gpu,team:core'). ANDed with --worker.")
 @click.option("--opp-file", "opp_file", default=None, help="Path to the project's .opp file (for opp_repl project discovery)")
 @click.option("--replace", is_flag=True, help="Replace existing matrix with the same name")
 @remoteable(_create_matrix_remote)
 def create_matrix(name, project, kinds, modes, os_names, os_versions,
                   distros, distro_versions, flavors, flavor_versions,
                   compilers, compiler_versions, arches, versions, refs,
-                  ref_range, deps, isolation, toolchain, opp_file, replace):
+                  ref_range, deps, isolation, toolchain, workers, worker_tags,
+                  opp_file, replace):
     """Create a test matrix configuration.
 
     Platform axes form a three-level hierarchy:
@@ -1892,6 +1899,7 @@ def create_matrix(name, project, kinds, modes, os_names, os_versions,
             compilers=compilers, compiler_versions=compiler_versions,
             arches=arches, refs=refs, ref_range=ref_range,
             deps=deps, isolation=isolation, toolchain=toolchain,
+            workers=workers, worker_tags=worker_tags,
         )
     except ValueError as e:
         raise click.ClickException(str(e))
@@ -1928,8 +1936,30 @@ def create_matrix(name, project, kinds, modes, os_names, os_versions,
             click.echo(f"  {' × '.join(parts)}")
         if len(jobs) > 10:
             click.echo(f"  ... and {len(jobs) - 10} more")
+
+        selector = config.get("worker_selector")
+        if selector:
+            click.echo(f"  routed to workers matching: {', '.join(selector)}")
+            _warn_if_no_worker_matches(session, selector)
     finally:
         session.close()
+
+
+def _warn_if_no_worker_matches(session, selector):
+    """Best-effort heads-up at submit time: warn (don't block) when no
+    *enabled* worker's effective tags could ever satisfy the selector, so a
+    typo is caught before the queue-expiry sweep reaps the runs minutes
+    later. A registered-but-offline worker still counts (its implicit
+    worker:<name> tag is included), so a fleet that is merely down is not
+    flagged."""
+    from opp_ci.persistence import worker_effective_tags
+    workers = session.execute(select(Worker).where(Worker.enabled.is_(True))).scalars().all()
+    need = set(selector)
+    if not any(need.issubset(worker_effective_tags(w)) for w in workers):
+        click.echo(
+            f"  WARNING: no enabled worker advertises all of {{{', '.join(selector)}}}; "
+            "these runs will sit unclaimed until a matching worker appears "
+            "(or be expired as unserviceable).", err=True)
 
 
 @main.command("list-matrices")

@@ -45,7 +45,7 @@ from opp_ci.persistence import (
     get_matrix_by_name, get_or_create_test, get_test_by_name, insert_expectation,
     job_to_coord, parse_expectation_override,
     set_test_name, status_filter, update_worker, validate_run_filters,
-    validate_test_coord, worker_can_serve,
+    validate_test_coord, worker_can_serve_run,
 )
 
 _logger = logging.getLogger(__name__)
@@ -638,7 +638,7 @@ async def worker_poll(
             .where(TestRun.lifecycle == TestRunLifecycle.queued)
             .order_by(TestRun.id)
         ).scalars():
-            if _worker_can_run(worker, candidate.test):
+            if _worker_can_run(worker, candidate):
                 claimed_run = candidate
                 break
 
@@ -682,13 +682,14 @@ async def worker_poll(
         session.close()
 
 
-def _worker_can_run(worker, test):
-    """Return True if *worker* may claim a TestRun targeting *test* — both
-    *capable* (required tags ⊆ worker tags) and *willing* (passes its
-    run-filters). Delegates to persistence.worker_can_serve, the rule shared
-    with the queue-expiry sweep.
+def _worker_can_run(worker, run):
+    """Return True if *worker* may claim *run* — both *capable* (the test's
+    required capability tags plus the run's optional worker_selector ⊆ the
+    worker's effective tags, advertised ∪ worker:<name>) and *willing*
+    (passes its run-filters). Delegates to persistence.worker_can_serve_run,
+    the rule shared with the queue-expiry sweep.
     """
-    return worker_can_serve(worker, test)
+    return worker_can_serve_run(worker, run)
 
 
 @router.post("/workers/snapshot")

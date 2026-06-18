@@ -77,6 +77,8 @@
         <tr><th>Compiler Versions</th><td>{{ matrix.config.get("compiler_version", ["-"])|join(", ") }}</td></tr>
         <tr><th>Isolations</th><td>{{ matrix.config.get("isolation", ["none"])|join(", ") }}</td></tr>
         <tr><th>Toolchains</th><td>{{ matrix.config.get("toolchain", ["none"])|join(", ") }}</td></tr>
+        {% set worker_selector = matrix.config.get("worker_selector") %}
+        {% if worker_selector %}<tr><th>Worker selector <span class="derived-tag" title="routing constraint applied to every cell (not a product axis): only workers advertising all these tags may claim these runs. worker:&lt;name&gt; pins a single worker.">routing</span></th><td>{{ worker_selector|join(", ") }}</td></tr>{% endif %}
         {% set deps_axis = matrix.config.get("deps", {}) %}
         {% if deps_axis %}
         <tr><th>Deps</th><td>

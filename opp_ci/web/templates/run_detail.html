@@ -55,6 +55,7 @@
         <tr><th>Commit</th><td><code>{{ run.commit_sha or "-" }}</code></td></tr>
         <tr><th>Matrix run</th><td>{% if run.matrix_run_id %}<a href="/test-matrix-runs/{{ run.matrix_run_id }}">#{{ run.matrix_run_id }}</a>{% if run.matrix_id %} <span class="derived-tag" title="derived: matrix link from matrix_run.matrix_id">matrix</span> <a href="/test-matrices/{{ run.matrix_id }}">#{{ run.matrix_id }}</a>{% endif %}{% else %}-{% endif %}</td></tr>
         <tr><th>Worker</th><td>{% if run.worker %}{{ run.worker.name }}{% elif run.worker_id %}#{{ run.worker_id }}{% else %}-{% endif %}</td></tr>
+        {% if run.worker_selector %}<tr><th>Worker selector</th><td>{{ run.worker_selector | join(", ") }} <span class="derived-tag" title="routing constraint: only workers advertising all these tags may claim this run (worker:&lt;name&gt; pins a single worker)">routing</span></td></tr>{% endif %}
         <tr><th>Lifecycle</th><td>{{ run.lifecycle.value }}</td></tr>
         <tr><th>Result</th><td>{{ run.result_code.value if run.result_code else "-" }}</td></tr>
         <tr><th>Verdict <span class="derived-tag" title="derived: latest promoted TestVerdict for this run (by recorded_at, then created_at)">derived</span></th><td>{% if run.recorded_verdict %}<span class="badge badge-{{ run.recorded_verdict }}">{{ run.recorded_verdict }}</span>{% else %}-{% endif %}</td></tr>

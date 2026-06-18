@@ -79,9 +79,44 @@ emits these automatically by reading `/etc/os-release`.
 
 Name/value parts are lowercased. Tags outside this scheme (for example
 `linux`, `gcc-13`, `perf-counters`) are accepted by the API but never
-gate dispatch — treat them as documentation. The scheduler matches each
-queued job's required subset against the worker's advertised tags
-before dispatching.
+gate dispatch *on their own* — treat them as documentation, unless a
+matrix's [worker selector](#limiting-which-worker-runs-a-test) names
+them. The scheduler matches each queued job's required subset against
+the worker's advertised tags before dispatching.
+
+## Limiting which worker runs a test
+
+By default any worker whose capability tags cover a run may claim it. To
+pin a matrix to specific worker(s), or restrict it to a class of
+workers, add a **worker selector** — extra tags ANDed onto the run's
+required set:
+
+```
+opp_ci create-matrix --name perf --project inet --kinds statistical \
+    --worker bigbox              # only the worker named "bigbox"
+opp_ci create-matrix ... --worker-tag gpu          # only workers tagged "gpu"
+opp_ci create-matrix ... --worker bigbox,fastbox --worker-tag gpu   # ANDed
+```
+
+- `--worker <name>` pins by worker *name*. Every worker implicitly
+  advertises a `worker:<name>` tag (its unique name), so this needs no
+  setup on the worker side.
+- `--worker-tag <tag>` restricts to workers advertising a raw capability
+  tag (e.g. a custom `gpu`, `team:core`). Set such tags on the worker
+  with `--tags` at register time.
+- Multiple values are ANDed: a worker must satisfy the platform/compiler
+  capability tags **and** every selector tag to claim the run.
+
+The selector is a *routing* constraint, not part of a Test's identity:
+it lives on the `TestRun`, never on the test coordinate or cache key, so
+routing the same build to a different worker does not fork the cache. It
+is also applied to every cell of the matrix, not multiplied into the
+cross-product. A selector no enabled worker can satisfy (e.g. a typo'd
+name) is reported at submit time and the runs are expired as
+[unserviceable](#coordinator-reaper) like any other misroute.
+
+The matrix create form (web UI) exposes the same as the **Limit to
+workers** / **Limit to worker tags** fields.
 
 ## Run-filters (opt out of work you *can* do)
 

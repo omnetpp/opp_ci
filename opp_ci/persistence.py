@@ -330,14 +330,35 @@ def create_matrix_run(session, *, matrix_id, trigger="manual", ref=None,
     return matrix_run
 
 
+def normalise_worker_selector(selector):
+    """Canonicalise a worker selector into a sorted, de-duplicated list of
+    tag strings, or None when empty. Accepts None, a single tag string, or
+    an iterable of tags; blank entries are dropped.
+
+    Tags are taken verbatim — the worker-name → ``worker:<name>`` sugar is
+    applied at the input boundary (the ``--worker`` flag / matrix `workers`
+    axis) so a raw custom label like ``gpu`` is never silently rewritten."""
+    if not selector:
+        return None
+    if isinstance(selector, str):
+        selector = [selector]
+    tags = {tag.strip() for tag in selector if tag and tag.strip()}
+    return sorted(tags) or None
+
+
 def create_test_run(session, *, test_id, matrix_run_id=None,
                     commit_sha=None, git_ref=None, version=None,
-                    resolved_deps=None, cache_fingerprint=None):
+                    resolved_deps=None, cache_fingerprint=None,
+                    worker_selector=None):
     """Create a queued TestRun targeting `test_id`.
 
     Refuses an unresolved (recipe) Test: a recipe carries loose/moving inputs
     and is inert until resolve() mints a pinned Test from it (the "can't run a
     recipe" invariant).
+
+    `worker_selector` is an optional routing constraint (a list of extra
+    capability tags the claiming worker must advertise); see
+    required_tags_for_run.
     """
     test = session.get(Test, test_id)
     if test is not None and not test.is_resolved:
@@ -353,6 +374,7 @@ def create_test_run(session, *, test_id, matrix_run_id=None,
         resolved_deps=resolved_deps,
         lifecycle=TestRunLifecycle.queued,
         cache_fingerprint=cache_fingerprint,
+        worker_selector=normalise_worker_selector(worker_selector),
     )
     session.add(run)
     session.flush()
@@ -1003,6 +1025,35 @@ def worker_can_serve(worker, test):
     return worker_accepts_test(worker.run_filters or {}, test)
 
 
+def worker_effective_tags(worker):
+    """The tag set a worker matches against: its advertised tags plus the
+    implicit `worker:<name>` tag (worker names are unique), so a
+    ``worker:<name>`` selector pins a run to exactly that box without
+    anyone having to add the tag by hand."""
+    return set(worker.tags or []) | {f"worker:{worker.name}"}
+
+
+def required_tags_for_run(run):
+    """Tags a worker must advertise to claim *run*: the Test's capability
+    requirements unioned with the run's optional `worker_selector` (the
+    user-supplied routing constraint). Matched against the worker's effective
+    tags (see worker_effective_tags); willingness (run-filters) is a separate
+    gate — see worker_can_serve_run."""
+    return required_tags_for_test(run.test) | set(run.worker_selector or [])
+
+
+def worker_can_serve_run(worker, run):
+    """True if *worker* can serve *run*: willing (run-filters) and its effective
+    tags (advertised ∪ worker:<name>) cover both the test's required capability
+    tags and the run's worker_selector. The run-level counterpart of
+    worker_can_serve (which is test-level, selector-unaware); shared by the poll
+    matcher (web.api) and the unserviceable-queue sweep.
+    """
+    if not worker_accepts_test(worker.run_filters or {}, run.test):
+        return False
+    return required_tags_for_run(run).issubset(worker_effective_tags(worker))
+
+
 def retire_unserviceable_run(session, run, now, required, *, declined_by_filter=False):
     """Terminally fail a queued run no enabled worker can serve.
 
@@ -1067,12 +1118,14 @@ def expire_unserviceable_queued_runs(session, now, workers, timeout_seconds):
     ).scalars().all()
     expired = 0
     for run in stale_queued:
-        required = required_tags_for_test(run.test)
-        if any(worker_can_serve(w, run.test) for w in enabled):
+        required = required_tags_for_run(run)
+        if any(worker_can_serve_run(w, run) for w in enabled):
             continue  # serviceable — legitimate backlog, leave it queued
         # Unserviceable: distinguish "no capable worker" from "capable workers
-        # all opt out", so the operator sees the real cause.
-        capable = any(required.issubset(set(w.tags or [])) for w in enabled)
+        # all opt out", so the operator sees the real cause. Capability here
+        # includes the run's worker_selector, matched against effective tags
+        # (advertised ∪ worker:<name>).
+        capable = any(required.issubset(worker_effective_tags(w)) for w in enabled)
         retire_unserviceable_run(session, run, now, required,
                                  declined_by_filter=capable)
         expired += 1
@@ -1243,6 +1296,7 @@ def enqueue_job(session, job, *, project, opp_file=None, matrix_run_id=None,
         version=job.get("version"),
         resolved_deps=coord["resolved_deps"],
         cache_fingerprint=cache_fingerprint,
+        worker_selector=job.get("worker_selector"),
     )
     tv = None
     if matrix_run_id is not None:

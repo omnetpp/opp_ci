@@ -558,6 +558,15 @@ class TestRun(Base):
     git_ref = Column(String, nullable=True)
     version = Column(String, nullable=True)
     resolved_deps = Column(JSON, nullable=True)
+    # Routing constraint, NOT identity. A list of extra capability tags the
+    # claiming worker must advertise (unioned onto the Test's required set;
+    # see persistence.required_tags_for_run). NULL = no extra constraint —
+    # any capability-matching worker may claim it. Deliberately kept off
+    # Test.coord_hash: where a run is routed doesn't change what the Test is
+    # or its result, and folding it into identity would fragment the cache.
+    # Every worker implicitly advertises `worker:<name>`, so pinning to one
+    # box is the selector ["worker:<name>"].
+    worker_selector = Column(JSON, nullable=True)
 
     # Lifecycle (always set)
     lifecycle = Column(Enum(TestRunLifecycle), nullable=False, default=TestRunLifecycle.queued)

@@ -127,7 +127,8 @@ def _build_matrix_config(*, project, kinds, modes="release", versions=None,
                          flavors=None, flavor_versions=None,
                          compilers=None, compiler_versions=None,
                          arches=None, refs=None, ref_range=None,
-                         deps=None, isolation=None, toolchain=None):
+                         deps=None, isolation=None, toolchain=None,
+                         workers=None, worker_tags=None):
     """Compose a matrix-config dict from `create-matrix`'s flat CLI flags.
 
     The single source of truth for "CLI flags → matrix config": both the
@@ -164,6 +165,17 @@ def _build_matrix_config(*, project, kinds, modes="release", versions=None,
             config[key] = _split(value)
     if deps:
         config["deps"] = _parse_deps_axis(deps)
+    # Routing constraint, not a cross-product axis: a single selector applied
+    # to every cell of the expansion (see expand_matrix). `workers` are
+    # worker *names* (each → the implicit "worker:<name>" tag); `worker_tags`
+    # are raw capability tags taken verbatim (e.g. "gpu", "team:core"). Both
+    # are ANDed onto the run's required set, so a worker must satisfy all of
+    # them to claim a cell.
+    selector = [f"worker:{w}" for w in _split(workers)] if workers else []
+    if worker_tags:
+        selector += _split(worker_tags)
+    if selector:
+        config["worker_selector"] = sorted(set(selector))
     return config
 
 
@@ -637,6 +649,9 @@ def expand_matrix(project, config):
     isolations = _resolve_isolation_axis(config)
     toolchains = _resolve_toolchain_axis(config)
     arches = _resolve_arch_axis(config)
+    # Routing constraint applied to every cell (not a product axis): the same
+    # worker_selector rides on each job dict and onto each TestRun.
+    worker_selector = config.get("worker_selector") or None
 
     jobs = []
     for (version, (ref, commit_sha), kind, mode, platform_cell, arch,
@@ -670,6 +685,7 @@ def expand_matrix(project, config):
                 flavor=flavor, flavor_version=flavor_ver,
             ),
             "resolved_deps": dep_pins or None,
+            "worker_selector": worker_selector,
         })
 
     _logger.info("Expanded matrix for %s: %d jobs", project, len(jobs))
