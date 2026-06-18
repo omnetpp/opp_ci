@@ -58,6 +58,26 @@ class BareMetalOppEnvTests(unittest.TestCase):
             "mm1k", isolation="none", toolchain="nix", resolved_deps=None)
         self.assertEqual(self.calls, [["opp_env", "install", "--init", "mm1k-latest"]])
 
+    def test_install_git_dep_uses_git_at_commit_token(self):
+        # A git-ref omnetpp dependency installs the -git variant at the pinned
+        # commit via opp_env's name@ref syntax.
+        executor.install_project(
+            "mm1k", isolation="none", toolchain="none",
+            resolved_deps={"omnetpp": {"git": "omnetpp-6.x", "commit": "a" * 40}})
+        self.assertEqual(self.calls, [[
+            "opp_env", "install", "--init", "--nixless-workspace",
+            "omnetpp-git@" + "a" * 40, "mm1k-latest",
+        ]])
+
+    def test_install_git_source_ref_baked_into_project_token(self):
+        # A source git ref is realized as inet-git@<ref> (no global env var).
+        executor.install_project(
+            "inet", git_ref="b" * 40, isolation="none", toolchain="nix",
+            resolved_deps=None)
+        self.assertEqual(self.calls, [[
+            "opp_env", "install", "--init", "inet-git@" + "b" * 40,
+        ]])
+
     def test_install_podman_is_noop(self):
         executor.install_project(
             "mm1k", isolation="podman", toolchain="none",

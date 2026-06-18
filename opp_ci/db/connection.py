@@ -41,3 +41,13 @@ def get_session():
         yield session
     finally:
         session.close()
+
+
+def __getattr__(name):
+    """Back-compat: ``from opp_ci.db.connection import engine`` still works,
+    resolving lazily through :func:`get_engine` so the import has no side
+    effect until the engine is actually touched. Test modules created before
+    the lazy-engine refactor rely on this attribute."""
+    if name == "engine":
+        return get_engine()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

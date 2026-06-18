@@ -89,10 +89,13 @@ def _parse_compiler(combined):
 def _parse_deps_axis(deps_str):
     """Parse 'omnetpp=6.3.0,6.2.0;inet=4.5' into a deps-axis dict.
 
-    Returns {"omnetpp": ["6.3.0", "6.2.0"], "inet": ["4.5"]}. Raises
-    ValueError on a malformed clause. Framework-agnostic so both the CLI
-    and the REST handler can call it.
+    Returns {"omnetpp": ["6.3.0", "6.2.0"], "inet": ["4.5"]}. A value may be a
+    git ref ('omnetpp=git@omnetpp-6.x'), which parses to a ``{"git": "<ref>"}``
+    object that resolution later pins to a commit; release strings pass through
+    unchanged. Raises ValueError on a malformed clause. Framework-agnostic so
+    both the CLI and the REST handler can call it.
     """
+    from opp_ci.dependency import parse_dep_value
     result = {}
     for part in deps_str.split(";"):
         part = part.strip()
@@ -102,7 +105,7 @@ def _parse_deps_axis(deps_str):
             raise ValueError(
                 f"Invalid deps format: expected 'name=ver1,ver2', got '{part}'")
         name, versions = part.split("=", 1)
-        result[name.strip()] = [v.strip() for v in versions.split(",") if v.strip()]
+        result[name.strip()] = [parse_dep_value(v) for v in versions.split(",") if v.strip()]
     return result
 
 
@@ -374,6 +377,16 @@ def _is_full_sha(ref):
             and all(c in "0123456789abcdef" for c in ref.lower()))
 
 
+def _dep_is_moving(value):
+    """A deps-axis value is *moving* (unresolved) when it names a git ref not
+    yet pinned to a concrete commit — a ``{"git": ref}`` object lacking a
+    40-hex ``commit``. Release version strings are never moving."""
+    if isinstance(value, dict):
+        commit = value.get("commit")
+        return not (commit and _is_full_sha(commit))
+    return False
+
+
 def matrix_is_recipe(config):
     """True if a matrix config is a *recipe* — not yet pinned all the way down,
     so it must be resolved before it can run. A matrix is a recipe when:
@@ -381,8 +394,10 @@ def matrix_is_recipe(config):
       * it lacks a compiler, an arch, or a platform (os/distro/flavor) — the
         fleet-resolvable coordinate axes a job needs to pass validation; **or**
       * its source is **moving** — a ``ref_range``, or a ``refs`` entry that
-        isn't a concrete commit SHA (a branch/tag/range). Resolution pins these
-        to SHAs so a resolved matrix never carries a moving ref.
+        isn't a concrete commit SHA (a branch/tag/range); **or**
+      * a ``deps`` entry names a **git ref** not yet pinned to a commit (a
+        branch/tag). Resolution pins both source and dep refs to SHAs so a
+        resolved matrix never carries a moving ref.
 
     A config with a full coordinate and only pinned-SHA refs is already
     resolved/runnable.
@@ -393,7 +408,10 @@ def matrix_is_recipe(config):
         return True
     if config.get("ref_range"):
         return True
-    return any(r and not _is_full_sha(r) for r in (config.get("refs") or []))
+    if any(r and not _is_full_sha(r) for r in (config.get("refs") or [])):
+        return True
+    return any(_dep_is_moving(v)
+               for vals in (config.get("deps") or {}).values() for v in vals)
 
 
 def _resolve_ref_range(project_name, range_str):
@@ -506,6 +524,38 @@ def pin_matrix_refs(project, config):
     out = dict(config)
     out["refs"] = pinned
     out.pop("ref_range", None)
+    return out
+
+
+def pin_matrix_deps(config):
+    """Return *config* with every moving git-ref **dependency** pinned to a
+    concrete commit SHA, so no moving dep branch/tag survives in a resolved
+    matrix (the dependency analogue of :func:`pin_matrix_refs`).
+
+    Each ``deps`` cell of the form ``{"git": <ref>}`` (no commit) is resolved
+    against *that dependency's* GitHub repo and rewritten to
+    ``{"git": <ref>, "commit": <sha>}``; release-version cells and cells already
+    pinned to a SHA pass through. A config with no ``deps`` is returned
+    unchanged. Strict: raises ValueError if a dep ref can't be resolved
+    (decision #7) — the dep must be a registered project with a GitHub repo.
+    """
+    deps = config.get("deps")
+    if not deps:
+        return config
+    pinned_deps = {}
+    for name, cells in deps.items():
+        out_cells = []
+        for cell in cells:
+            if isinstance(cell, dict) and not (
+                    cell.get("commit") and _is_full_sha(cell["commit"])):
+                ref = cell.get("git") or cell.get("ref")
+                sha = resolve_source_commit(name, ref)
+                out_cells.append({"git": ref, "commit": sha})
+            else:
+                out_cells.append(cell)
+        pinned_deps[name] = out_cells
+    out = dict(config)
+    out["deps"] = pinned_deps
     return out
 
 

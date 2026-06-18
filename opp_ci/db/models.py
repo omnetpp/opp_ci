@@ -247,18 +247,43 @@ TEST_COORD_FIELDS = (
 )
 
 
+def dep_identity_token(value):
+    """Canonical identity token for one resolved-dependency value.
+
+    A dependency's identity is *what gets built*. A release version string
+    (``"6.4.0"``) is its own token. A git ref pinned to a commit
+    (``{"git": "omnetpp-6.x", "commit": "<sha>"}``) reduces to ``"git:<sha>"``
+    — the commit fully determines the build, and the branch/tag label is
+    descriptive only, so the ref you resolved from never re-keys identity
+    (mirrors how the source uses ``commit_sha`` for identity, not ``git_ref``).
+    An *unpinned* git ref (no commit — a recipe, never run) falls back to
+    ``"git@<ref>"`` so the cache fingerprint stays stable and conservative.
+    """
+    if isinstance(value, dict):
+        commit = value.get("commit")
+        if commit:
+            return "git:" + str(commit).lower()
+        ref = value.get("git") or value.get("ref")
+        return "git@" + str(ref)
+    return value
+
+
 def normalise_deps(resolved_deps):
-    """Canonicalise a resolved_deps mapping into a sorted-keys dict.
+    """Canonicalise a resolved_deps mapping into a sorted-keys dict of
+    identity tokens.
 
     `None` and the empty dict are equivalent (no pinned dependencies), so
-    they hash identically. Defined here (the lowest-level module) so both
-    Test identity and the cache fingerprint share one canonicalisation;
-    `fingerprint.py` imports this rather than redefining it.
+    they hash identically. Each value is reduced to its
+    :func:`dep_identity_token`, so a plain release string hashes exactly as
+    before (back-compat) while a git-ref dep hashes by its pinned commit.
+    Defined here (the lowest-level module) so both Test identity and the
+    cache fingerprint share one canonicalisation; `fingerprint.py` imports
+    this rather than redefining it.
     """
     if not resolved_deps:
         return {}
     if isinstance(resolved_deps, dict):
-        return {k: resolved_deps[k] for k in sorted(resolved_deps)}
+        return {k: dep_identity_token(resolved_deps[k]) for k in sorted(resolved_deps)}
     # Defensive: stringify whatever it is so callers don't crash.
     return {"_raw": str(resolved_deps)}
 

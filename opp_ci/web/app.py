@@ -962,10 +962,12 @@ def test_new_submit(
                 message_type="error")
         # Always pin the complete transitive lock; the omnetpp form field is a
         # pin into the closure, not the whole lock.
-        from opp_ci.dependency import complete_lock_for_submit
+        from opp_ci.dependency import complete_lock_for_submit, parse_dep_value
         pins = {}
         if omnetpp_version and project != "omnetpp":
-            pins["omnetpp"] = omnetpp_version
+            # Accept a release version or a git ref ("git@omnetpp-6.x"), which
+            # resolution pins to a commit.
+            pins["omnetpp"] = parse_dep_value(omnetpp_version)
         try:
             resolved_deps = complete_lock_for_submit(project, pins=pins) or None
         except ValueError as e:

@@ -33,6 +33,12 @@ class DependencyResolutionError(ValueError):
     """
 
 
+def _is_git_pin(value):
+    """True if a resolved-dep value names a git ref (a ``{"git": ...}`` object)
+    rather than an opp_env release version string."""
+    return isinstance(value, dict)
+
+
 def query_opp_env_info(project_version):
     """
     Query opp_env for project info in raw JSON format.
@@ -182,14 +188,19 @@ def resolve_dependencies(project_version, pins=None, *, transitive=True,
             compatible = compatible or []
             if dep_name in pins:
                 chosen = pins[dep_name]
-                if compatible and chosen not in compatible:
+                # A git-ref pin is an explicit override — it won't appear in
+                # opp_env's list of compatible *release* versions, so the
+                # compatibility check is skipped (the user named that ref).
+                if (not _is_git_pin(chosen)
+                        and compatible and chosen not in compatible):
                     raise ValueError(
                         f"Pinned version '{dep_name}-{chosen}' is not compatible "
                         f"with {node}. Compatible versions: {compatible}"
                     )
             elif dep_name in resolved:
                 chosen = resolved[dep_name]
-                if compatible and chosen not in compatible:
+                if (not _is_git_pin(chosen)
+                        and compatible and chosen not in compatible):
                     # A deeper node demands a version incompatible with the one
                     # already locked: the closure has no single consistent pick.
                     if require_complete:
@@ -218,7 +229,10 @@ def resolve_dependencies(project_version, pins=None, *, transitive=True,
             resolved[dep_name] = chosen
             _logger.info("Locked dependency %s to %s", dep_name, chosen)
             if transitive:
-                queue.append(f"{dep_name}-{chosen}")
+                # A git-ref dep's own transitive requirements come from its
+                # ``-git`` variant; a release dep from its versioned node.
+                queue.append(f"{dep_name}-git" if _is_git_pin(chosen)
+                             else f"{dep_name}-{chosen}")
 
     return resolved
 
@@ -239,8 +253,14 @@ def complete_lock_for_submit(project, version=None, pins=None, *,
     `require_complete=True` (the default) enforces reject-incomplete (raise
     `DependencyResolutionError` rather than persist a partial lock) — the
     plan's decision #7. Pass False only for a deliberately best-effort lock.
+
+    A git-ref pin (``{"git": <ref>}``) is first resolved to a concrete commit
+    (``{"git": <ref>, "commit": <sha>}``) against that dependency's repo, so a
+    git dependency is pinned all the way down before it keys Test identity —
+    the dependency analogue of pinning the source ref. Matrix cells arrive
+    already pinned (see ``pin_matrix_deps``), so this is a no-op for them.
     """
-    pins = pins or {}
+    pins = _pin_git_pins(pins or {}, require_complete)
     if not version:
         pv = project
     elif version.startswith(f"{project}-"):
@@ -254,27 +274,98 @@ def complete_lock_for_submit(project, version=None, pins=None, *,
     return lock
 
 
+def _pin_git_pins(pins, require_complete):
+    """Resolve each ``{"git": ref}`` pin (no commit) to ``{"git": ref,
+    "commit": sha}`` against that dependency's GitHub repo, so a git-ref
+    dependency is pinned for repeatability before it keys identity. Already
+    pinned cells and release-version strings pass through untouched. Strict
+    under ``require_complete`` (reject-incomplete, decision #7); best-effort
+    callers keep the unpinned ref when resolution fails."""
+    out = {}
+    for name, value in pins.items():
+        if isinstance(value, dict) and not value.get("commit"):
+            ref = value.get("git") or value.get("ref")
+            try:
+                from opp_ci.scheduler import resolve_source_commit
+                out[name] = {"git": ref, "commit": resolve_source_commit(name, ref)}
+            except ValueError as e:
+                if require_complete:
+                    raise DependencyResolutionError(
+                        f"Could not pin git ref {ref!r} for dependency {name!r}: {e}")
+                out[name] = value
+        else:
+            out[name] = value
+    return out
+
+
+def parse_dep_value(raw):
+    """Parse one deps-axis / pin value string into its stored form.
+
+    A value carrying an ``@`` (e.g. ``"git@omnetpp-6.x"`` or ``"@omnetpp-6.x"``)
+    names a **git ref** → a git-ref object ``{"git": "<ref>"}`` that resolution
+    later pins to a commit. Anything else is a plain opp_env version string
+    (``"6.4.0"``, or the bare ``"git"`` that tracks the variant's default
+    branch). The part before ``@`` (if any) is advisory and ignored — the
+    ``-git`` variant is selected at build time regardless.
+    """
+    raw = (raw or "").strip()
+    if "@" in raw:
+        _, ref = raw.split("@", 1)
+        ref = ref.strip()
+        if not ref:
+            raise ValueError(f"Invalid git dep ref {raw!r}: expected 'git@<ref>'")
+        return {"git": ref}
+    return raw
+
+
 def parse_pins(pin_strings):
     """
-    Parse pin strings like ["omnetpp=6.1", "inet=4.5"] into a dict.
+    Parse pin strings like ["omnetpp=6.1", "inet=4.5", "omnetpp=git@omnetpp-6.x"]
+    into a dict.
 
     Args:
-        pin_strings: list of "name=version" strings
+        pin_strings: list of "name=version" strings; a value may be a git ref
+            ("name=git@<ref>") which becomes a ``{"git": <ref>}`` object.
 
     Returns:
-        dict mapping name to version
+        dict mapping name to a version string or a git-ref object
     """
     pins = {}
     for pin in pin_strings or []:
         if "=" not in pin:
             raise ValueError(f"Invalid pin format '{pin}': expected 'project=version'")
         name, version = pin.split("=", 1)
-        pins[name.strip()] = version.strip()
+        pins[name.strip()] = parse_dep_value(version)
     return pins
+
+
+def dep_build_token(name, value):
+    """The opp_env positional project token that builds one resolved dep.
+
+    A release version → ``"omnetpp-6.4.0"`` (built from its tarball/release).
+    A git ref → ``"omnetpp-git@<commit>"`` — the ``-git`` variant checked out
+    at the pinned commit (opp_env's ``name@ref`` syntax does a full-clone
+    ``git checkout``). A still-unpinned git ref falls back to its branch/tag
+    (defensive; a recipe shouldn't reach the build path).
+    """
+    if isinstance(value, dict):
+        ref = value.get("commit") or value.get("git") or value.get("ref")
+        return f"{name}-git@{ref}"
+    return f"{name}-{value}"
+
+
+def dep_display(name, value):
+    """Human label for one resolved dep — ``omnetpp-6.4.0`` for a release,
+    ``omnetpp@omnetpp-6.x (a1b2c3d)`` for a git ref (branch/tag + short SHA)."""
+    if isinstance(value, dict):
+        ref = value.get("git") or value.get("ref") or "git"
+        commit = value.get("commit")
+        return f"{name}@{ref} ({str(commit)[:8]})" if commit else f"{name}@{ref}"
+    return f"{name}-{value}"
 
 
 def format_resolved_deps(resolved):
     """Format resolved dependencies for display."""
     if not resolved:
         return "-"
-    return ", ".join(f"{name}-{ver}" for name, ver in resolved.items())
+    return ", ".join(dep_display(name, ver) for name, ver in resolved.items())

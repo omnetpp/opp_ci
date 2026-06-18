@@ -474,7 +474,7 @@ def resolve_matrix_recipe(session, recipe, *, commit_sha=None):
     if recipe.is_resolved:
         raise ValueError("Matrix is already resolved.")
     from opp_ci.fleet import fleet_tags, resolve_loose_matrix_axes
-    from opp_ci.scheduler import pin_matrix_refs
+    from opp_ci.scheduler import pin_matrix_refs, pin_matrix_deps
     resolved_config = resolve_loose_matrix_axes(recipe.config or {},
                                                 fleet_tags(session))
     if commit_sha:
@@ -485,6 +485,9 @@ def resolve_matrix_recipe(session, recipe, *, commit_sha=None):
         # Manual resolve: pin any moving branch/tag/range to concrete SHAs, so
         # the snapshot is pinned all the way down on its source too.
         resolved_config = pin_matrix_refs(recipe.project, resolved_config)
+    # Pin any moving git-ref dependency to a concrete commit too, so the
+    # snapshot is pinned all the way down on its dependency closure as well.
+    resolved_config = pin_matrix_deps(resolved_config)
     # Content-addressed: reuse an existing resolved snapshot with the same
     # pinned content rather than minting a duplicate (mirrors get_or_create_test).
     h = compute_matrix_hash(recipe.project, recipe.opp_file, resolved_config)

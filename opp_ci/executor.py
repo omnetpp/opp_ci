@@ -264,21 +264,24 @@ def _load_workspace(project_name, opp_file=None):
 
 def resolve_git_project(project, git_ref, *, toolchain="none"):
     """
-    Resolve the opp_env project name and git ref for testing.
+    Resolve the opp_env project name for testing a specific git ref.
 
-    Under toolchain=nix, a specific git_ref is realized by switching to the
-    project's '-git' variant (e.g. inet-git) and pinning the commit via the
-    OPP_ENV_GIT_REF env var. Under other toolchains the project name is left
-    untouched.
+    A git_ref is realized by switching to the project's '-git' variant and
+    baking the ref into opp_env's ``name@ref`` syntax (e.g.
+    ``inet-git@<commit>``), which does a full-clone ``git checkout`` of that
+    ref. This is the *same* per-project mechanism dependency pins use
+    (``omnetpp-git@<sha>``), so source and deps share one code path and
+    multiple git projects can coexist in one workspace — unlike the former
+    single global ``OPP_ENV_GIT_REF`` env var (which opp_env never read).
 
-    Returns (effective_project, effective_ref) tuple.
+    Returns (effective_project, effective_ref); ``effective_ref`` is always
+    None now — the ref rides inside the project token — but the second slot is
+    kept so existing call sites stay tuple-compatible.
     """
     if not git_ref:
         return project, None
-    if toolchain == "nix":
-        effective_project = f"{project}-git" if not project.endswith("-git") else project
-        return effective_project, git_ref
-    return project, git_ref
+    base = project if project.endswith("-git") else f"{project}-git"
+    return f"{base}@{git_ref}", None
 
 
 # A name already carries an explicit version when it ends in a numeric version
@@ -293,17 +296,18 @@ def resolve_opp_env_id(project, git_ref=None, *, toolchain="nix"):
     version of 'mm1k' do you mean?"); it needs a versioned identifier. The
     rules mirror the podman entrypoint's catalog-name split:
 
-      - a specific git_ref under nix → the '-git' variant (the caller pins the
-        commit via the OPP_ENV_GIT_REF env var)
+      - a specific git_ref → the '-git' variant with the ref baked in
+        (``inet-git@<commit>``), used verbatim
       - an already-versioned name (inet-4.5, mm1k-latest, foo-git) → kept as-is
       - a bare name → the '-latest' alias
 
-    Returns (effective_project, effective_ref).
+    Returns (effective_project, effective_ref); ``effective_ref`` is always
+    None (the ref rides inside the project token).
     """
-    effective_project, effective_ref = resolve_git_project(project, git_ref, toolchain=toolchain)
-    if effective_ref:
-        return effective_project, effective_ref
-    if _VERSIONED_NAME_RE.match(effective_project):
+    effective_project, _ = resolve_git_project(project, git_ref, toolchain=toolchain)
+    # A baked git ref (name-git@ref) or an already-versioned name is used as-is;
+    # only a bare catalog name needs the -latest alias.
+    if "@" in effective_project or _VERSIONED_NAME_RE.match(effective_project):
         return effective_project, None
     return f"{effective_project}-latest", None
 
@@ -492,14 +496,18 @@ def _opp_env_cmd():
 def _opp_env_pin_args(resolved_deps):
     """Turn a resolved_deps mapping into opp_env positional project pins.
 
-    ``{"omnetpp": "6.4.0"}`` → ``["omnetpp-6.4.0"]``. Passing these as
-    positional projects to ``opp_env install``/``run`` makes opp_env build the
-    *exact* pinned versions instead of resolving each dependency to its latest
-    (mirrors ``$OPP_CI_PIN_DEPS`` in the podman host entrypoint). Sorted for a
-    stable command line. Deps with no version are skipped.
+    ``{"omnetpp": "6.4.0"}`` → ``["omnetpp-6.4.0"]``; a git-ref dep
+    ``{"omnetpp": {"git": "omnetpp-6.x", "commit": "<sha>"}}`` →
+    ``["omnetpp-git@<sha>"]`` (the ``-git`` variant checked out at the pinned
+    commit). Passing these as positional projects to ``opp_env install``/``run``
+    makes opp_env build the *exact* pinned versions instead of resolving each
+    dependency to its latest (mirrors ``$OPP_CI_PIN_DEPS`` in the podman host
+    entrypoint). Sorted for a stable command line. Deps with no version are
+    skipped.
     """
+    from opp_ci.dependency import dep_build_token
     deps = resolved_deps if isinstance(resolved_deps, dict) else {}
-    return [f"{name}-{ver}" for name, ver in sorted(deps.items()) if ver]
+    return [dep_build_token(name, ver) for name, ver in sorted(deps.items()) if ver]
 
 
 def _project_install_dir(ws, project):
@@ -549,26 +557,31 @@ def _opp_env_workspace(*, project, resolved_deps, toolchain, compiler,
     (install *and* run) so GC's LRU reflects actual use, not creation.
     """
     from opp_ci import config
+    from opp_ci.db.models import dep_identity_token
 
     deps = resolved_deps if isinstance(resolved_deps, dict) else {}
     # Canonical, order-independent view of the coordinate: sorting keys and
     # normalising None→"" means dict iteration order or a missing axis can
-    # never shift the hash between the install and run steps.
+    # never shift the hash between the install and run steps. Each dep value is
+    # reduced to its identity token (release version, or "git:<sha>"), so two
+    # git commits of the same dep get distinct workspaces and a dict's key order
+    # can't perturb the hash.
     coordinate = {
         "project": project or "",
         "toolchain": toolchain or "",
         "compiler": compiler or "",
         "compiler_version": str(compiler_version or ""),
         "git_ref": git_ref or "",
-        "deps": {str(k): str(v) for k, v in sorted(deps.items())},
+        "deps": {str(k): dep_identity_token(v) for k, v in sorted(deps.items())},
     }
     canon = json.dumps(coordinate, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha1(canon.encode()).hexdigest()[:8]
 
     omnetpp = deps.get("omnetpp")
+    omnetpp_label = dep_identity_token(omnetpp).replace(":", "") if omnetpp else ""
     raw_prefix = "-".join(filter(None, [
         project or "proj",
-        f"omnetpp{omnetpp}" if omnetpp else "omnetpp",
+        f"omnetpp{omnetpp_label}" if omnetpp else "omnetpp",
         f"{compiler}{compiler_version}" if compiler else (toolchain or "nix"),
         (git_ref or "")[:8] or "none",
     ]))
@@ -1215,17 +1228,29 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
     flavor_version = kwargs.get("flavor_version")
     compiler = kwargs.get("compiler")
     compiler_version = kwargs.get("compiler_version")
+    from opp_ci.dependency import dep_build_token
     resolved_deps = kwargs.get("resolved_deps") or {}
-    omnetpp_version = resolved_deps.get("omnetpp") if isinstance(resolved_deps, dict) else None
+    deps_map = resolved_deps if isinstance(resolved_deps, dict) else {}
+    # A git-ref dependency would have to be baked into a *per-commit* runner
+    # image (the omnetpp version is part of the image tag and is opp_env-
+    # installed at image-build time). That threading isn't in place yet, so
+    # reject it with an actionable message rather than silently building the
+    # image's default omnetpp. isolation=none (host nix/nixless) supports it.
+    git_deps = [name for name, ver in deps_map.items() if isinstance(ver, dict)]
+    if git_deps:
+        raise ValueError(
+            f"git-ref dependencies {git_deps} are not yet supported under "
+            f"isolation=podman (they can't be baked into a runner image). "
+            f"Use isolation=none for a git-ref dependency.")
+    omnetpp_version = deps_map.get("omnetpp")
     # Every pinned dependency becomes an opp_env '<name>-<version>' token. opp_env
     # accepts these alongside the project on the command line (e.g. 'mm1k
     # omnetpp-6.2.0') and treats them as authoritative — without them it resolves
     # each dependency to its latest version, which would ignore the omnetpp baked
     # into the image and recompile a different one. We pass them to every opp_env
     # install/run below so the run's pins are honoured end to end.
-    dep_tokens = ([f"{name}-{ver}" for name, ver in resolved_deps.items()
-                   if isinstance(ver, str)]
-                  if isinstance(resolved_deps, dict) else [])
+    dep_tokens = [dep_build_token(name, ver) for name, ver in deps_map.items()
+                  if ver]
 
     image = _podman_image_tag(
         toolchain, os_name, os_version, compiler, compiler_version,
@@ -1310,9 +1335,14 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
     container_result = "/opp_ci_result/result.json"
     if toolchain == "nix":
         run_flags += ["-v", f"{_NIX_STORE_VOLUME}:/nix"]
+        # The source ref is realized by the bind-mounted host worktree (see
+        # _create_git_worktree above), not by opp_env — so the opp_env id here
+        # stays ref-free. A ref still selects the '-git' variant (its
+        # git-tracking dependency set), matching the prior behaviour.
         if git_ref:
-            run_flags += ["-e", f"OPP_ENV_GIT_REF={git_ref}"]
-        effective_project, _ = resolve_opp_env_id(project, git_ref, toolchain="nix")
+            effective_project = project if project.endswith("-git") else f"{project}-git"
+        else:
+            effective_project, _ = resolve_opp_env_id(project, None, toolchain="nix")
         inner_cmd = COMMAND_MAP.get(kind)
         if inner_cmd is None:
             raise ValueError(f"Unknown test kind: {kind!r}. Supported: {list(COMMAND_MAP.keys())}")
@@ -1616,9 +1646,9 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
     test_inner = test_command + mode_suffix + " --no-build"
 
     env = os.environ.copy()
-    effective_project, effective_ref = resolve_opp_env_id(project, git_ref, toolchain=toolchain)
-    if effective_ref:
-        env["OPP_ENV_GIT_REF"] = effective_ref
+    # The source ref (if any) rides inside effective_project as the opp_env
+    # `name-git@<ref>` token — no separate env var to set.
+    effective_project, _ = resolve_opp_env_id(project, git_ref, toolchain=toolchain)
 
     # Resolve the same per-coordinate workspace the install step created and
     # run from it (opp_env auto-detects the workspace from cwd). The axes —

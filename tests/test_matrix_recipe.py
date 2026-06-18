@@ -48,6 +48,42 @@ class RecipeDetectionTests(unittest.TestCase):
         # full coordinate + a pinned-SHA ref is resolved (no moving source)
         self.assertFalse(matrix_is_recipe({**full, "refs": ["a" * 40]}))
 
+    def test_moving_git_dep_is_recipe(self):
+        full = {"compiler": ["gcc-14"], "arch": ["amd64"], "distro": ["ubuntu"]}
+        # an unpinned git-ref dep (branch/tag) is moving → recipe
+        self.assertTrue(matrix_is_recipe(
+            {**full, "deps": {"omnetpp": [{"git": "omnetpp-6.x"}]}}))
+        # a release-version dep is not moving
+        self.assertFalse(matrix_is_recipe({**full, "deps": {"omnetpp": ["6.4.0"]}}))
+        # a git dep already pinned to a commit is resolved
+        self.assertFalse(matrix_is_recipe(
+            {**full, "deps": {"omnetpp": [{"git": "omnetpp-6.x", "commit": "a" * 40}]}}))
+        # mixed: any moving cell makes the whole matrix a recipe
+        self.assertTrue(matrix_is_recipe(
+            {**full, "deps": {"omnetpp": ["6.4.0", {"git": "omnetpp-6.x"}]}}))
+
+
+class ParseDepsAxisTests(unittest.TestCase):
+    def test_release_versions_pass_through(self):
+        from opp_ci.scheduler import _parse_deps_axis
+        self.assertEqual(_parse_deps_axis("omnetpp=6.4.0,6.3.0;inet=4.5"),
+                         {"omnetpp": ["6.4.0", "6.3.0"], "inet": ["4.5"]})
+
+    def test_git_ref_becomes_object(self):
+        from opp_ci.scheduler import _parse_deps_axis
+        self.assertEqual(_parse_deps_axis("omnetpp=git@omnetpp-6.x"),
+                         {"omnetpp": [{"git": "omnetpp-6.x"}]})
+
+    def test_mixed_release_and_git(self):
+        from opp_ci.scheduler import _parse_deps_axis
+        self.assertEqual(_parse_deps_axis("omnetpp=6.4.0,git@omnetpp-6.x"),
+                         {"omnetpp": ["6.4.0", {"git": "omnetpp-6.x"}]})
+
+    def test_at_prefix_optional(self):
+        from opp_ci.scheduler import _parse_deps_axis
+        self.assertEqual(_parse_deps_axis("omnetpp=@omnetpp-6.x"),
+                         {"omnetpp": [{"git": "omnetpp-6.x"}]})
+
 
 class DescribeExpansionTests(unittest.TestCase):
     def test_empty_config_is_one(self):
@@ -104,6 +140,69 @@ class PinMatrixRefsTests(unittest.TestCase):
         from opp_ci.scheduler import pin_matrix_refs
         cfg = {"kinds": ["smoke"], "compiler": ["gcc-14"]}
         self.assertEqual(pin_matrix_refs("inet", cfg), cfg)
+
+
+class PinMatrixDepsTests(unittest.TestCase):
+    def test_moving_git_dep_pinned_to_commit(self):
+        from opp_ci.scheduler import pin_matrix_deps
+        with mock.patch("opp_ci.scheduler.resolve_source_commit",
+                        return_value="c" * 40) as m:
+            out = pin_matrix_deps({"deps": {"omnetpp": [{"git": "omnetpp-6.x"}]}})
+        # resolved against the *dependency's* repo (omnetpp), not the source
+        m.assert_called_once_with("omnetpp", "omnetpp-6.x")
+        self.assertEqual(out["deps"]["omnetpp"],
+                         [{"git": "omnetpp-6.x", "commit": "c" * 40}])
+
+    def test_release_dep_unchanged(self):
+        from opp_ci.scheduler import pin_matrix_deps
+        cfg = {"deps": {"omnetpp": ["6.4.0"]}}
+        self.assertEqual(pin_matrix_deps(cfg), cfg)
+
+    def test_already_pinned_git_dep_unchanged(self):
+        from opp_ci.scheduler import pin_matrix_deps
+        cfg = {"deps": {"omnetpp": [{"git": "omnetpp-6.x", "commit": "a" * 40}]}}
+        # no resolution call should happen for an already-pinned cell
+        with mock.patch("opp_ci.scheduler.resolve_source_commit") as m:
+            out = pin_matrix_deps(cfg)
+        m.assert_not_called()
+        self.assertEqual(out["deps"]["omnetpp"],
+                         [{"git": "omnetpp-6.x", "commit": "a" * 40}])
+
+    def test_no_deps_unchanged(self):
+        from opp_ci.scheduler import pin_matrix_deps
+        cfg = {"kinds": ["smoke"], "refs": ["a" * 40]}
+        self.assertEqual(pin_matrix_deps(cfg), cfg)
+
+
+class GitPinTransitiveLockTests(unittest.TestCase):
+    """resolve_dependencies tolerates a git-ref pin (D5): it bypasses the
+    release-version compatibility check and walks the dep's -git node."""
+
+    def _info(self, node):
+        # inet requires omnetpp; omnetpp(-git) requires nothing.
+        if node.startswith("inet"):
+            return {"required_projects": {"omnetpp": ["6.4.0", "6.3.0"]}}
+        return {"required_projects": {}}
+
+    def test_git_pin_bypasses_compat_and_walks_git_node(self):
+        from opp_ci import dependency
+        visited = []
+
+        def fake_info(node):
+            visited.append(node)
+            return self._info(node)
+
+        with mock.patch.object(dependency, "query_opp_env_info", fake_info):
+            lock = dependency.resolve_dependencies(
+                "inet-git", pins={"omnetpp": {"git": "omnetpp-6.x", "commit": "a" * 40}},
+                transitive=True, require_complete=True)
+        # the git pin is kept verbatim (not rejected for being absent from the
+        # compatible release list) ...
+        self.assertEqual(lock["omnetpp"], {"git": "omnetpp-6.x", "commit": "a" * 40})
+        # ... and its transitive closure was walked via the -git node
+        self.assertIn("omnetpp-git", visited)
+        self.assertNotIn("omnetpp-{'git': 'omnetpp-6.x', 'commit': '%s'}" % ("a" * 40),
+                         visited)
 
 
 class ResolveMatrixAxesTests(unittest.TestCase):

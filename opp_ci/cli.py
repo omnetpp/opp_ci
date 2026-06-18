@@ -799,7 +799,13 @@ def _build_matrix_images(jobs, matrix_name, push):
         if (job.get("isolation") or "none") != "podman":
             continue
         deps = job.get("resolved_deps") or {}
-        omnetpp_version = deps.get("omnetpp") if isinstance(deps, dict) else None
+        omnetpp_dep = deps.get("omnetpp") if isinstance(deps, dict) else None
+        # Reduce to a hashable identity token (a git-ref dep is a dict, which
+        # can't key the dedup set). A git-ref omnetpp can't be prebaked into a
+        # podman image anyway — _run_test_in_podman rejects it with a clear
+        # message — but the key must stay hashable to reach that point.
+        from opp_ci.db.models import dep_identity_token
+        omnetpp_version = dep_identity_token(omnetpp_dep) if omnetpp_dep else None
         key = (
             job.get("toolchain") or "none",
             job.get("os"), job.get("os_version"),
@@ -971,7 +977,7 @@ def _resync_sequences(engine):
 @click.option("--arch", default=None, help="CPU architecture (e.g. 'amd64', 'aarch64'); omit to leave unconstrained")
 @click.option("--compiler", default=None, help="Compiler name (e.g. 'clang'); required for isolation=podman + toolchain=none")
 @click.option("--compiler-version", default=None, help="Compiler version (e.g. '22')")
-@click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
+@click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1, or a git ref --pin omnetpp=git@omnetpp-6.x). Repeatable.")
 @click.option("--expect", "expected_result_code", default=None,
               type=click.Choice(["PASS", "FAIL", "ERROR"], case_sensitive=False),
               help="Expected result stamped on a newly-created test; omit to use the global default.")
@@ -1861,7 +1867,7 @@ def list_projects():
 @click.option("--kinds", required=True, help="Comma-separated test kinds")
 @click.option("--refs", default=None, help="Comma-separated git refs to test (e.g. 'master,topic/my-feature')")
 @click.option("--ref-range", "ref_range", default=None, help="Git ref range (base..head) — enumerate commits via GitHub API")
-@click.option("--deps", default=None, help="Dependency versions axis (e.g. 'omnetpp=6.3.0,6.2.0;inet=4.5')")
+@click.option("--deps", default=None, help="Dependency versions axis (e.g. 'omnetpp=6.3.0,6.2.0;inet=4.5'). A value may be a git ref, e.g. 'omnetpp=git@omnetpp-6.x', which resolution pins to a commit.")
 @click.option("--isolation", default=None, help="Comma-separated isolation values: 'none' and/or 'podman' (cross-product axis)")
 @click.option("--toolchain", default=None, help="Comma-separated toolchain values: 'none' and/or 'nix' (cross-product axis)")
 @click.option("--worker", "workers", default=None,
@@ -1931,7 +1937,9 @@ def create_matrix(name, project, kinds, modes, os_names, os_versions,
             if job.get("git_ref"):
                 parts.append(f"@{job['git_ref']}")
             if job.get("resolved_deps"):
-                deps_str = " ".join(f"{k}={v}" for k, v in job["resolved_deps"].items())
+                from opp_ci.dependency import dep_display
+                deps_str = " ".join(dep_display(k, v)
+                                     for k, v in job["resolved_deps"].items())
                 parts.append(deps_str)
             click.echo(f"  {' × '.join(parts)}")
         if len(jobs) > 10:
@@ -2672,7 +2680,7 @@ def list_versions(project):
 
 @main.command("resolve-deps")
 @click.argument("project_version")
-@click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1). Repeatable.")
+@click.option("--pin", "pins", multiple=True, help="Pin dependency version (e.g. --pin omnetpp=6.1, or a git ref --pin omnetpp=git@omnetpp-6.x). Repeatable.")
 @remoteable(_resolve_deps_info)
 def resolve_deps_cmd(project_version, pins):
     """Resolve dependencies for a project version via opp_env.
