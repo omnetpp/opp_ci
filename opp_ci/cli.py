@@ -20,7 +20,8 @@ from opp_ci.executor import install_project, run_test
 from opp_ci.persistence import (
     capture_system_snapshot, create_matrix_run, create_test_run, delete_worker,
     enqueue_job, finalize_verdict_for_run, get_or_create_test,
-    insert_expectation, status_filter, update_worker,
+    format_run_filters, insert_expectation, status_filter, update_worker,
+    validate_run_filters,
 )
 from opp_ci.notes import update_ci_note
 
@@ -219,10 +220,11 @@ def _format_workers(rows):
         click.echo("No workers registered.")
         return
     click.echo(f"{'ID':<6} {'Name':<20} {'Status':<10} {'Enabled':<9} {'Jobs':<6} "
-               f"{'Cap':<6} {'Tags':<30} {'Last Heartbeat'}")
-    click.echo("-" * 120)
+               f"{'Cap':<6} {'Tags':<30} {'Run-filters':<30} {'Last Heartbeat'}")
+    click.echo("-" * 140)
     for w in rows:
         tags = ", ".join(w.get("tags") or []) or "-"
+        filters = format_run_filters(w.get("run_filters"))
         enabled = "no" if w.get("enabled") is False else "yes"
         hb = w.get("last_heartbeat")
         if hb:
@@ -232,7 +234,7 @@ def _format_workers(rows):
                 pass
         click.echo(f"{w['id']:<6} {w['name']:<20} {(w.get('status') or '-'):<10} "
                    f"{enabled:<9} {w.get('current_job_count', 0):<6} "
-                   f"{w.get('concurrency', 0):<6} {tags:<30} {hb or '-'}")
+                   f"{w.get('concurrency', 0):<6} {tags:<30} {filters:<30} {hb or '-'}")
 
 
 def _format_tokens(rows):
@@ -463,7 +465,9 @@ def _user_disable_remote(username):
     _remote(op)
 
 
-def _worker_register_remote(name, tags, auto_tags, concurrency):
+def _worker_register_remote(name, tags, auto_tags, concurrency,
+                            accept_isolation, deny_isolation, accept_toolchain,
+                            deny_toolchain, run_filter):
     explicit = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
     detected = _detect_capability_tags() if auto_tags else []
     seen, tag_list = set(), []
@@ -471,13 +475,19 @@ def _worker_register_remote(name, tags, auto_tags, concurrency):
         if t not in seen:
             tag_list.append(t)
             seen.add(t)
+    parsed = _parse_run_filters_opts(
+        accept_isolation=accept_isolation, deny_isolation=deny_isolation,
+        accept_toolchain=accept_toolchain, deny_toolchain=deny_toolchain,
+        run_filter=run_filter)
 
     def op(c):
-        w = c.register_worker(name, tags=tag_list, concurrency=concurrency)
+        w = c.register_worker(name, tags=tag_list, concurrency=concurrency,
+                              run_filters=parsed or None)
         click.echo(f"Worker '{w['name']}' registered.")
         click.echo(f"  ID:    {w['id']}")
         click.echo(f"  Token: {w['token']}")
         click.echo(f"  Tags:  {tag_list}")
+        click.echo(f"  Run-filters: {format_run_filters(parsed)}")
         if auto_tags and detected:
             click.echo(f"  (detected: {', '.join(detected)} on THIS host — "
                        f"usually not the worker host under --remote)")
@@ -529,27 +539,141 @@ def _resolve_tags(current, replace, add, remove, detected=None):
     return result
 
 
-def _remote_worker_tags(c, worker_id):
+def _csv(value):
+    """Split a comma-separated option value into a clean list."""
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def _parse_run_filters_opts(*, accept_isolation, deny_isolation,
+                            accept_toolchain, deny_toolchain, run_filter):
+    """Build a {axis: {allow|deny: [values]}} map from the worker run-filter
+    options. The isolation/toolchain shortcuts and the general
+    ``--run-filter AXIS=allow:v1,v2 | AXIS=deny:v1`` repeatable option feed the
+    same map. Raises click.UsageError on a conflict (allow+deny for one axis)
+    or a malformed --run-filter. Returns only the axes explicitly set (may be
+    empty), unvalidated against known values — persistence.validate_run_filters
+    does that.
+    """
+    parsed = {}
+
+    def _set(axis, mode, values):
+        if not values:
+            return
+        if axis in parsed and mode not in parsed[axis]:
+            raise click.UsageError(
+                f"run-filter for {axis!r}: cannot set both allow and deny")
+        parsed.setdefault(axis, {}).setdefault(mode, [])
+        parsed[axis][mode].extend(values)
+
+    for axis, accept, deny in (("isolation", accept_isolation, deny_isolation),
+                               ("toolchain", accept_toolchain, deny_toolchain)):
+        if accept:
+            _set(axis, "allow", _csv(accept))
+        if deny:
+            _set(axis, "deny", _csv(deny))
+
+    for spec in run_filter or ():
+        if "=" not in spec:
+            raise click.UsageError(
+                f"--run-filter must be AXIS=allow:v1,v2 or AXIS=deny:v1 (got {spec!r})")
+        axis, rhs = spec.split("=", 1)
+        axis = axis.strip()
+        if ":" not in rhs:
+            raise click.UsageError(
+                f"--run-filter {spec!r}: expected MODE:values after '=' "
+                f"(allow:… or deny:…)")
+        mode, values = rhs.split(":", 1)
+        mode = mode.strip()
+        if mode not in ("allow", "deny"):
+            raise click.UsageError(
+                f"--run-filter {spec!r}: mode must be 'allow' or 'deny'")
+        _set(axis, mode, _csv(values))
+
+    return parsed
+
+
+def _resolve_run_filters(current, parsed, clear_all, clear_axes):
+    """Compute the new run-filters dict from a parsed set plus clears.
+
+    Returns the new dict, or None when no run-filter change was requested (so
+    callers leave filters untouched). `parsed` replaces filters per-axis;
+    `clear_all` starts from empty; `clear_axes` drops named axes. Not validated
+    here — callers pass the result through validate_run_filters / update_worker.
+    """
+    if not parsed and not clear_all and not clear_axes:
+        return None
+    result = {} if clear_all else dict(current or {})
+    for axis in clear_axes or ():
+        result.pop(axis, None)
+    for axis, spec in parsed.items():
+        result[axis] = spec
+    return result
+
+
+def _run_filter_options(f):
+    """Shared run-filter click options for `worker register` / `worker update`.
+
+    Surfaces isolation/toolchain as first-class allow/deny flags plus a general
+    repeatable ``--run-filter AXIS=allow:v1,v2 | AXIS=deny:v1`` for other axes.
+    A run-filter lets a worker decline Tests it is *capable* of running.
+    """
+    opts = [
+        click.option("--accept-isolation", default=None,
+                     help="Only run these isolation values (comma-separated, "
+                          "e.g. 'none,podman'); declines all others."),
+        click.option("--deny-isolation", default=None,
+                     help="Never run these isolation values (e.g. 'podman'), "
+                          "even if capable."),
+        click.option("--accept-toolchain", default=None,
+                     help="Only run these toolchain values (e.g. 'none,nix')."),
+        click.option("--deny-toolchain", default=None,
+                     help="Never run these toolchain values (e.g. 'nix')."),
+        click.option("--run-filter", "run_filter", multiple=True,
+                     help="General per-axis filter, repeatable: "
+                          "AXIS=allow:v1,v2 or AXIS=deny:v1 "
+                          "(e.g. compiler=deny:gcc-7)."),
+    ]
+    for opt in reversed(opts):
+        f = opt(f)
+    return f
+
+
+def _remote_worker(c, worker_id):
+    """Fetch one worker dict from the coordinator, or raise if absent."""
     for w in c.list_workers():
         if w["id"] == worker_id:
-            return w.get("tags") or []
+            return w
     raise click.ClickException(f"Worker #{worker_id} not found.")
 
 
-def _worker_update_remote(worker_id, concurrency, tags, add_tags, remove_tags, auto_tags):
+def _worker_update_remote(worker_id, concurrency, tags, add_tags, remove_tags,
+                          auto_tags, accept_isolation, deny_isolation,
+                          accept_toolchain, deny_toolchain, run_filter,
+                          clear_run_filters, clear_filter):
     # Detection runs on THIS host (the one driving --remote), which is usually
     # not the worker's host — mirror the register-time caveat.
     detected = _detect_capability_tags() if auto_tags else None
-    need_current = bool(add_tags or remove_tags or auto_tags)
+    parsed = _parse_run_filters_opts(
+        accept_isolation=accept_isolation, deny_isolation=deny_isolation,
+        accept_toolchain=accept_toolchain, deny_toolchain=deny_toolchain,
+        run_filter=run_filter)
+    # A partial filter change (set one axis, clear one axis) needs the worker's
+    # current filters as the base; a full clear or full replace does not.
+    need_current_filters = bool(parsed or clear_filter) and not clear_run_filters
+    need_current = bool(add_tags or remove_tags or auto_tags or need_current_filters)
 
     def op(c):
+        current = _remote_worker(c, worker_id) if need_current else {}
         new_tags = _resolve_tags(
-            _remote_worker_tags(c, worker_id) if need_current else [],
-            tags, add_tags, remove_tags, detected)
-        w = c.update_worker(worker_id, concurrency=concurrency, tags=new_tags)
+            current.get("tags") or [], tags, add_tags, remove_tags, detected)
+        new_filters = _resolve_run_filters(
+            current.get("run_filters") or {}, parsed, clear_run_filters, clear_filter)
+        w = c.update_worker(worker_id, concurrency=concurrency, tags=new_tags,
+                            run_filters=new_filters)
         click.echo(f"Worker #{w['id']} ({w['name']}) updated.")
         click.echo(f"  Concurrency: {w['concurrency']}")
         click.echo(f"  Tags:        {w['tags']}")
+        click.echo(f"  Run-filters: {format_run_filters(w.get('run_filters'))}")
         if auto_tags and detected:
             click.echo(f"  (detected:   {', '.join(detected)} on THIS host — "
                        f"usually not the worker host under --remote)")
@@ -2835,9 +2959,20 @@ def worker_start(coordinator, token, poll_interval, heartbeat_interval, niceness
 @click.option("--auto-tags/--no-auto-tags", default=False,
               help="Detect os:/compiler:/podman/nix tags from this host and union them with --tags")
 @click.option("--concurrency", default=1, help="Max concurrent jobs")
+@_run_filter_options
 @remoteable(_worker_register_remote)
-def worker_register(name, tags, auto_tags, concurrency):
+def worker_register(name, tags, auto_tags, concurrency,
+                    accept_isolation, deny_isolation, accept_toolchain,
+                    deny_toolchain, run_filter):
     """Register a new worker in the local database and print its token."""
+    parsed = _parse_run_filters_opts(
+        accept_isolation=accept_isolation, deny_isolation=deny_isolation,
+        accept_toolchain=accept_toolchain, deny_toolchain=deny_toolchain,
+        run_filter=run_filter)
+    try:
+        run_filters = validate_run_filters(parsed)
+    except ValueError as e:
+        raise click.UsageError(str(e))
     Base.metadata.create_all(get_engine())
     session = SessionLocal()
     try:
@@ -2859,7 +2994,8 @@ def worker_register(name, tags, auto_tags, concurrency):
                 tag_list.append(t)
                 seen.add(t)
 
-        worker = Worker(name=name, tags=tag_list, concurrency=concurrency)
+        worker = Worker(name=name, tags=tag_list, concurrency=concurrency,
+                        run_filters=run_filters)
         session.add(worker)
         session.commit()
         click.echo(f"Worker '{name}' registered.")
@@ -2869,6 +3005,7 @@ def worker_register(name, tags, auto_tags, concurrency):
         if auto_tags and detected_tags:
             click.echo(f"  (detected:   {', '.join(detected_tags)})")
         click.echo(f"  Concurrency: {worker.concurrency}")
+        click.echo(f"  Run-filters: {format_run_filters(worker.run_filters)}")
     finally:
         session.close()
 
@@ -2888,14 +3025,16 @@ def worker_list():
             return
 
         click.echo(f"{'ID':<6} {'Name':<20} {'Status':<10} {'Enabled':<9} {'Jobs':<6} "
-                   f"{'Cap':<6} {'Tags':<30} {'Last Heartbeat'}")
-        click.echo("-" * 120)
+                   f"{'Cap':<6} {'Tags':<30} {'Run-filters':<30} {'Last Heartbeat'}")
+        click.echo("-" * 140)
         for w in workers:
             hb = w.last_heartbeat.strftime("%Y-%m-%d %H:%M:%S") if w.last_heartbeat else "-"
             tags_str = ", ".join(w.tags) if w.tags else "-"
+            filters_str = format_run_filters(w.run_filters)
             enabled = "no" if w.enabled is False else "yes"
             click.echo(f"{w.id:<6} {w.name:<20} {w.status:<10} {enabled:<9} "
-                       f"{w.current_job_count:<6} {w.concurrency:<6} {tags_str:<30} {hb}")
+                       f"{w.current_job_count:<6} {w.concurrency:<6} {tags_str:<30} "
+                       f"{filters_str:<30} {hb}")
     finally:
         session.close()
 
@@ -2910,14 +3049,27 @@ def worker_list():
               help="Re-detect os:/distro:/flavor:/arch:/compiler:/podman/nix tags "
                    "from this host and refresh them on the worker (stale ones "
                    "dropped, custom tags kept). Run on the worker's own host.")
+@_run_filter_options
+@click.option("--clear-run-filters", is_flag=True, default=False,
+              help="Drop all run-filters (worker runs everything it is capable of).")
+@click.option("--clear-filter", "clear_filter", multiple=True,
+              help="Drop the run-filter for one axis (repeatable), e.g. --clear-filter isolation.")
 @remoteable(_worker_update_remote)
-def worker_update(worker_id, concurrency, tags, add_tags, remove_tags, auto_tags):
-    """Update a worker's concurrency and/or tags."""
+def worker_update(worker_id, concurrency, tags, add_tags, remove_tags, auto_tags,
+                  accept_isolation, deny_isolation, accept_toolchain,
+                  deny_toolchain, run_filter, clear_run_filters, clear_filter):
+    """Update a worker's concurrency, tags, and/or run-filters."""
+    parsed = _parse_run_filters_opts(
+        accept_isolation=accept_isolation, deny_isolation=deny_isolation,
+        accept_toolchain=accept_toolchain, deny_toolchain=deny_toolchain,
+        run_filter=run_filter)
+    filters_requested = bool(parsed or clear_run_filters or clear_filter)
     if (concurrency is None and tags is None and add_tags is None
-            and remove_tags is None and not auto_tags):
+            and remove_tags is None and not auto_tags and not filters_requested):
         raise click.UsageError(
             "Nothing to update: pass --concurrency and/or "
-            "--tags/--add-tags/--remove-tags/--auto-tags.")
+            "--tags/--add-tags/--remove-tags/--auto-tags and/or "
+            "--accept-*/--deny-*/--run-filter/--clear-run-filters/--clear-filter.")
     detected = _detect_capability_tags() if auto_tags else None
     Base.metadata.create_all(get_engine())
     session = SessionLocal()
@@ -2929,14 +3081,18 @@ def worker_update(worker_id, concurrency, tags, add_tags, remove_tags, auto_tags
             click.echo(f"Worker #{worker_id} not found.")
             return
         new_tags = _resolve_tags(worker.tags or [], tags, add_tags, remove_tags, detected)
+        new_filters = _resolve_run_filters(
+            worker.run_filters or {}, parsed, clear_run_filters, clear_filter)
         try:
-            update_worker(session, worker_id, concurrency=concurrency, tags=new_tags)
+            update_worker(session, worker_id, concurrency=concurrency,
+                          tags=new_tags, run_filters=new_filters)
         except ValueError as e:
             raise click.ClickException(str(e))
         session.commit()
         click.echo(f"Worker #{worker_id} ({worker.name}) updated.")
         click.echo(f"  Concurrency: {worker.concurrency}")
         click.echo(f"  Tags:        {worker.tags}")
+        click.echo(f"  Run-filters: {format_run_filters(worker.run_filters)}")
         if auto_tags and detected:
             click.echo(f"  (detected:   {', '.join(detected)})")
     finally:

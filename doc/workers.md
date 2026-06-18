@@ -37,12 +37,14 @@ kinds of stuck work:
   `OPP_CI_MAX_RECLAIMS` times. A run that keeps outliving its worker
   (suspected crash/OOM loop) is retired as a *poison pill* to
   `timed_out` / `ERROR`.
-- **Unserviceable `queued` runs** — a run whose required [capability
-  tags](#capability-tags) no *enabled* worker advertises is a misroute,
-  not transient backlog. After `OPP_CI_QUEUE_UNSERVICEABLE_TIMEOUT`
-  seconds it is expired to `timed_out` / `ERROR` with a message naming
-  the missing tags, instead of waiting forever for a worker that will
-  never poll. Serviceability counts enabled workers of *any* status, so
+- **Unserviceable `queued` runs** — a run no *enabled* worker can serve
+  (none has the required [capability tags](#capability-tags), or every
+  capable worker [opts out](#run-filters-opt-out-of-work-you-can-do) of
+  it) is a misroute, not transient backlog. After
+  `OPP_CI_QUEUE_UNSERVICEABLE_TIMEOUT` seconds it is expired to
+  `timed_out` / `ERROR` with a message naming the cause (missing tags vs.
+  all-opted-out), instead of waiting forever for a worker that will never
+  poll. Serviceability counts enabled workers of *any* status, so
   a busy or temporarily-offline worker still covers a run; only true
   misroutes are expired. A run that is serviceable but starved (all
   matching workers busy or down) is left queued. Set the timeout to `0`
@@ -81,6 +83,61 @@ gate dispatch — treat them as documentation. The scheduler matches each
 queued job's required subset against the worker's advertised tags
 before dispatching.
 
+## Run-filters (opt out of work you *can* do)
+
+Capability tags answer *can* this worker run a test. Run-filters answer
+*will* it — a separate, optional gate that lets a worker **decline tests
+it is capable of running**. The dispatcher serves a queued run to a
+worker only when the worker both has the required tags **and** passes
+its run-filters ([`worker_can_serve` in persistence.py](../opp_ci/persistence.py)).
+
+Run-filters are stored on the worker (column `run_filters`, like `tags`)
+and keyed by coordinate axis. Each axis carries **either** an allow-list
+**or** a deny-list (not both):
+
+- `allow` — run *only* these values for the axis; decline all others.
+- `deny` — never run these values, even when capable.
+
+An axis with no entry is unconstrained. An empty map (the default) means
+the worker runs everything its tags qualify it for — so existing workers
+are unaffected.
+
+The common axes are `isolation` (`none` / `podman`) and `toolchain`
+(`none` / `nix`), surfaced as first-class flags. The mechanism is general
+over any [coordinate field](concepts.md) (`compiler`, `os`, `arch`,
+`mode`, …), reachable via the general `--run-filter` flag. Note the
+default values `isolation=none` / `toolchain=none` carry *no* capability
+tag, so they can only be excluded via a run-filter (not by removing a tag).
+
+```bash
+# This host can run Podman jobs but should not spend cycles on them:
+opp_ci worker update <id> --deny-isolation podman
+
+# A dedicated container host: only ever run podman, never bare-metal:
+opp_ci worker update <id> --accept-isolation podman
+
+# Never run Nix-toolchain jobs:
+opp_ci worker update <id> --deny-toolchain nix
+
+# General axis (any coordinate field), repeatable:
+opp_ci worker update <id> --run-filter compiler=deny:gcc-7
+
+# Clear filters:
+opp_ci worker update <id> --clear-filter isolation   # one axis
+opp_ci worker update <id> --clear-run-filters        # all
+```
+
+The same flags work on `worker register`. The web worker page
+(`/workers/<id>`) edits the isolation/toolchain filters directly. Unlike
+the coordinator URL and token (service-env state), run-filters are
+DB state — change them with `worker update` without reinstalling the
+service.
+
+When *every* enabled worker capable of a run opts out of it, the run is
+[unserviceable](#coordinator-reaper) and is expired after the timeout
+with a message naming the opt-out (and `details.declined_by_filter`),
+rather than the "missing tags" message used for a genuine misroute.
+
 ## Register a worker (admin)
 
 Two ways:
@@ -116,9 +173,10 @@ opp_ci worker start \
     --heartbeat-interval 30
 ```
 
-The worker fetches its registered name, tags and concurrency from the
-coordinator on startup — the coordinator is the single source of truth.
-To change a worker's tags or concurrency, re-register it.
+The worker fetches its registered name, tags, run-filters and
+concurrency from the coordinator on startup — the coordinator is the
+single source of truth. Change them with `opp_ci worker update <id>`
+(no re-register needed).
 
 Workers only need **outbound** network access — they poll the
 coordinator. No inbound port is required on the worker host.
@@ -140,6 +198,7 @@ Or via the web UI at `/admin`.
 | `name` | Unique human-readable identifier |
 | `token` | Auto-generated bearer token used for poll/heartbeat/result |
 | `tags` | JSON list of capability tags |
+| `run_filters` | JSON map of per-axis allow/deny [run-filters](#run-filters-opt-out-of-work-you-can-do) (willingness, vs. `tags` capability) |
 | `concurrency` | Max concurrent jobs the worker will accept |
 | `status` | `online` / `offline` / `busy` |
 | `last_heartbeat` | Timestamp of the last heartbeat |

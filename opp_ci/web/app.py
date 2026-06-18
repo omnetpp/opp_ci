@@ -31,7 +31,8 @@ from opp_ci.db.models import (
 )
 from opp_ci.persistence import (
     create_matrix_from_axes, create_matrix_run, create_test_run, delete_worker,
-    enqueue_job, expire_unserviceable_queued_runs, get_current_expectation,
+    enqueue_job, expire_unserviceable_queued_runs, format_run_filters,
+    get_current_expectation,
     get_matrix_by_name, get_or_create_test,
     get_test_by_name, insert_expectation, mark_stale_workers_offline,
     parse_expectation_override, read_default_expectation_code,
@@ -2454,10 +2455,21 @@ def worker_detail(request: Request, worker_id: int,
         now = _dt.datetime.utcnow()
         threshold = now - _dt.timedelta(seconds=WORKER_HEARTBEAT_TIMEOUT)
         connected = w.last_heartbeat is not None and w.last_heartbeat > threshold
+        rf = w.run_filters or {}
+
+        def _rf_form(axis):
+            spec = rf.get(axis) or {}
+            mode = "allow" if "allow" in spec else "deny" if "deny" in spec else ""
+            values = ", ".join(spec.get(mode, [])) if mode else ""
+            return {"mode": mode, "values": values}
+
         return templates.TemplateResponse(request, "worker_detail.html", {
             "w": w,
             "connected": connected,
             "tags_str": ", ".join(w.tags or []),
+            "run_filters_str": _format_run_filters(w.run_filters),
+            "rf_isolation": _rf_form("isolation"),
+            "rf_toolchain": _rf_form("toolchain"),
             "heartbeat_timeout": WORKER_HEARTBEAT_TIMEOUT,
             "is_admin": current_user.role == "admin",
             "message": request.query_params.get("message"),
@@ -2471,18 +2483,34 @@ def worker_detail(request: Request, worker_id: int,
 @web_router.post("/workers/{worker_id}/update", dependencies=[Depends(require_csrf)])
 def worker_update_web(worker_id: int,
                       current_user: User = Depends(require_user("admin")),
-                      concurrency: int = Form(...), tags: str = Form(default="")):
+                      concurrency: int = Form(...), tags: str = Form(default=""),
+                      isolation_mode: str = Form(default=""),
+                      isolation_values: str = Form(default=""),
+                      toolchain_mode: str = Form(default=""),
+                      toolchain_values: str = Form(default="")):
     session = SessionLocal()
     try:
+        worker = session.execute(
+            select(Worker).where(Worker.id == worker_id)).scalar_one_or_none()
+        if worker is None:
+            return RedirectResponse(url="/workers?error=Worker+not+found", status_code=303)
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        # Merge the isolation/toolchain form fields into the worker's existing
+        # run-filters, leaving any other axes (set via CLI) untouched.
+        new_filters = dict(worker.run_filters or {})
+        for axis, mode, raw in (("isolation", isolation_mode, isolation_values),
+                                ("toolchain", toolchain_mode, toolchain_values)):
+            values = [v.strip() for v in raw.split(",") if v.strip()]
+            if mode in ("allow", "deny") and values:
+                new_filters[axis] = {mode: values}
+            else:
+                new_filters.pop(axis, None)
         try:
-            worker = update_worker(
-                session, worker_id, concurrency=concurrency, tags=tag_list)
+            update_worker(session, worker_id, concurrency=concurrency,
+                          tags=tag_list, run_filters=new_filters)
         except ValueError as e:
             return RedirectResponse(
                 url=f"/workers/{worker_id}?error={quote_plus(str(e))}", status_code=303)
-        if worker is None:
-            return RedirectResponse(url="/workers?error=Worker+not+found", status_code=303)
         session.commit()
         return RedirectResponse(
             url=f"/workers/{worker_id}?message=Worker+updated", status_code=303)

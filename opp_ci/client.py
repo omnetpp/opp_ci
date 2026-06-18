@@ -219,17 +219,19 @@ class OppCiClient:
         """List registered workers."""
         return self._get("/workers")
 
-    def register_worker(self, name, tags=None, concurrency=1):
+    def register_worker(self, name, tags=None, concurrency=1, run_filters=None):
         """Register a new worker (admin only). Returns {"id": ..., "token": ...}."""
         payload = {"name": name, "concurrency": concurrency}
         if tags:
             payload["tags"] = tags
+        if run_filters:
+            payload["run_filters"] = run_filters
         return self._post("/workers/register", payload)
 
     def update_worker(self, worker_id, *, concurrency=None, tags=None,
-                      enabled=None):
-        """Patch a worker's concurrency/tags/enabled flag (admin). Only the
-        fields passed are sent. Returns the updated worker dict."""
+                      enabled=None, run_filters=None):
+        """Patch a worker's concurrency/tags/enabled/run-filters (admin). Only
+        the fields passed are sent. Returns the updated worker dict."""
         payload = {}
         if concurrency is not None:
             payload["concurrency"] = concurrency
@@ -237,6 +239,8 @@ class OppCiClient:
             payload["tags"] = tags
         if enabled is not None:
             payload["enabled"] = enabled
+        if run_filters is not None:
+            payload["run_filters"] = run_filters
         return self._patch(f"/workers/{worker_id}", payload)
 
     def delete_worker(self, worker_id):

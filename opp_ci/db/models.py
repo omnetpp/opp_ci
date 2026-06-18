@@ -125,6 +125,12 @@ class Worker(Base):
     name = Column(String, unique=True, nullable=False)
     token = Column(String, unique=True, nullable=False, default=lambda: secrets.token_urlsafe(32))
     tags = Column(JSON, default=list)  # ["linux", "amd64", "perf-counters"]
+    # Willingness filter, orthogonal to capability `tags`: a worker may decline
+    # Tests it is *capable* of running. Keyed by coordinate-axis name (a member
+    # of TEST_COORD_FIELDS), each value is {"allow": [...]} or {"deny": [...]}.
+    # Empty/absent → no filtering (runs everything its tags qualify it for). See
+    # persistence.{validate_run_filters,worker_accepts_test,worker_can_serve}.
+    run_filters = Column(JSON, default=dict)  # {"isolation": {"deny": ["podman"]}}
     concurrency = Column(Integer, default=1)
     status = Column(String, default="offline")  # online, offline, busy
     # status is auto-managed by heartbeat/poll/reaper; `enabled` is the

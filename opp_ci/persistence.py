@@ -885,45 +885,179 @@ def required_tags_for_test(test):
     return required
 
 
-def retire_unserviceable_run(session, run, now, required):
-    """Terminally fail a queued run that no enabled worker's tags can satisfy.
+# Axes whose values are a closed, known set: a typo in a run-filter for one of
+# these (e.g. "podmann") would silently never match, so we reject unknown
+# values up front. Other coordinate axes carry open-ended values (compiler
+# versions, distro names, …) and are accepted verbatim.
+KNOWN_AXIS_VALUES = {
+    "isolation": frozenset({"none", "podman"}),
+    "toolchain": frozenset({"none", "nix"}),
+}
+
+
+def validate_run_filters(run_filters):
+    """Validate and canonicalize a worker's run-filter map.
+
+    `run_filters` maps a coordinate-axis name (a member of TEST_COORD_FIELDS)
+    to ``{"allow": [...]}`` *or* ``{"deny": [...]}`` — exactly one, a non-empty
+    list of strings. An axis with no entry is unconstrained. Returns a new,
+    canonicalized dict (axis values sorted+deduped). Raises ValueError on any
+    violation. None/empty → ``{}``.
+    """
+    if not run_filters:
+        return {}
+    if not isinstance(run_filters, dict):
+        raise ValueError("run_filters must be a mapping of axis -> {allow|deny: [...]}")
+    out = {}
+    for axis, spec in run_filters.items():
+        if axis not in TEST_COORD_FIELDS:
+            raise ValueError(
+                f"unknown run-filter axis {axis!r}; must be one of "
+                f"{', '.join(TEST_COORD_FIELDS)}")
+        if not isinstance(spec, dict):
+            raise ValueError(f"run-filter for {axis!r} must be {{allow|deny: [...]}}")
+        present = [k for k in ("allow", "deny") if k in spec]
+        extra = set(spec) - {"allow", "deny"}
+        if extra:
+            raise ValueError(f"run-filter for {axis!r} has unexpected keys: "
+                             f"{', '.join(sorted(extra))}")
+        if len(present) != 1:
+            raise ValueError(
+                f"run-filter for {axis!r} must set exactly one of allow/deny "
+                f"(got {present or 'neither'})")
+        mode = present[0]
+        values = spec[mode]
+        if not isinstance(values, (list, tuple)) or not values:
+            raise ValueError(f"run-filter for {axis!r} {mode} must be a non-empty list")
+        norm = []
+        for v in values:
+            if not isinstance(v, str) or not v.strip():
+                raise ValueError(f"run-filter for {axis!r} has a non-string value")
+            norm.append(v.strip())
+        known = KNOWN_AXIS_VALUES.get(axis)
+        if known is not None:
+            bad = [v for v in norm if v not in known]
+            if bad:
+                raise ValueError(
+                    f"run-filter for {axis!r} has unknown value(s) "
+                    f"{', '.join(bad)}; known values are {', '.join(sorted(known))}")
+        out[axis] = {mode: sorted(set(norm))}
+    return out
+
+
+def format_run_filters(run_filters):
+    """Compact one-line rendering of a worker's run-filters, e.g.
+    'isolation:deny[podman] toolchain:allow[nix,none]'. '-' when empty. Shared
+    by the CLI worker tables and the web worker page."""
+    if not run_filters:
+        return "-"
+    parts = []
+    for axis in sorted(run_filters):
+        spec = run_filters[axis]
+        mode = "allow" if "allow" in spec else "deny"
+        parts.append(f"{axis}:{mode}[{','.join(spec[mode])}]")
+    return " ".join(parts)
+
+
+def _coord_value(test, axis):
+    """The effective value of coordinate *axis* on *test*, as a string.
+
+    isolation/toolchain default to "none" (mirroring required_tags_for_test);
+    any other unset axis is treated as the literal "none" so a filter behaves
+    predictably (never silently matches a concrete allow-list, never trips a
+    concrete deny-list).
+    """
+    value = getattr(test, axis, None)
+    if value is None:
+        return "none"
+    return str(value)
+
+
+def worker_accepts_test(run_filters, test):
+    """True if a worker with *run_filters* is *willing* to run *test*.
+
+    Willingness is independent of capability (tags). For each filtered axis:
+    an ``allow`` set requires the test's value to be a member; a ``deny`` set
+    requires it not to be. Empty filters accept everything.
+    """
+    if not run_filters:
+        return True
+    for axis, spec in run_filters.items():
+        value = _coord_value(test, axis)
+        if "allow" in spec:
+            if value not in spec["allow"]:
+                return False
+        elif "deny" in spec:
+            if value in spec["deny"]:
+                return False
+    return True
+
+
+def worker_can_serve(worker, test):
+    """True if *worker* both *can* (capability tags) and *is willing*
+    (run-filters) to run *test*. The single source of truth shared by the poll
+    matcher (web.api) and the unserviceable-queue sweep.
+    """
+    if not required_tags_for_test(test).issubset(set(worker.tags or [])):
+        return False
+    return worker_accepts_test(worker.run_filters or {}, test)
+
+
+def retire_unserviceable_run(session, run, now, required, *, declined_by_filter=False):
+    """Terminally fail a queued run no enabled worker can serve.
 
     Mirrors retire_poison_run: marks it `timed_out`/ERROR and resolves its
     matrix cell so the parent TestMatrixRun completes instead of hanging on
-    a run that would never be claimed. `required` is the unsatisfiable tag
-    set (for the operator-facing message). Caller owns the transaction.
+    a run that would never be claimed. `required` is the test's required tag
+    set. Two causes are distinguished in the operator-facing message and
+    `details`: no worker advertises the required tags, vs. capable workers
+    exist but all *opt out* of the run via their run-filters
+    (`declined_by_filter`). Caller owns the transaction.
     """
     missing = ", ".join(sorted(required)) or "(none)"
     run.lifecycle = TestRunLifecycle.timed_out
     run.worker_id = None
     run.finished_at = now
     run.result_code = TestResultCode.ERROR
-    run.stderr = (run.stderr or "") + (
-        f"\n[opp_ci] expired from queue: no enabled worker advertises the "
-        f"required tags {{{missing}}}."
-    )
+    if declined_by_filter:
+        reason = (
+            f"\n[opp_ci] expired from queue: every enabled worker capable of "
+            f"this test (required tags {{{missing}}}) opts out of it via its "
+            f"run-filters (isolation={run.test.isolation or 'none'}, "
+            f"toolchain={run.test.toolchain or 'none'})."
+        )
+    else:
+        reason = (
+            f"\n[opp_ci] expired from queue: no enabled worker advertises the "
+            f"required tags {{{missing}}}."
+        )
+    run.stderr = (run.stderr or "") + reason
     run.details = {**(run.details or {}),
                    "unserviceable": True,
-                   "required_tags": sorted(required)}
+                   "required_tags": sorted(required),
+                   "declined_by_filter": declined_by_filter}
     finalize_verdict_for_run(session, run.id)
 
 
 def expire_unserviceable_queued_runs(session, now, workers, timeout_seconds):
-    """Retire `queued` runs that no enabled worker can ever claim.
+    """Retire `queued` runs that no enabled worker can ever serve.
 
-    A run is *unserviceable* when its required tag set is not a subset of
-    any enabled worker's tags — a misrouted submission, not transient
-    backlog. Only runs queued longer than `timeout_seconds` are touched, so
-    a worker still coming up (registered, not yet heartbeating) has time to
-    appear. `workers` is the full worker list; enabled workers of ANY status
-    count toward serviceability, so a worker the heartbeat sweep just flipped
-    `offline` (or one that is merely rebooting) does not falsely condemn the
-    runs only it can serve. Returns the number of runs expired. A
-    `timeout_seconds <= 0` disables the sweep. Caller owns the transaction.
+    A run is *unserviceable* when no enabled worker both *can* (tags) and is
+    *willing* (run-filters) to run it — a misrouted submission or a fleet that
+    has opted out of the axis, not transient backlog. Only runs queued longer
+    than `timeout_seconds` are touched, so a worker still coming up
+    (registered, not yet heartbeating) has time to appear. `workers` is the
+    full worker list; enabled workers of ANY status count toward
+    serviceability, so a worker the heartbeat sweep just flipped `offline` (or
+    one that is merely rebooting) does not falsely condemn the runs only it can
+    serve. The retire message distinguishes "no worker has the required tags"
+    from "capable workers all opt out via run-filters". Returns the number of
+    runs expired. A `timeout_seconds <= 0` disables the sweep. Caller owns the
+    transaction.
     """
     if timeout_seconds <= 0:
         return 0
-    enabled_tag_sets = [set(w.tags or []) for w in workers if w.enabled]
+    enabled = [w for w in workers if w.enabled]
     threshold = now - datetime.timedelta(seconds=timeout_seconds)
     stale_queued = session.execute(
         select(TestRun).where(
@@ -934,9 +1068,13 @@ def expire_unserviceable_queued_runs(session, now, workers, timeout_seconds):
     expired = 0
     for run in stale_queued:
         required = required_tags_for_test(run.test)
-        if any(required.issubset(tags) for tags in enabled_tag_sets):
+        if any(worker_can_serve(w, run.test) for w in enabled):
             continue  # serviceable — legitimate backlog, leave it queued
-        retire_unserviceable_run(session, run, now, required)
+        # Unserviceable: distinguish "no capable worker" from "capable workers
+        # all opt out", so the operator sees the real cause.
+        capable = any(required.issubset(set(w.tags or [])) for w in enabled)
+        retire_unserviceable_run(session, run, now, required,
+                                 declined_by_filter=capable)
         expired += 1
     return expired
 
@@ -973,12 +1111,13 @@ def mark_stale_workers_offline(session, now, timeout_seconds, max_reclaims):
 
 
 def update_worker(session, worker_id, *, concurrency=None, tags=None,
-                  enabled=None, shutdown_requested=None):
-    """Patch a worker's concurrency, tags, enabled, and/or shutdown flag (admin).
+                  enabled=None, shutdown_requested=None, run_filters=None):
+    """Patch a worker's concurrency, tags, enabled, shutdown, and/or run-filters.
 
     Only the fields passed (non-None) are changed. Returns the Worker, or
     None if no worker has that id. Raises ValueError on an invalid value.
-    Caller owns the transaction (does NOT commit).
+    `run_filters` is validated/canonicalized via validate_run_filters; pass
+    ``{}`` to clear all filters. Caller owns the transaction (does NOT commit).
     """
     worker = session.execute(
         select(Worker).where(Worker.id == worker_id)
@@ -995,6 +1134,8 @@ def update_worker(session, worker_id, *, concurrency=None, tags=None,
         worker.enabled = bool(enabled)
     if shutdown_requested is not None:
         worker.shutdown_requested = bool(shutdown_requested)
+    if run_filters is not None:
+        worker.run_filters = validate_run_filters(run_filters)
     return worker
 
 

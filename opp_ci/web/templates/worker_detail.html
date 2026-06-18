@@ -44,6 +44,9 @@
                 <td>{{ w.current_job_count }} / {{ w.concurrency }}</td></tr>
             <tr><th style="text-align:left;">Tags</th>
                 <td>{% if w.tags %}{% for t in w.tags %}<code>{{ t }}</code>{% if not loop.last %} {% endif %}{% endfor %}{% else %}<span style="color:var(--muted);">-</span>{% endif %}</td></tr>
+            <tr><th style="text-align:left;">Run-filters</th>
+                <td>{% if run_filters_str != "-" %}<code>{{ run_filters_str }}</code>
+                    {% else %}<span style="color:var(--muted);">none (runs everything it is capable of)</span>{% endif %}</td></tr>
             <tr><th style="text-align:left;">Last Heartbeat</th>
                 <td>{{ w.last_heartbeat.strftime("%Y-%m-%d %H:%M:%S") ~ " UTC" if w.last_heartbeat else "never" }}</td></tr>
             <tr><th style="text-align:left;">Registered</th>
@@ -70,7 +73,25 @@
                 <input type="text" name="tags" value="{{ tags_str }}" placeholder="e.g. os:linux, podman, nix">
             </div>
         </div>
-        <button type="submit" class="btn btn-success btn-sm">Save changes</button>
+        <label style="margin-top:0.5rem;">Run-filters (decline work this host is capable of)</label>
+        {% for axis, rf, known in [("isolation", rf_isolation, "none, podman"), ("toolchain", rf_toolchain, "none, nix")] %}
+        <div class="form-row" style="align-items:flex-end;">
+            <div class="form-group">
+                <label style="font-weight:normal;">{{ axis }}</label>
+                <select name="{{ axis }}_mode">
+                    <option value="" {% if not rf.mode %}selected{% endif %}>no filter</option>
+                    <option value="allow" {% if rf.mode == "allow" %}selected{% endif %}>allow only</option>
+                    <option value="deny" {% if rf.mode == "deny" %}selected{% endif %}>deny</option>
+                </select>
+            </div>
+            <div class="form-group" style="flex:1;">
+                <input type="text" name="{{ axis }}_values" value="{{ rf.values }}"
+                       placeholder="comma-separated values, e.g. {{ known }}">
+            </div>
+        </div>
+        {% endfor %}
+        <small style="color:var(--muted);">For other axes (compiler, os, …) use the CLI: <code>opp_ci worker update &lt;id&gt; --run-filter AXIS=deny:value</code>.</small>
+        <div><button type="submit" class="btn btn-success btn-sm" style="margin-top:0.5rem;">Save changes</button></div>
     </form>
 
     <hr style="margin:1rem 0; border:none; border-top:1px solid var(--border);">

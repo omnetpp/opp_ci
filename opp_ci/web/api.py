@@ -43,8 +43,9 @@ from opp_ci.persistence import (
     create_matrix_from_axes, create_matrix_run, create_test_run, delete_worker,
     enqueue_job, finalize_verdict_for_run, get_current_expectation,
     get_matrix_by_name, get_or_create_test, get_test_by_name, insert_expectation,
-    job_to_coord, parse_expectation_override, required_tags_for_test,
-    set_test_name, status_filter, update_worker, validate_test_coord,
+    job_to_coord, parse_expectation_override,
+    set_test_name, status_filter, update_worker, validate_run_filters,
+    validate_test_coord, worker_can_serve,
 )
 
 _logger = logging.getLogger(__name__)
@@ -86,11 +87,13 @@ class WorkerRegisterRequest(BaseModel):
     name: str
     tags: list[str] = Field(default_factory=list)
     concurrency: int = 1
+    run_filters: dict | None = None
 
 class WorkerUpdateRequest(BaseModel):
     concurrency: int | None = None
     tags: list[str] | None = None
     enabled: bool | None = None
+    run_filters: dict | None = None
 
 class WorkerSnapshotRequest(BaseModel):
     run_id: int
@@ -417,10 +420,15 @@ async def register_worker(
         if existing is not None:
             raise HTTPException(status_code=409, detail=f"Worker '{req.name}' already exists")
 
+        try:
+            run_filters = validate_run_filters(req.run_filters)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         worker = Worker(
             name=req.name,
             tags=req.tags,
             concurrency=req.concurrency,
+            run_filters=run_filters,
             status="offline",
         )
         session.add(worker)
@@ -436,6 +444,7 @@ def _worker_to_dict(w):
         "id": w.id,
         "name": w.name,
         "tags": w.tags or [],
+        "run_filters": w.run_filters or {},
         "concurrency": w.concurrency,
         "status": w.status,
         "enabled": bool(w.enabled),
@@ -460,6 +469,7 @@ async def patch_worker(
             worker = update_worker(
                 session, worker_id,
                 concurrency=req.concurrency, tags=req.tags, enabled=req.enabled,
+                run_filters=req.run_filters,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -516,6 +526,7 @@ async def worker_me(
             "id": worker.id,
             "name": worker.name,
             "tags": worker.tags or [],
+            "run_filters": worker.run_filters or {},
             "concurrency": worker.concurrency,
         }
     finally:
@@ -621,14 +632,13 @@ async def worker_poll(
         if not worker.is_available:
             return {"job": None, "reason": "worker at capacity"}
 
-        worker_tags = set(worker.tags or [])
         claimed_run = None
         for candidate in session.execute(
             select(TestRun)
             .where(TestRun.lifecycle == TestRunLifecycle.queued)
             .order_by(TestRun.id)
         ).scalars():
-            if _worker_can_run(worker_tags, candidate.test):
+            if _worker_can_run(worker, candidate.test):
                 claimed_run = candidate
                 break
 
@@ -672,12 +682,13 @@ async def worker_poll(
         session.close()
 
 
-def _worker_can_run(worker_tags, test):
-    """Return True if a worker with *worker_tags* may claim a TestRun
-    targeting *test*. The required-tag rules live in
-    persistence.required_tags_for_test (shared with the queue-expiry sweep).
+def _worker_can_run(worker, test):
+    """Return True if *worker* may claim a TestRun targeting *test* — both
+    *capable* (required tags ⊆ worker tags) and *willing* (passes its
+    run-filters). Delegates to persistence.worker_can_serve, the rule shared
+    with the queue-expiry sweep.
     """
-    return required_tags_for_test(test).issubset(worker_tags)
+    return worker_can_serve(worker, test)
 
 
 @router.post("/workers/snapshot")
@@ -894,6 +905,7 @@ async def list_workers(
                 "id": w.id,
                 "name": w.name,
                 "tags": w.tags or [],
+                "run_filters": w.run_filters or {},
                 "concurrency": w.concurrency,
                 "status": w.status,
                 "enabled": bool(w.enabled),

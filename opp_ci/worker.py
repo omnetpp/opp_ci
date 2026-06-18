@@ -103,6 +103,7 @@ class WorkerAgent:
         self.token = token
         self.name = None
         self.tags = []
+        self.run_filters = {}
         self.concurrency = 1
         self._running = True
         self._session = self._make_session()
@@ -139,6 +140,7 @@ class WorkerAgent:
         data = resp.json()
         self.name = data["name"]
         self.tags = data.get("tags") or []
+        self.run_filters = data.get("run_filters") or {}
         self.concurrency = data.get("concurrency", 1)
 
     def start(self, poll_interval=10, heartbeat_interval=30, niceness=10):
@@ -163,9 +165,11 @@ class WorkerAgent:
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
 
+        from opp_ci.persistence import format_run_filters
         _logger.info(
-            "Worker '%s' starting — coordinator=%s tags=%s concurrency=%d",
-            self.name, self.coordinator_url, self.tags, self.concurrency,
+            "Worker '%s' starting — coordinator=%s tags=%s run-filters=%s concurrency=%d",
+            self.name, self.coordinator_url, self.tags,
+            format_run_filters(self.run_filters), self.concurrency,
         )
 
         self._heartbeat_thread = threading.Thread(
