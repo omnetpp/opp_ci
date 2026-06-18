@@ -111,6 +111,18 @@ class TestFormStateTests(unittest.TestCase):
         self.assertIn(r.status_code, (302, 303), r.text)
         self.assertIn("/tests/", r.headers.get("location", ""))
 
+    def test_form_exposes_git_ref_and_omnetpp_git_fields(self):
+        # The UI must let you pin a source ref (inet master) and a git-ref
+        # OMNeT++ dependency (git@omnetpp-6.x) — the latter is a free-text
+        # input with suggestions, not a fixed release dropdown.
+        r = self.client.get("/tests/new")
+        self.assertEqual(r.status_code, 200)
+        html = r.text
+        self.assertIn('name="git_ref"', html)                     # source ref
+        self.assertIn('name="omnetpp_version" id="omnetpp_version" list=', html)
+        self.assertNotIn('<select name="omnetpp_version"', html)   # no longer a dropdown
+        self.assertIn("git@omnetpp-6.x", html)                     # documented in UI
+
     def test_under_specified_save_creates_recipe(self):
         token = self._csrf()
         # Underspecified + Save → persisted as a recipe (not an error).

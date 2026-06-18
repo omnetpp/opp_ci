@@ -45,10 +45,12 @@
             </div>
             <div class="form-group">
                 <label for="omnetpp_version">OMNeT++ Version</label>
-                <select name="omnetpp_version" id="omnetpp_version">
-                    <option value="">— any —</option>
-                    {% if values.omnetpp_version %}<option value="{{ values.omnetpp_version }}" selected>{{ values.omnetpp_version }}</option>{% endif %}
-                </select>
+                <input type="text" name="omnetpp_version" id="omnetpp_version" list="omnetpp-version-options" placeholder="e.g. 6.4.0, or git@omnetpp-6.x" value="{{ values.omnetpp_version or '' }}">
+                <datalist id="omnetpp-version-options"></datalist>
+                <p style="font-size:0.85rem; color:var(--muted); margin-top:0.25rem;">
+                    A release version, or a git ref as <code>git@&lt;branch|tag|sha&gt;</code>
+                    (e.g. <code>git@omnetpp-6.x</code>) — pinned to a commit on submit.
+                </p>
             </div>
         </div>
         <div class="form-row">
@@ -177,7 +179,8 @@
 
     const projectSel = document.getElementById("project");
     const versionSel = document.getElementById("version");
-    const omnetppSel = document.getElementById("omnetpp_version");
+    const omnetppSel = document.getElementById("omnetpp_version");   // free-text input
+    const omnetppList = document.getElementById("omnetpp-version-options");
     const omnetppGroup = omnetppSel.closest(".form-group");
 
     function setOptions(sel, values, placeholder) {
@@ -194,6 +197,17 @@
             sel.appendChild(opt);
         }
         if (Array.from(sel.options).some(o => o.value === current)) sel.value = current;
+    }
+
+    // OMNeT++ is a free-text input (so a git ref can be typed); refresh only
+    // its datalist *suggestions*, never the typed value.
+    function setDatalist(listEl, values) {
+        listEl.innerHTML = "";
+        for (const v of values) {
+            const opt = document.createElement("option");
+            opt.value = (typeof v === "string") ? v : v.value;
+            listEl.appendChild(opt);
+        }
     }
 
     function refreshVersions() {
@@ -222,7 +236,7 @@
             if (v) compat = v.omnetpp_compat || [];
         }
         const opts = (compat.length > 0 ? compat : omnetppVersions);
-        setOptions(omnetppSel, opts, "— any —");
+        setDatalist(omnetppList, opts);
     }
 
     projectSel.addEventListener("change", refreshVersions);
