@@ -435,13 +435,6 @@ def _seed_platforms_remote():
     _remote(op)
 
 
-def _seed_matrices_remote():
-    def op(c):
-        r = c.seed_matrices()
-        click.echo(f"Seeded {r.get('inserted', 0)} default matrices.")
-    _remote(op)
-
-
 def _user_create_remote(username, role, password, update_password):
     if password is None:
         password = click.prompt("Password", hide_input=True,
@@ -1983,7 +1976,7 @@ def list_matrices():
             select(TestMatrix).order_by(TestMatrix.name)
         ).scalars().all()
         if not matrices:
-            click.echo("No matrices defined. Use 'opp_ci create-matrix' or 'opp_ci seed-matrices'.")
+            click.echo("No matrices defined. Use 'opp_ci create-matrix'.")
             return
 
         click.echo(f"{'Name':<24} {'Project':<16} {'Jobs'}")
@@ -2585,27 +2578,6 @@ def show_matrix_run(matrix_run_id, unexpected_only):
                 f"{compiler_str[:14]:<14} {actual:<10} {expected:<10} "
                 f"{v:<11} {cache}"
             )
-    finally:
-        session.close()
-
-
-@main.command("seed-matrices")
-@remoteable(_seed_matrices_remote)
-def seed_matrices_cmd():
-    """Seed the database with default matrix configurations."""
-    from opp_ci.scheduler import DEFAULT_MATRICES
-
-    Base.metadata.create_all(get_engine())
-    session = SessionLocal()
-    try:
-        for name, mdef in DEFAULT_MATRICES.items():
-            existing = session.execute(
-                select(TestMatrix).where(TestMatrix.name == name)
-            ).scalar_one_or_none()
-            if existing is None:
-                session.add(TestMatrix(name=name, project=mdef["project"], config=mdef["config"]))
-        session.commit()
-        click.echo(f"Seeded {len(DEFAULT_MATRICES)} default matrices.")
     finally:
         session.close()
 

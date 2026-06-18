@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Recreate the opp_ci database from scratch:
-# - Seed the core projects, platforms, and default matrices.
+# - Seed the core projects and platforms.
 # - Import the remaining projects + versions from the opp_env catalog.
 #
 
@@ -10,7 +10,6 @@ set -e
 opp_ci reset-db --yes --preserve-tokens
 opp_ci seed-projects
 opp_ci seed-platforms
-opp_ci seed-matrices
 opp_ci sync-catalog
 opp_ci token list | grep -qE '^\S+\s+notes-readonly\b' || opp_ci token create --name notes-readonly --role readonly
 opp_ci list-projects

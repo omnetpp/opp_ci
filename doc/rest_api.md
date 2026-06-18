@@ -59,7 +59,6 @@ Implementation: `opp_ci/auth.py`.
 |---|---|---|---|
 | `/api/admin/seed/projects` | POST | admin | Seed core projects. Returns `{"inserted", "total"}`. |
 | `/api/admin/seed/platforms` | POST | admin | Seed OS/Compiler rows from `platforms.yml`. Returns `{"os_inserted", "compilers_inserted"}`. |
-| `/api/admin/seed/matrices` | POST | admin | Seed the default matrices. Returns `{"inserted", "total"}`. |
 
 ### Matrix runs (rollup view + anonymous launcher)
 

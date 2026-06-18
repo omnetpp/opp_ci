@@ -660,5 +660,4 @@ axis and the special `name=v1,v2;name=v1` syntax for `--deps`.
 | `--opp-file` | *(on TestMatrix row)* | Project's `.opp` file path. |
 
 See [cli_reference.md](cli_reference.md#matrices) for the rest of the
-matrix command surface (`list-matrices`, `run-matrix`,
-`seed-matrices`).
+matrix command surface (`list-matrices`, `run-matrix`).

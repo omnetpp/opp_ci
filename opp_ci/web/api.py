@@ -1799,29 +1799,6 @@ async def seed_platforms_endpoint(
         session.close()
 
 
-@router.post("/admin/seed/matrices")
-async def seed_matrices_endpoint(
-    _identity: dict = Depends(require_role("admin")),
-):
-    """Seed the default matrix definitions (admin)."""
-    from opp_ci.scheduler import DEFAULT_MATRICES
-    session = SessionLocal()
-    try:
-        inserted = 0
-        for name, mdef in DEFAULT_MATRICES.items():
-            existing = session.execute(
-                select(TestMatrix).where(TestMatrix.name == name)
-            ).scalar_one_or_none()
-            if existing is None:
-                session.add(TestMatrix(name=name, project=mdef["project"],
-                                       config=mdef["config"]))
-                inserted += 1
-        session.commit()
-        return {"inserted": inserted, "total": len(DEFAULT_MATRICES)}
-    finally:
-        session.close()
-
-
 # ── Token revocation ───────────────────────────────────────────────────
 
 

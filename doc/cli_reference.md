@@ -70,7 +70,6 @@ list in [test_matrix_dimensions.md](test_matrix_dimensions.md#axis-kind):
 |---|---|
 | `opp_ci create-matrix` | Create a named matrix. Required: `--name`, `--project`, `--kinds`. Axes: `--project-versions`, `--builds`, `--os` [`--os-version`], `--arch`, `--compiler` [`--compiler-version`], `--refs`, `--ref-range`, `--deps`, `--isolation`, `--toolchain`, `--opp-file`. `--replace` overwrites an existing matrix of the same name. |
 | `opp_ci list-matrices` | List matrices with expanded job count. |
-| `opp_ci seed-matrices` | Seed default matrices for the core projects. |
 
 Platform axes accept two styles:
 

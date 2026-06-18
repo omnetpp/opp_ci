@@ -58,7 +58,7 @@ A token with too low a role gets a tidy
 | Runs | `run`, `run-matrix` (named matrix only), `list-runs`, `show-run`, `show-results`, `delete-run`, `delete-runs` |
 | Projects | `list-projects`, `add-project`, `sync-catalog`, `list-versions`, `add-version` |
 | Matrices | `create-matrix`, `list-matrices` |
-| Seed | `seed-projects`, `seed-platforms`, `seed-matrices` |
+| Seed | `seed-projects`, `seed-platforms` |
 | Users | `user create`, `user list`, `user disable` |
 | Workers | `worker register`, `worker list` |
 | Tokens | `token create`, `token list`, `token revoke` |

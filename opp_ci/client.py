@@ -210,9 +210,6 @@ class OppCiClient:
     def seed_platforms(self):
         return self._post("/admin/seed/platforms", {})
 
-    def seed_matrices(self):
-        return self._post("/admin/seed/matrices", {})
-
     # ── Workers ─────────────────────────────────────────────────────────
 
     def list_workers(self):
