@@ -1,6 +1,6 @@
 # Git-versioned dependencies — test any git ref of any dependency
 
-Status: **implemented on branch `git-versioned-deps`.** All five phases landed
+Status: **done — merged to `main`.** All five phases landed
 for **both** isolation modes — `isolation=none` (host nix + nixless) and
 `isolation=podman` (a git-ref omnetpp is baked into a per-commit runner image).
 Extends *resolve in place*
