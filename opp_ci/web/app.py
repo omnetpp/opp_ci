@@ -1772,7 +1772,10 @@ def _build_matrix_config_from_form(*, project, kinds, modes, versions,
 
     omnetpp_values = _split_csv(omnetpp_versions)
     if omnetpp_values and project != "omnetpp":
-        config["deps"] = {"omnetpp": omnetpp_values}
+        # Each value is a release version or a git ref ("git@omnetpp-6.x"),
+        # which resolution pins to a commit.
+        from opp_ci.dependency import parse_dep_value
+        config["deps"] = {"omnetpp": [parse_dep_value(v) for v in omnetpp_values]}
 
     if ref_range_base.strip() and ref_range_head.strip():
         config["ref_range"] = {"base": ref_range_base.strip(), "head": ref_range_head.strip()}

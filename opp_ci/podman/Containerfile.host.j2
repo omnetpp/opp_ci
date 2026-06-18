@@ -73,9 +73,11 @@ ENV PATH=/opt/opp_ci_venv/bin:$PATH
 # Install OMNeT++ {{ omnetpp_version }} into a nixless opp_env workspace.
 # Using --nixless-workspace means opp_env uses the apt-installed compiler
 # and libs (which we picked above) rather than pulling Nix into the image.
+# {{ omnetpp_install }} is the opp_env token — a release (omnetpp-6.4.0) or a
+# git ref (omnetpp-git@<commit>, checked out at that commit).
 RUN mkdir -p /opt/opp_env_workspace \
  && opp_env -l ERROR install --init --nixless-workspace \
-        -w /opt/opp_env_workspace omnetpp-{{ omnetpp_version }}
+        -w /opt/opp_env_workspace {{ omnetpp_install }}
 
 # Entry wrapper: container is invoked with an opp_repl console command. The
 # script clones opp_repl on each run and pip-installs it in editable mode

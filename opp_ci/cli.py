@@ -800,19 +800,20 @@ def _build_matrix_images(jobs, matrix_name, push):
             continue
         deps = job.get("resolved_deps") or {}
         omnetpp_dep = deps.get("omnetpp") if isinstance(deps, dict) else None
-        # Reduce to a hashable identity token (a git-ref dep is a dict, which
-        # can't key the dedup set). A git-ref omnetpp can't be prebaked into a
-        # podman image anyway — _run_test_in_podman rejects it with a clear
-        # message — but the key must stay hashable to reach that point.
-        from opp_ci.db.models import dep_identity_token
-        omnetpp_version = dep_identity_token(omnetpp_dep) if omnetpp_dep else None
+        # Identify the image by a tag-safe omnetpp slug (a release version, or
+        # git-<short8> for a git ref) — hashable, so it can key the dedup set —
+        # and bake it via the opp_env build token (omnetpp-6.4.0 or
+        # omnetpp-git@<sha>).
+        from opp_ci.dependency import dep_tag_slug, dep_build_token
+        omnetpp_version = dep_tag_slug(omnetpp_dep) if omnetpp_dep else None
+        omnetpp_build = dep_build_token("omnetpp", omnetpp_dep) if omnetpp_dep else None
         key = (
             job.get("toolchain") or "none",
             job.get("os"), job.get("os_version"),
             job.get("distro"), job.get("distro_version"),
             job.get("flavor"), job.get("flavor_version"),
             job.get("compiler"), job.get("compiler_version"),
-            omnetpp_version,
+            omnetpp_version, omnetpp_build,
         )
         if key in seen:
             continue
@@ -824,7 +825,8 @@ def _build_matrix_images(jobs, matrix_name, push):
             distro=key[3], distro_version=key[4],
             flavor=key[5], flavor_version=key[6],
             compiler=key[7], compiler_version=key[8],
-            omnetpp_version=key[9], toolchain=toolchain_arg, push=push,
+            omnetpp_version=key[9], omnetpp_build=key[10],
+            toolchain=toolchain_arg, push=push,
         )
     click.echo(f"Built {len(seen)} image(s) for matrix '{matrix_name}'")
 
@@ -3595,7 +3597,7 @@ def image_build(os_name, os_version, distro, distro_version, flavor, flavor_vers
 
 def _build_one_image(*, os_name, os_version, distro, distro_version,
                      flavor, flavor_version, compiler, compiler_version,
-                     omnetpp_version, toolchain, push):
+                     omnetpp_version, toolchain, push, omnetpp_build=None):
     """Resolve a platform, derive the runner image tag, and build it locally.
 
     Plain function (no click context) so both the `image build` command
@@ -3638,7 +3640,7 @@ def _build_one_image(*, os_name, os_version, distro, distro_version,
             tag, toolchain, os_name, os_version, compiler, compiler_version,
             distro=distro, distro_version=distro_version,
             flavor=flavor, flavor_version=flavor_version,
-            omnetpp_version=omnetpp_version, push=push,
+            omnetpp_version=omnetpp_version, omnetpp_build=omnetpp_build, push=push,
         )
     except RuntimeError as e:
         raise click.ClickException(str(e))

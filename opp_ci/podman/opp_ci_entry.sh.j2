@@ -110,6 +110,6 @@ enter_workdir
 # back to the omnetpp baked into this image when the run carried no pins.
 # "$*" is the opp_repl console command the worker passed (opp_build_project /
 # opp_run_*_tests with its --load/-p flags); opp_env runs it in the project env.
-PINNED_PROJECTS="${OPP_CI_PIN_DEPS:-omnetpp-{{ omnetpp_version }}}"
+PINNED_PROJECTS="${OPP_CI_PIN_DEPS:-{{ omnetpp_install }}}"
 printf '@@oppci:cmd@@ opp_env -l ERROR run -w /opt/opp_env_workspace %s%s -c "%s"\n' "$PINNED_PROJECTS" "$EXTRA_PROJECTS" "$*"
 exec opp_env -l ERROR run -w /opt/opp_env_workspace $PINNED_PROJECTS$EXTRA_PROJECTS -c "$*"

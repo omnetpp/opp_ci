@@ -1,9 +1,9 @@
 # Git-versioned dependencies — test any git ref of any dependency
 
 Status: **implemented on branch `git-versioned-deps`.** All five phases landed
-for **isolation=none** (host nix + nixless); podman image-baking of a git-ref
-dependency is deferred (see *Out of scope*) and rejected with an actionable
-error. Extends *resolve in place*
+for **both** isolation modes — `isolation=none` (host nix + nixless) and
+`isolation=podman` (a git-ref omnetpp is baked into a per-commit runner image).
+Extends *resolve in place*
 ([repeatable-tests-and-moving-target-matrices.md](../done/repeatable-tests-and-moving-target-matrices.md))
 and *Test identity includes deps*
 ([test-identity-includes-deps.md](../done/test-identity-includes-deps.md))
@@ -22,12 +22,21 @@ from the **source project** to **every dependency**.
   tolerates a git pin (bypasses the compatible-version check, walks the dep's
   `-git` node); `complete_lock_for_submit` pins git-ref pins to commits via
   `_pin_git_pins`, so every submit path is pinned-all-the-way-down.
-- **Build** ([executor.py](../../opp_ci/executor.py)): `_opp_env_pin_args` →
-  `dep_build_token` emits `omnetpp-git@<sha>`; the source path is unified onto
-  `name-git@<ref>` (the global `OPP_ENV_GIT_REF`, which opp_env never read, is
-  gone); `_opp_env_workspace` separates distinct git commits by identity token.
+- **Build, isolation=none** ([executor.py](../../opp_ci/executor.py)):
+  `_opp_env_pin_args` → `dep_build_token` emits `omnetpp-git@<sha>`; the source
+  path is unified onto `name-git@<ref>` (the global `OPP_ENV_GIT_REF`, which
+  opp_env never read, is gone); `_opp_env_workspace` separates distinct git
+  commits by identity token.
+- **Build, isolation=podman**: a git-ref omnetpp is baked into a per-commit
+  runner image. The image is content-addressed by a tag-safe slug
+  (`dep_tag_slug` → `git-<short8>`) and baked via the build token threaded as
+  `omnetpp_build` through `_ensure_runner_image` → `build_runner_image` →
+  `_build_nix_runner_image` / `render_containerfile` (the host Containerfile and
+  entry-script install `{{ omnetpp_install }}`). The source ref is still the
+  bind-mounted host worktree; the dead `OPP_ENV_GIT_REF` injection was removed.
 - **Surfaces**: CLI `--deps`/`--pin` accept `git@<ref>`; the web omnetpp field
-  routes through `parse_dep_value`; `format_resolved_deps`/`dep_display` show
+  (single-test form **and** matrix-create form) routes through
+  `parse_dep_value`; `format_resolved_deps`/`dep_display` show
   `omnetpp@omnetpp-6.x (a1b2c3d)`.
 - **Tests**: `test_test_identity_deps.py` (git identity), `test_matrix_recipe.py`
   (parse, recipe detection, `pin_matrix_deps`, git-pin transitive lock),
@@ -230,16 +239,10 @@ podman path ([executor.py:1314](../../opp_ci/executor.py#L1314)) is migrated too
   (Could still add them later as friendly aliases.)
 - **Git refs for projects with no `-git` opp_env variant.** Require a `-git`
   variant; reject otherwise with a clear message.
-- **Podman image-baking of a git-ref dependency (deferred).** Under
-  `isolation=podman` a dependency's omnetpp version is part of the runner-image
-  tag and opp_env-installed at *image build* time. Baking a git-ref omnetpp
-  needs the dep value threaded through the image tag/label/bake subsystem
-  (`_runner_image_tag`, `render_containerfile`, the host/nix builders). Until
-  then `_run_test_in_podman` **rejects** a git-ref dep with an actionable error
-  ("use isolation=none"); release deps under podman are unchanged. The dead
-  `OPP_ENV_GIT_REF` injection in the podman path was removed (the source ref is
-  realized by the bind-mounted host worktree, not opp_env). isolation=none
-  (host nix + nixless) is the fully-supported path for git-ref deps.
+- **Git-ref *non-omnetpp* deps under podman.** The per-commit image baking
+  threads only the omnetpp dep (the one baked into the image); a git ref for a
+  *second* dep under podman would need the same treatment. Release deps of any
+  project are unaffected, and isolation=none handles any git-ref dep.
 
 ## Risks / verify during implementation
 

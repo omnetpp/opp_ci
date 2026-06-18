@@ -354,6 +354,19 @@ def dep_build_token(name, value):
     return f"{name}-{value}"
 
 
+def dep_tag_slug(value):
+    """Tag-safe identity slug for a dependency inside a podman image tag/label.
+
+    A release version verbatim (``"6.4.0"``); a git ref → ``"git-<short8>"``
+    (the commit's first 8 chars), since ``:`` and ``@`` are awkward/illegal in
+    image tags. Distinct commits get distinct slugs, so the per-omnetpp runner
+    image is still content-addressed by what it bakes."""
+    if isinstance(value, dict):
+        ident = value.get("commit") or value.get("git") or value.get("ref") or ""
+        return "git-" + str(ident)[:8]
+    return value
+
+
 def dep_display(name, value):
     """Human label for one resolved dep — ``omnetpp-6.4.0`` for a release,
     ``omnetpp@omnetpp-6.x (a1b2c3d)`` for a git ref (branch/tag + short SHA)."""

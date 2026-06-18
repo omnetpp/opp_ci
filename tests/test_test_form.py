@@ -135,5 +135,30 @@ class TestFormStateTests(unittest.TestCase):
             s.close()
 
 
+class MatrixFormGitDepTests(unittest.TestCase):
+    """The matrix form's OMNeT++ Versions field accepts a git ref, parsed into
+    a git-ref dep object that resolution later pins to a commit."""
+
+    def _cfg(self, omnetpp_versions):
+        return webapp._build_matrix_config_from_form(
+            project="inet", kinds="smoke", modes="", versions="",
+            omnetpp_versions=omnetpp_versions, refs="", os="", os_version="",
+            distro="", distro_version="", flavor="", flavor_version="",
+            arch="", compiler="", compiler_version="", isolation="",
+            toolchain="", ref_range_base="", ref_range_head="")
+
+    def test_release_versions_unchanged(self):
+        self.assertEqual(self._cfg("6.4.0, 6.3.0")["deps"],
+                         {"omnetpp": ["6.4.0", "6.3.0"]})
+
+    def test_git_ref_parsed_to_object(self):
+        self.assertEqual(self._cfg("git@omnetpp-6.x")["deps"],
+                         {"omnetpp": [{"git": "omnetpp-6.x"}]})
+
+    def test_mixed_release_and_git(self):
+        self.assertEqual(self._cfg("6.4.0, git@omnetpp-6.x")["deps"],
+                         {"omnetpp": ["6.4.0", {"git": "omnetpp-6.x"}]})
+
+
 if __name__ == "__main__":
     unittest.main()

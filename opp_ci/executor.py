@@ -910,7 +910,7 @@ _OPP_CI_REPO = "https://github.com/omnetpp/opp_ci.git"
 def render_containerfile(toolchain, os_name, os_version, compiler, compiler_version,
                          *, distro=None, distro_version=None,
                          flavor=None, flavor_version=None,
-                         omnetpp_version=None):
+                         omnetpp_version=None, omnetpp_build=None):
     """Render the Containerfile (and, for host toolchain, the entrypoint script)
     for one runner-image combination.
 
@@ -966,6 +966,9 @@ def render_containerfile(toolchain, os_name, os_version, compiler, compiler_vers
         if not omnetpp_version:
             raise ValueError("host-toolchain image requires omnetpp_version")
         ctx["omnetpp_version"] = omnetpp_version
+        # The opp_env install token: a release (omnetpp-6.4.0) or a git ref
+        # (omnetpp-git@<commit>). Defaults from the slug for a release dep.
+        ctx["omnetpp_install"] = omnetpp_build or f"omnetpp-{omnetpp_version}"
         pkgs_path = podman_dir.joinpath("packages.yml")
         with open(pkgs_path) as f:
             pkg_map = yaml.safe_load(f) or {}
@@ -1052,7 +1055,7 @@ def _label_args(labels, flag):
 def _build_nix_runner_image(final_tag, slug, os_name, os_version,
                             compiler, compiler_version, *, distro, distro_version,
                             flavor, flavor_version, omnetpp_version, push,
-                            on_output=None):
+                            omnetpp_build=None, on_output=None):
     """Bake a per-omnetpp nix runner image via run+commit.
 
     A Containerfile RUN cannot write into the *runtime* /nix named volume, so
@@ -1104,16 +1107,17 @@ def _build_nix_runner_image(final_tag, slug, os_name, os_version,
     cname = f"opp-ci-bake-{uuid.uuid4().hex[:8]}"
     subprocess.run(["podman", "rm", "-f", cname], capture_output=True, text=True)
     try:
+        install_token = omnetpp_build or f"omnetpp-{omnetpp_version}"
         result = run_external(
             ["podman", "run", "--name", cname,
              "-v", f"{_NIX_STORE_VOLUME}:/nix",
-             base_tag, "install", f"omnetpp-{omnetpp_version}"],
-            label=f"bake omnetpp-{omnetpp_version} into {final_tag}", stream=True,
+             base_tag, "install", install_token],
+            label=f"bake {install_token} into {final_tag}", stream=True,
             on_output=on_output,
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"omnetpp-{omnetpp_version} install for {final_tag} failed (exit {result.returncode})"
+                f"{install_token} install for {final_tag} failed (exit {result.returncode})"
             )
         commit_labels = _runner_image_labels(slug, "nix", compiler, compiler_version, omnetpp_version)
         commit_labels["org.opp_ci.base-id"] = base_id
@@ -1133,13 +1137,19 @@ def _build_nix_runner_image(final_tag, slug, os_name, os_version,
 def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version,
                        *, distro=None, distro_version=None,
                        flavor=None, flavor_version=None,
-                       omnetpp_version=None, push=False, on_output=None):
+                       omnetpp_version=None, omnetpp_build=None, push=False,
+                       on_output=None):
     """Build (and optionally push) one opp-ci-runner image.
 
     *omnetpp_version* is required for both toolchains — it is baked in so the
     container can run opp_repl tests without (re)building OMNeT++ per run:
       - host: the Containerfile runs 'opp_env install --nixless-workspace'.
       - nix:  run+commit bakes the workspace; see ``_build_nix_runner_image``.
+
+    *omnetpp_version* is the tag-safe identity slug (e.g. ``6.4.0`` or
+    ``git-<short8>``); *omnetpp_build* is the opp_env install token actually
+    baked (``omnetpp-6.4.0`` or ``omnetpp-git@<commit>``), defaulting from the
+    slug for a release dep.
     """
     slug = _resolve_platform_slug(
         os_name, os_version, distro=distro, distro_version=distro_version,
@@ -1150,7 +1160,8 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
             tag, slug, os_name, os_version, compiler, compiler_version,
             distro=distro, distro_version=distro_version,
             flavor=flavor, flavor_version=flavor_version,
-            omnetpp_version=omnetpp_version, push=push, on_output=on_output,
+            omnetpp_version=omnetpp_version, omnetpp_build=omnetpp_build,
+            push=push, on_output=on_output,
         )
         return
 
@@ -1158,7 +1169,7 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
         toolchain, os_name, os_version, compiler, compiler_version,
         distro=distro, distro_version=distro_version,
         flavor=flavor, flavor_version=flavor_version,
-        omnetpp_version=omnetpp_version,
+        omnetpp_version=omnetpp_version, omnetpp_build=omnetpp_build,
     )
     labels = _runner_image_labels(slug, toolchain, compiler, compiler_version, omnetpp_version)
     with tempfile.TemporaryDirectory() as tmp:
@@ -1181,7 +1192,7 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
 def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_version,
                          *, distro=None, distro_version=None,
                          flavor=None, flavor_version=None,
-                         omnetpp_version=None, on_output=None):
+                         omnetpp_version=None, omnetpp_build=None, on_output=None):
     """Invoke 'podman build' for the image so podman's layer cache picks up
     any changes — new pinned SHAs from an upstream push, edits to the
     Containerfile template, a different compiler package, a different OMNeT++
@@ -1196,7 +1207,8 @@ def _ensure_runner_image(tag, toolchain, os_name, os_version, compiler, compiler
         tag, toolchain, os_name, os_version, compiler, compiler_version,
         distro=distro, distro_version=distro_version,
         flavor=flavor, flavor_version=flavor_version,
-        omnetpp_version=omnetpp_version, on_output=on_output,
+        omnetpp_version=omnetpp_version, omnetpp_build=omnetpp_build,
+        on_output=on_output,
     )
 
 
@@ -1228,21 +1240,15 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
     flavor_version = kwargs.get("flavor_version")
     compiler = kwargs.get("compiler")
     compiler_version = kwargs.get("compiler_version")
-    from opp_ci.dependency import dep_build_token
+    from opp_ci.dependency import dep_build_token, dep_tag_slug
     resolved_deps = kwargs.get("resolved_deps") or {}
     deps_map = resolved_deps if isinstance(resolved_deps, dict) else {}
-    # A git-ref dependency would have to be baked into a *per-commit* runner
-    # image (the omnetpp version is part of the image tag and is opp_env-
-    # installed at image-build time). That threading isn't in place yet, so
-    # reject it with an actionable message rather than silently building the
-    # image's default omnetpp. isolation=none (host nix/nixless) supports it.
-    git_deps = [name for name, ver in deps_map.items() if isinstance(ver, dict)]
-    if git_deps:
-        raise ValueError(
-            f"git-ref dependencies {git_deps} are not yet supported under "
-            f"isolation=podman (they can't be baked into a runner image). "
-            f"Use isolation=none for a git-ref dependency.")
-    omnetpp_version = deps_map.get("omnetpp")
+    omnetpp_dep = deps_map.get("omnetpp")
+    # The image is content-addressed by a tag-safe omnetpp *slug* (a release
+    # version, or git-<short8> for a git ref); the per-commit omnetpp itself is
+    # baked via the opp_env *build token* (omnetpp-6.4.0 or omnetpp-git@<sha>).
+    omnetpp_version = dep_tag_slug(omnetpp_dep) if omnetpp_dep else None
+    omnetpp_build = dep_build_token("omnetpp", omnetpp_dep) if omnetpp_dep else None
     # Every pinned dependency becomes an opp_env '<name>-<version>' token. opp_env
     # accepts these alongside the project on the command line (e.g. 'mm1k
     # omnetpp-6.2.0') and treats them as authoritative — without them it resolves
@@ -1269,7 +1275,7 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
             image, toolchain, os_name, os_version, compiler, compiler_version,
             distro=distro, distro_version=distro_version,
             flavor=flavor, flavor_version=flavor_version,
-            omnetpp_version=omnetpp_version,
+            omnetpp_version=omnetpp_version, omnetpp_build=omnetpp_build,
             on_output=recorder.output if recorder else None,
         )
     except Exception:

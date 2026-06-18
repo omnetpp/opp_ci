@@ -57,10 +57,14 @@
             </div>
             <div class="form-group">
                 <label for="omnetpp_versions">OMNeT++ Versions</label>
-                <input type="text" name="omnetpp_versions" id="omnetpp_versions" list="omnetpp-version-options" placeholder="e.g. 6.2.0, 6.3.0">
+                <input type="text" name="omnetpp_versions" id="omnetpp_versions" list="omnetpp-version-options" placeholder="e.g. 6.2.0, 6.3.0, git@omnetpp-6.x">
                 <datalist id="omnetpp-version-options">
                     {% for v in omnetpp_versions %}<option value="{{ v }}">{% endfor %}
                 </datalist>
+                <p style="font-size:0.85rem; color:var(--muted); margin-top:0.25rem;">
+                    A release version, or a git ref as <code>git@&lt;branch|tag|sha&gt;</code>
+                    (e.g. <code>git@omnetpp-6.x</code>) — resolution pins it to a commit.
+                </p>
             </div>
         </div>
         <div class="form-row">

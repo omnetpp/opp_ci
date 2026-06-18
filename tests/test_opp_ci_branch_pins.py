@@ -92,6 +92,37 @@ class RenderNoOppCiTest(unittest.TestCase):
             self.assertEqual(rh.call_args.args[1], config.OPP_ENV_REF)
 
 
+class GitOmnetppImageTest(unittest.TestCase):
+    """A git-ref omnetpp dep is baked into a per-commit runner image: the
+    image tag carries a tag-safe slug and the bake installs the git token."""
+
+    SLUG = "git-aaaaaaaa"
+    BUILD = "omnetpp-git@" + "a" * 40
+
+    def test_tag_is_podman_safe(self):
+        tag = executor._runner_image_tag("ubuntu-24.04", "none", "gcc", "13", self.SLUG)
+        self.assertEqual(
+            tag, "opp-ci-runner:ubuntu-24.04-none-gcc-13-omnetpp-git-aaaaaaaa")
+        self.assertNotIn("@", tag)
+        self.assertEqual(tag.count(":"), 1)   # only the repo:tag separator
+
+    def test_host_containerfile_bakes_git_build_token(self):
+        with mock.patch.object(executor, "_resolve_remote_head", return_value="deadbeef"):
+            files = executor.render_containerfile(
+                "none", "ubuntu", "24.04", "gcc", "13",
+                omnetpp_version=self.SLUG, omnetpp_build=self.BUILD)
+        cf = files["Containerfile"]
+        self.assertIn(self.BUILD, cf)                       # installs the git ref
+        self.assertNotIn(f"omnetpp-{self.SLUG}", cf)        # not the slug
+        self.assertIn(self.BUILD, files["opp_ci_entry.sh"])  # default pin too
+
+    def test_release_build_token_defaults_from_slug(self):
+        with mock.patch.object(executor, "_resolve_remote_head", return_value="deadbeef"):
+            files = executor.render_containerfile(
+                "none", "ubuntu", "24.04", "gcc", "13", omnetpp_version="6.4.0")
+        self.assertIn("omnetpp-6.4.0", files["Containerfile"])
+
+
 class ReadResultFileTest(unittest.TestCase):
     def test_reads_json(self):
         with tempfile.TemporaryDirectory() as d:
