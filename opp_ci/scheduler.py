@@ -449,13 +449,31 @@ def _resolve_ref_range(project_name, range_str):
         session.close()
 
 
+def _pick_ref_sha(refs, git_ref):
+    """Resolve `git_ref` against a ``{refname: sha}`` map: branch first, then
+    tag (preferring the peeled commit ``^{}`` of an annotated tag), then an
+    exact refname / HEAD. Returns the SHA or None."""
+    if f"refs/heads/{git_ref}" in refs:
+        return refs[f"refs/heads/{git_ref}"]
+    peeled = refs.get(f"refs/tags/{git_ref}^{{}}")
+    if peeled:
+        return peeled
+    if f"refs/tags/{git_ref}" in refs:
+        return refs[f"refs/tags/{git_ref}"]
+    return refs.get(git_ref)
+
+
 def resolve_source_commit(project_name, git_ref):
     """Resolve a single ref (branch / tag / SHA) to a concrete commit SHA.
 
     The source half of "pinned all the way down" for single-run submits
-    (Phase 2b). **Strict** (decision #7): a non-None ref that can't be pinned to
-    a real commit — no GitHub repo configured, unknown ref, GitHub unreachable —
-    raises ValueError rather than leaving the source unpinned. Returns None when
+    (Phase 2b). Resolution is over **HTTP** and needs no credentials for a
+    public repo: a configured API token takes the REST fast path (private
+    repos / higher rate limit), otherwise the git smart-HTTP ref advertisement
+    resolves the ref token-free (and isn't subject to the REST 60/hr limit).
+    **Strict** (decision #7): a non-None ref that can't be pinned to a real
+    commit — no repo configured, unknown ref, GitHub unreachable — raises
+    ValueError rather than leaving the source unpinned. Returns None when
     `git_ref` is None (no source axis to pin) and the SHA unchanged when it is
     already a full 40-hex SHA.
     """
@@ -480,16 +498,21 @@ def resolve_source_commit(project_name, git_ref):
                 f"GitHub repo configured, so the source can't be resolved to a "
                 f"commit (a run must be pinned to a concrete commit).")
         client = GitHubClient()
-        if not client.is_configured:
-            raise ValueError(
-                f"Cannot pin ref {git_ref!r}: the GitHub client is not "
-                f"configured on the coordinator.")
-        for ref_path in (f"heads/{git_ref}", f"tags/{git_ref}", git_ref):
-            sha = client.resolve_ref(proj.github_owner, proj.github_repo, ref_path)
-            if sha:
-                return sha
+        # Authenticated REST fast path (private repos / high rate limit).
+        if client.is_configured:
+            for ref_path in (f"heads/{git_ref}", f"tags/{git_ref}", git_ref):
+                sha = client.resolve_ref(proj.github_owner, proj.github_repo, ref_path)
+                if sha:
+                    return sha
+        # Token-free HTTP fallback: the git smart-HTTP ref advertisement.
+        sha = _pick_ref_sha(
+            client.list_remote_refs(proj.github_owner, proj.github_repo), git_ref)
+        if sha:
+            return sha
         raise ValueError(
-            f"Could not resolve ref {git_ref!r} to a commit for {project_name}.")
+            f"Could not resolve ref {git_ref!r} to a commit for {project_name} "
+            f"on github.com/{proj.github_owner}/{proj.github_repo} "
+            f"(unknown ref, or GitHub unreachable).")
     finally:
         session.close()
 

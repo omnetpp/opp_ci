@@ -22,12 +22,13 @@ from opp_ci.db.connection import engine, SessionLocal           # noqa: E402
 from opp_ci.db.models import Base, Project                      # noqa: E402
 
 
-def _fake_github(resolve_ref_result):
+def _fake_github(resolve_ref_result, *, configured=True, remote_refs=None):
     client = mock.Mock()
-    client.is_configured = True
+    client.is_configured = configured
     client.resolve_ref.return_value = resolve_ref_result
-    return mock.patch("opp_ci.github.client.GitHubClient",
-                      return_value=client)
+    client.list_remote_refs.return_value = remote_refs or {}
+    # Patch yields the class-mock; its `.return_value` is this client.
+    return mock.patch("opp_ci.github.client.GitHubClient", return_value=client)
 
 
 class SourceCommitTests(unittest.TestCase):
@@ -66,7 +67,30 @@ class SourceCommitTests(unittest.TestCase):
             scheduler.resolve_source_commit("ghost", "main")
 
     def test_unresolvable_ref_rejected(self):
-        with _fake_github(None):  # GitHub returns no SHA for any ref path
+        # API configured but resolves nothing, and the ref-advertisement
+        # fallback (remote_refs) has no matching ref → strict rejection.
+        with _fake_github(None, remote_refs={}):
+            with self.assertRaises(ValueError):
+                scheduler.resolve_source_commit("inet", "no-such-branch")
+
+    def test_falls_back_to_smart_http_when_api_unconfigured(self):
+        # No GitHub token → resolve the public ref over the git smart-HTTP ref
+        # advertisement (no credentials, no REST rate limit), not a failure.
+        refs = {"refs/heads/omnetpp-6.x": "c" * 40}
+        with _fake_github(None, configured=False, remote_refs=refs) as gh:
+            self.assertEqual(
+                scheduler.resolve_source_commit("inet", "omnetpp-6.x"), "c" * 40)
+            client = gh.return_value
+        client.resolve_ref.assert_not_called()        # REST skipped: no token
+        client.list_remote_refs.assert_called_once_with("inet-framework", "inet")
+
+    def test_annotated_tag_resolves_to_peeled_commit(self):
+        refs = {"refs/tags/v1": "a" * 40, "refs/tags/v1^{}": "d" * 40}
+        with _fake_github(None, configured=False, remote_refs=refs):
+            self.assertEqual(scheduler.resolve_source_commit("inet", "v1"), "d" * 40)
+
+    def test_smart_http_miss_when_unconfigured_rejects(self):
+        with _fake_github(None, configured=False, remote_refs={}):
             with self.assertRaises(ValueError):
                 scheduler.resolve_source_commit("inet", "no-such-branch")
 

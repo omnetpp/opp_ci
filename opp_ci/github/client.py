@@ -6,6 +6,7 @@ Reads the API token from ~/.ssh/opp_ci_github_token or OPP_CI_GITHUB_TOKEN env v
 """
 
 import logging
+import re
 
 import requests
 
@@ -187,6 +188,40 @@ class GitHubClient:
         resp = self._session.get(url, timeout=15)
         resp.raise_for_status()
         return resp.json()
+
+    def _git_web_base(self):
+        """The git smart-HTTP host (not the REST API host): github.com for
+        github.com, or the GHE host (``…/api/v3`` stripped) for Enterprise."""
+        b = self.base_url
+        if b.endswith("/api/v3"):
+            return b[: -len("/api/v3")]
+        if "api.github.com" in b:
+            return "https://github.com"
+        return b
+
+    def list_remote_refs(self, owner, repo):
+        """Resolve every ref of a repo to a SHA via the git smart-HTTP
+        upload-pack advertisement
+        (``GET <host>/<owner>/<repo>.git/info/refs?service=git-upload-pack``).
+
+        Pure HTTP — no local clone and no ``git`` binary — and, unlike the REST
+        API, **not** subject to the 60/hr unauthenticated rate limit, so it
+        resolves any *public* ref without a token (a configured token is still
+        sent, for private repos / higher limits). Returns ``{refname: sha}``,
+        including peeled tag entries (``refs/tags/x^{}``), or ``{}`` on failure.
+        """
+        url = (f"{self._git_web_base()}/{owner}/{repo}.git"
+               f"/info/refs?service=git-upload-pack")
+        try:
+            resp = self._session.get(url, timeout=15)
+        except requests.RequestException:
+            return {}
+        if resp.status_code != 200:
+            _logger.warning("git ref advertisement for %s/%s returned %s",
+                            owner, repo, resp.status_code)
+            return {}
+        return {name: sha for sha, name in
+                re.findall(r"([0-9a-f]{40}) (HEAD|refs/[^\x00\n]+)", resp.text)}
 
     def resolve_ref(self, owner, repo, ref):
         """Resolve a git ref (branch, tag, or partial SHA) to a full commit SHA.
