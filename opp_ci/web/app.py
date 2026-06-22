@@ -2077,6 +2077,7 @@ def _queue_matrix_run(session, matrix, *, trigger,
     the global default (or the per-submission override)."""
     from opp_ci.scheduler import expand_matrix
     from opp_ci.fingerprint import compute_cache_fingerprint
+    from opp_ci.persistence import resolve_job_axes
 
     proj = session.execute(
         select(Project).where(Project.name == matrix.project)
@@ -2089,6 +2090,11 @@ def _queue_matrix_run(session, matrix, *, trigger,
         github_repo=proj.github_repo if proj else None,
     )
     for job in expand_matrix(matrix.project, matrix.config):
+        # Resolve loose axes against the fleet first (like a single Test run),
+        # so an unspecified dimension (e.g. distro_version) is pinned before the
+        # fingerprint is computed and the cell is validated/enqueued.
+        resolve_job_axes(session, job, project=matrix.project,
+                         opp_file=matrix.opp_file)
         fp = compute_cache_fingerprint(
             job, project=matrix.project, opp_file=matrix.opp_file,
         )

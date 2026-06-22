@@ -145,6 +145,13 @@ def resolve_loose_axes(coord, tags, *, preferences=None):
         coord["arch"] = arch
 
     # ── platform: pin os/distro against the fleet when left loose ──
+    # Fully-loose platform → pick one wholesale. A partially-specified platform
+    # whose *version* sub-axis is blank (a named distro without its version, or
+    # a non-Linux os without its version) → fill just that, newest the fleet
+    # advertises, symmetric to the compiler_version handling above. This lets a
+    # matrix (or Test) leave distro_version unspecified and have it resolved
+    # instead of rejected; an already-pinned version is left untouched.
+    os_set = (coord.get("os") or "").strip().lower()
     if not (coord.get("os") or coord.get("distro") or coord.get("flavor")):
         os_name, os_ver, distro, distro_ver = _resolve_platform_pick(cand, prefs)
         coord["os"] = os_name
@@ -154,6 +161,21 @@ def resolve_loose_axes(coord, tags, *, preferences=None):
                 coord["distro_version"] = distro_ver
         elif os_ver:
             coord["os_version"] = os_ver
+    elif coord.get("distro") and not coord.get("distro_version"):
+        ver = _newest_version(cand["distro"], coord["distro"].lower())
+        if ver is None:
+            raise ValueError(
+                f"No worker advertises a version for distro "
+                f"{coord['distro']!r}; cannot resolve the loose distro version "
+                f"(reject-incomplete).")
+        coord["distro_version"] = ver
+    elif os_set and os_set != "linux" and not coord.get("os_version"):
+        ver = _newest_version(cand["os"], os_set)
+        if ver is None:
+            raise ValueError(
+                f"No worker advertises a version for os {coord['os']!r}; "
+                f"cannot resolve the loose os version (reject-incomplete).")
+        coord["os_version"] = ver
 
     # ── mode: ranked default; not tag-gated (every worker does both) ──
     if not coord.get("mode"):

@@ -2203,7 +2203,13 @@ def run_matrix(matrix_name, new_name, spec_file, project, kinds, modes, refs, si
         failed = 0
         errors = 0
         cache_hits = 0
+        from opp_ci.persistence import resolve_job_axes
+        host_tags = set(_detect_capability_tags())
         for i, job in enumerate(jobs, 1):
+            # Resolve loose axes against this host (the CLI runs locally), the
+            # same source the single-Test CLI path uses, before fingerprinting.
+            resolve_job_axes(session, job, project=matrix.project,
+                             opp_file=matrix.opp_file, tags=host_tags)
             fp = None if no_cache else compute_cache_fingerprint(
                 job, project=matrix.project, opp_file=matrix.opp_file,
                 # CLI runs typically lack a github token; skip the round-trip

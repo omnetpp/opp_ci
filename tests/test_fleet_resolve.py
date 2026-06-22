@@ -130,11 +130,44 @@ class PlatformResolveTests(unittest.TestCase):
         self.assertEqual(c["arch"], "amd64")
 
     def test_specified_platform_untouched(self):
+        # A fully-specified platform (distro AND its version) is left alone,
+        # even one the fleet doesn't advertise.
         c = resolve_loose_axes(
             _loose_platform(compiler="gcc", compiler_version="14", arch="amd64",
-                            mode="release", os="Linux", distro="fedora"),
+                            mode="release", os="Linux", distro="fedora",
+                            distro_version="39"),
             self.FLEET)
         self.assertEqual(c["distro"], "fedora")
+        self.assertEqual(c["distro_version"], "39")
+
+    def test_fills_loose_distro_version_for_named_distro(self):
+        # A named distro with a blank version is completed from the fleet's
+        # newest version for that distro (symmetric to compiler_version).
+        c = resolve_loose_axes(
+            _loose_platform(compiler="gcc", compiler_version="14", arch="amd64",
+                            mode="release", os="Linux", distro="ubuntu"),
+            {"compiler:gcc-14", "arch:amd64",
+             "distro:ubuntu-22.04", "distro:ubuntu-24.04"})
+        self.assertEqual(c["distro"], "ubuntu")
+        self.assertEqual(c["distro_version"], "24.04")
+
+    def test_reject_loose_distro_version_when_fleet_lacks_distro(self):
+        # distro named, version blank, but the fleet advertises no version for
+        # that distro → reject-incomplete.
+        with self.assertRaises(ValueError):
+            resolve_loose_axes(
+                _loose_platform(compiler="gcc", compiler_version="14",
+                                arch="amd64", mode="release", os="Linux",
+                                distro="fedora"),
+                {"compiler:gcc-14", "arch:amd64", "distro:ubuntu-24.04"})
+
+    def test_fills_loose_os_version_for_non_linux(self):
+        c = resolve_loose_axes(
+            _loose_platform(compiler="gcc", compiler_version="14", arch="amd64",
+                            mode="release", os="Windows"),
+            {"compiler:gcc-14", "arch:amd64", "os:windows-10", "os:windows-11"})
+        self.assertEqual(c["os"], "Windows")
+        self.assertEqual(c["os_version"], "11")
 
     def test_reject_no_platform_in_fleet(self):
         with self.assertRaises(ValueError):
@@ -147,6 +180,33 @@ class PlatformResolveTests(unittest.TestCase):
         self.assertEqual(c["os"], "Windows")
         self.assertEqual(c["os_version"], "11")
         self.assertIsNone(c["distro"])
+
+
+class ResolveJobAxesTests(unittest.TestCase):
+    """resolve_job_axes writes resolved axes back onto the matrix job dict, so
+    a matrix cell resolves unspecified dimensions like a single Test does."""
+
+    TAGS = {"compiler:gcc-14", "arch:amd64",
+            "distro:ubuntu-22.04", "distro:ubuntu-24.04"}
+
+    def test_fills_loose_distro_version_back_onto_job(self):
+        from opp_ci.persistence import resolve_job_axes
+        job = {"kind": "build", "mode": "release", "arch": "amd64",
+               "compiler": "gcc", "compiler_version": "14",
+               "os": "Linux", "distro": "ubuntu", "distro_version": None}
+        # tags= bypasses fleet_tags(session), so no DB is needed.
+        out = resolve_job_axes(None, job, project="inet", tags=self.TAGS)
+        self.assertIs(out, job)                       # mutated in place
+        self.assertEqual(job["distro_version"], "24.04")
+        self.assertEqual(job["project"], "inet")
+
+    def test_already_specified_job_untouched(self):
+        from opp_ci.persistence import resolve_job_axes
+        job = {"kind": "build", "mode": "release", "arch": "amd64",
+               "compiler": "gcc", "compiler_version": "14",
+               "os": "Linux", "distro": "ubuntu", "distro_version": "22.04"}
+        resolve_job_axes(None, job, project="inet", tags=self.TAGS)
+        self.assertEqual(job["distro_version"], "22.04")
 
 
 if __name__ == "__main__":

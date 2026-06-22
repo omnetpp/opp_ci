@@ -43,7 +43,7 @@ from opp_ci.persistence import (
     create_matrix_from_axes, create_matrix_run, create_test_run, delete_worker,
     enqueue_job, finalize_verdict_for_run, get_current_expectation,
     get_matrix_by_name, get_or_create_test, get_test_by_name, insert_expectation,
-    job_to_coord, parse_expectation_override,
+    job_to_coord, parse_expectation_override, resolve_job_axes,
     set_test_name, status_filter, update_worker, validate_run_filters,
     validate_test_coord, worker_can_serve_run,
 )
@@ -276,10 +276,14 @@ async def submit_matrix_run(
         jobs = expand_matrix(matrix.project, matrix.config)
         run_ids = []
         for job in jobs:
-            fp = compute_cache_fingerprint(
-                job, project=matrix.project, opp_file=matrix.opp_file,
-            )
             try:
+                # Resolve loose axes against the fleet (like a single Test run)
+                # before fingerprinting/validating the cell.
+                resolve_job_axes(session, job, project=matrix.project,
+                                 opp_file=matrix.opp_file)
+                fp = compute_cache_fingerprint(
+                    job, project=matrix.project, opp_file=matrix.opp_file,
+                )
                 run, _ = enqueue_job(
                     session,
                     job,
@@ -1291,6 +1295,10 @@ async def submit_matrix_run(
         jobs = expand_matrix(matrix.project, matrix.config)
         run_ids = []
         for job in jobs:
+            # Resolve loose axes against the fleet (like a single Test run)
+            # before fingerprinting/validating the cell.
+            resolve_job_axes(session, job, project=matrix.project,
+                             opp_file=matrix.opp_file)
             fp = None if req.no_cache else compute_cache_fingerprint(
                 job, project=matrix.project, opp_file=matrix.opp_file,
             )

@@ -239,11 +239,17 @@ def _match_and_queue(owner, repo, rule_type, ref_name, commit_sha, git_ref,
                 )
 
             from opp_ci.fingerprint import compute_cache_fingerprint
+            from opp_ci.persistence import resolve_job_axes
 
             for job in jobs:
                 job_ref = job.get("git_ref") or git_ref
                 job_with_ref = dict(job)
                 job_with_ref["git_ref"] = job_ref
+                # Resolve loose axes against the fleet (like a single Test run)
+                # before fingerprinting/validating the cell.
+                resolve_job_axes(session, job_with_ref,
+                                 project=job.get("project", project.name),
+                                 opp_file=opp_file)
                 fp = compute_cache_fingerprint(
                     job_with_ref,
                     project=job.get("project", project.name),

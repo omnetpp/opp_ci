@@ -84,6 +84,32 @@ def job_to_coord(job, *, project=None, opp_file=None):
     return coord
 
 
+def resolve_job_axes(session, job, *, project=None, opp_file=None, tags=None):
+    """Pin a matrix job's loose resolvable axes in place, so a matrix run
+    resolves unspecified dimensions the same way a single Test run does.
+
+    Mirrors the single-Test path (web/app.py `resolve_and_validate_coord`):
+    `resolve_loose_axes` fills the loose compiler/arch/platform/mode axes — and
+    a loose distro_version / os_version — against `tags`. Resolved values are
+    written back onto `job` (whose keys match the coord fields), so the cache
+    fingerprint and the queued Test both see the resolved axes. `tags` defaults
+    to the fleet's advertised tags (the coordinator queues for workers); the CLI
+    passes the local host's capability tags instead, matching its single-Test
+    path. Mutates and returns `job`. Raises ValueError if the tag source can't
+    supply a loose axis. Must run BEFORE `compute_cache_fingerprint`, or a loose
+    matrix would key its cache on the unresolved spec and risk a false hit when
+    the fleet changes.
+    """
+    from opp_ci.fleet import fleet_tags, resolve_loose_axes
+    coord = job_to_coord(job, project=project, opp_file=opp_file)
+    resolve_loose_axes(coord, fleet_tags(session) if tags is None else tags)
+    for field in TEST_COORD_FIELDS:
+        value = coord.get(field)
+        if value is not None:
+            job[field] = value
+    return job
+
+
 # Human labels for the coord fields, matching the test-creation form's field
 # labels (web/templates/test_new.html) so a validation message names fields the
 # way the user sees them ("Compiler Version", not "compiler_version").
