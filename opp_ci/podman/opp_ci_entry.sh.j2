@@ -23,6 +23,20 @@ run_cmd() {
     "$@"
 }
 
+# `opp_env install` accepts a "<project>@<ref>" token (it clones and checks out
+# that git ref). `opp_env run` REJECTS it ("Git branch may only be specified
+# when the project is installed") unless --install is also passed. The deps and
+# project are already installed (the deps.install stage), so the run only needs
+# their versioned ids — strip any "@<ref>" suffix from each token. Tokens
+# without an "@" pass through unchanged.
+strip_refs() {
+    _out=""
+    for _t in $1; do
+        _out="$_out ${_t%@*}"
+    done
+    printf '%s' "$_out"
+}
+
 sync_repo() {
     name=$1
     url=$2
@@ -54,7 +68,9 @@ parse_projects() {
     for p in $OPP_CI_INSTALL_PROJECTS; do
         p=$(echo "$p" | tr -d ' ')
         [ -z "$p" ] && continue
-        [ -z "$FIRST_PROJECT" ] && FIRST_PROJECT="$p"
+        # FIRST_PROJECT is only used to cd into the install dir, whose name has
+        # no "@<ref>" — strip it. EXTRA_PROJECTS keeps the ref for the install.
+        [ -z "$FIRST_PROJECT" ] && FIRST_PROJECT="${p%@*}"
         EXTRA_PROJECTS="$EXTRA_PROJECTS $p"
     done
     unset IFS
@@ -111,5 +127,9 @@ enter_workdir
 # "$*" is the opp_repl console command the worker passed (opp_build_project /
 # opp_run_*_tests with its --load/-p flags); opp_env runs it in the project env.
 PINNED_PROJECTS="${OPP_CI_PIN_DEPS:-{{ omnetpp_install }}}"
-printf '@@oppci:cmd@@ opp_env -l ERROR run -w /opt/opp_env_workspace %s%s -c "%s"\n' "$PINNED_PROJECTS" "$EXTRA_PROJECTS" "$*"
-exec opp_env -l ERROR run -w /opt/opp_env_workspace $PINNED_PROJECTS$EXTRA_PROJECTS -c "$*"
+# Drop "@<ref>" suffixes: the run stage has no --install, so opp_env rejects
+# branch tokens. The deps.install stage already checked out the right refs.
+RUN_PINNED=$(strip_refs "$PINNED_PROJECTS")
+RUN_EXTRA=$(strip_refs "$EXTRA_PROJECTS")
+printf '@@oppci:cmd@@ opp_env -l ERROR run -w /opt/opp_env_workspace %s%s -c "%s"\n' "$RUN_PINNED" "$RUN_EXTRA" "$*"
+exec opp_env -l ERROR run -w /opt/opp_env_workspace $RUN_PINNED $RUN_EXTRA -c "$*"
