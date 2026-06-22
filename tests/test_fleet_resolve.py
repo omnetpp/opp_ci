@@ -200,6 +200,16 @@ class ResolveJobAxesTests(unittest.TestCase):
         self.assertEqual(job["distro_version"], "24.04")
         self.assertEqual(job["project"], "inet")
 
+    def test_raises_when_fleet_lacks_distro_version(self):
+        # The unresolvable case the matrix-run handlers catch and surface as a
+        # clean error: a named distro with no fleet version.
+        from opp_ci.persistence import resolve_job_axes
+        job = {"kind": "build", "mode": "release", "arch": "amd64",
+               "compiler": "gcc", "compiler_version": "14",
+               "os": "Linux", "distro": "fedora", "distro_version": None}
+        with self.assertRaises(ValueError):
+            resolve_job_axes(None, job, project="inet", tags=self.TAGS)
+
     def test_already_specified_job_untouched(self):
         from opp_ci.persistence import resolve_job_axes
         job = {"kind": "build", "mode": "release", "arch": "amd64",

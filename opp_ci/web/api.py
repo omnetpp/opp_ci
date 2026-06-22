@@ -1295,24 +1295,30 @@ async def submit_matrix_run(
         jobs = expand_matrix(matrix.project, matrix.config)
         run_ids = []
         for job in jobs:
-            # Resolve loose axes against the fleet (like a single Test run)
-            # before fingerprinting/validating the cell.
-            resolve_job_axes(session, job, project=matrix.project,
-                             opp_file=matrix.opp_file)
-            fp = None if req.no_cache else compute_cache_fingerprint(
-                job, project=matrix.project, opp_file=matrix.opp_file,
-            )
-            run, _ = enqueue_job(
-                session,
-                job,
-                project=matrix.project,
-                opp_file=matrix.opp_file,
-                matrix_run_id=matrix_run.id,
-                use_cache=not req.no_cache,
-                cache_fingerprint=fp,
-                default_expectation=default_expectation,
-                expectation_set_by=identity.get("name"),
-            )
+            try:
+                # Resolve loose axes against the fleet (like a single Test run)
+                # before fingerprinting/validating the cell.
+                resolve_job_axes(session, job, project=matrix.project,
+                                 opp_file=matrix.opp_file)
+                fp = None if req.no_cache else compute_cache_fingerprint(
+                    job, project=matrix.project, opp_file=matrix.opp_file,
+                )
+                run, _ = enqueue_job(
+                    session,
+                    job,
+                    project=matrix.project,
+                    opp_file=matrix.opp_file,
+                    matrix_run_id=matrix_run.id,
+                    use_cache=not req.no_cache,
+                    cache_fingerprint=fp,
+                    default_expectation=default_expectation,
+                    expectation_set_by=identity.get("name"),
+                )
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Matrix '{matrix.name}' produces an "
+                           f"under-specified job: {e}")
             run_ids.append(run.id)
         session.commit()
         _logger.info(

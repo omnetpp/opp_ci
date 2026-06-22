@@ -1862,11 +1862,18 @@ def matrix_create(
                     session.commit()  # keep the saved recipe
                     return RedirectResponse(
                         url=f"/test-matrices/{matrix.id}?error={e}", status_code=303)
-            matrix_run = _queue_matrix_run(
-                session, runnable, trigger="web",
-                default_expectation=default_expectation,
-                expectation_set_by=current_user.display_name,
-            )
+            session.commit()  # persist the saved matrix/snapshot before queueing
+            try:
+                matrix_run = _queue_matrix_run(
+                    session, runnable, trigger="web",
+                    default_expectation=default_expectation,
+                    expectation_set_by=current_user.display_name,
+                )
+            except ValueError as e:
+                session.rollback()  # discard the partial run; the matrix stays
+                return RedirectResponse(
+                    url=f"/test-matrices/{runnable.id}?error={quote_plus(str(e))}",
+                    status_code=303)
             session.commit()
             return RedirectResponse(url=f"/test-matrix-runs/{matrix_run.id}", status_code=303)
         session.commit()
@@ -1940,11 +1947,17 @@ def matrix_run(matrix_id: int,
         matrix = session.get(TestMatrix, matrix_id)
         if matrix is None:
             return RedirectResponse(url="/test-matrices", status_code=303)
-        matrix_run = _queue_matrix_run(
-            session, matrix, trigger="web",
-            default_expectation=default_expectation,
-            expectation_set_by=current_user.display_name,
-        )
+        try:
+            matrix_run = _queue_matrix_run(
+                session, matrix, trigger="web",
+                default_expectation=default_expectation,
+                expectation_set_by=current_user.display_name,
+            )
+        except ValueError as e:
+            session.rollback()
+            return RedirectResponse(
+                url=f"/test-matrices/{matrix_id}?error={quote_plus(str(e))}",
+                status_code=303)
         session.commit()
         return RedirectResponse(url=f"/test-matrix-runs/{matrix_run.id}", status_code=303)
     finally:
@@ -2123,7 +2136,13 @@ def matrix_run_rerun(matrix_run_id: int,
         matrix = session.get(TestMatrix, mr.matrix_id)
         if matrix is None:
             return RedirectResponse(url="/test-matrix-runs", status_code=303)
-        new_run = _queue_matrix_run(session, matrix, trigger="rerun")
+        try:
+            new_run = _queue_matrix_run(session, matrix, trigger="rerun")
+        except ValueError as e:
+            session.rollback()
+            return RedirectResponse(
+                url=f"/test-matrices/{matrix.id}?error={quote_plus(str(e))}",
+                status_code=303)
         session.commit()
         return RedirectResponse(url=f"/test-matrix-runs/{new_run.id}", status_code=303)
     finally:
