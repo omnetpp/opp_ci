@@ -131,11 +131,27 @@ class BareMetalOppEnvTests(unittest.TestCase):
         self.assertTrue(self.calls, "no opp_env run invoked")
         build = self.calls[0]
         self.assertEqual(build[:2], ["opp_env", "run"])
-        # No token on the run command may carry an "@<ref>" suffix.
-        self.assertFalse([t for t in build if "@" in t],
-                         f"run command still carries a branch token: {build}")
-        self.assertIn("inet-git", build)
-        self.assertIn("omnetpp-git", build)
+        # The positional project + dep tokens (everything between '-w <ws>' and
+        # '-c') must not carry an "@<ref>" suffix. (The '-c' inner string may
+        # legitimately contain '@opp' — the bundled registry — so check only the
+        # positional tokens.)
+        pos = build[4:build.index("-c")]
+        self.assertFalse([t for t in pos if "@" in t],
+                         f"run command still carries a branch token: {pos}")
+        self.assertIn("inet-git", pos)
+        self.assertIn("omnetpp-git", pos)
+
+    def test_run_passes_repl_discovery_flags(self):
+        # opp_repl can't auto-discover a bundled catalog project (inet) from the
+        # install dir, so the run command must load the @opp registry + the
+        # project's install-dir descriptor and select it by bare name.
+        executor.run_test(
+            "inet", "build", isolation="none", toolchain="none",
+            resolved_deps={"omnetpp": "6.4.0"})
+        inner = self.calls[0][-1]
+        self.assertIn("--load @opp", inner)
+        self.assertIn("--load \"$INET_ROOT\"", inner)
+        self.assertIn("-p inet", inner)
 
     def test_result_file_on_test_not_build(self):
         # opp_repl's --result-file rides on the test command only; the build

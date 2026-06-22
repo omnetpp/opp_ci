@@ -1692,9 +1692,23 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
     run_project = _strip_git_ref(effective_project)
     run_pins = [_strip_git_ref(p) for p in pins]
 
+    # opp_repl must be told which simulation project to act on. cwd-discovery
+    # (running from the install dir) suffices for an external SimulationProject
+    # whose .opp ships in its tree (e.g. mm1k), but a bundled catalog project
+    # like inet/omnetpp keeps its descriptor in opp_repl's @opp registry, not
+    # the install dir — so cwd-discovery alone fails with "No enclosing
+    # simulation project is found". Mirror the podman path: load the bundled
+    # registry AND the project's own install-dir .opp ($<NAME>_ROOT, exported by
+    # opp_env), then select the bare project name. Appended at exec time as
+    # plumbing so the recorder display keeps the clean build/test command.
+    m = _VERSIONED_NAME_RE.match(project)
+    bare_project = m.group(1) if m else project
+    root_var = bare_project.upper().replace("-", "_") + "_ROOT"
+    repl_flags = f' --load @opp --load "${root_var}" -p {bare_project}'
+
     def _opp_env_run(inner):
         return run_external(
-            _opp_env_cmd() + ["run", "-w", ws, *run_pins, run_project, "-c", inner],
+            _opp_env_cmd() + ["run", "-w", ws, *run_pins, run_project, "-c", inner + repl_flags],
             label=f"opp_env:{effective_project}", env=env, cwd=run_cwd,
             stream=True, on_output=recorder.output if recorder else None)
 
