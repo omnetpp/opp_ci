@@ -510,6 +510,18 @@ def _opp_env_pin_args(resolved_deps):
     return [dep_build_token(name, ver) for name, ver in sorted(deps.items()) if ver]
 
 
+def _strip_git_ref(token):
+    """Drop a trailing ``@<ref>`` from an opp_env project token.
+
+    ``opp_env install`` accepts a ``name@<ref>`` token (it clones and checks out
+    that git ref), but ``opp_env run`` REJECTS it ("Git branch may only be
+    specified when the project is installed") unless ``--install`` is also given.
+    The bare-metal run path installs first (a separate step), so the run only
+    needs the versioned id — strip the ``@<ref>`` suffix. Tokens without an
+    ``@`` pass through unchanged."""
+    return token.split("@", 1)[0]
+
+
 def _project_install_dir(ws, project):
     """Return the project's opp_env install dir under *ws*, or *ws* itself.
 
@@ -1674,9 +1686,15 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
     # from cwd; pass -w explicitly so workspace detection doesn't depend on it.
     run_cwd = _project_install_dir(ws, project)
 
+    # The install step already checked out any git refs; `opp_env run` (no
+    # --install) rejects an "@<ref>" token, so strip the suffix from the project
+    # and the pins for the run command (the label keeps the ref for clarity).
+    run_project = _strip_git_ref(effective_project)
+    run_pins = [_strip_git_ref(p) for p in pins]
+
     def _opp_env_run(inner):
         return run_external(
-            _opp_env_cmd() + ["run", "-w", ws, *pins, effective_project, "-c", inner],
+            _opp_env_cmd() + ["run", "-w", ws, *run_pins, run_project, "-c", inner],
             label=f"opp_env:{effective_project}", env=env, cwd=run_cwd,
             stream=True, on_output=recorder.output if recorder else None)
 

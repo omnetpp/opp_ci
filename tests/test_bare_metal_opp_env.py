@@ -120,6 +120,23 @@ class BareMetalOppEnvTests(unittest.TestCase):
         self.assertIn("opp_run_smoke_tests", self.calls[1][-1])
         self.assertIn("--no-build", self.calls[1][-1])
 
+    def test_run_strips_git_ref_from_project_and_pins(self):
+        # opp_env run has no --install, so it rejects "name@<ref>" tokens ("Git
+        # branch may only be specified when the project is installed"). The
+        # install step already checked out the refs, so the run must reference
+        # the versioned ids only — @<ref> stripped from both source and deps.
+        executor.run_test(
+            "inet", "build", git_ref="b" * 40, isolation="none", toolchain="none",
+            resolved_deps={"omnetpp": {"git": "omnetpp-6.x", "commit": "a" * 40}})
+        self.assertTrue(self.calls, "no opp_env run invoked")
+        build = self.calls[0]
+        self.assertEqual(build[:2], ["opp_env", "run"])
+        # No token on the run command may carry an "@<ref>" suffix.
+        self.assertFalse([t for t in build if "@" in t],
+                         f"run command still carries a branch token: {build}")
+        self.assertIn("inet-git", build)
+        self.assertIn("omnetpp-git", build)
+
     def test_result_file_on_test_not_build(self):
         # opp_repl's --result-file rides on the test command only; the build
         # (opp_build_project) has no such flag.
