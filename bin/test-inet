@@ -1,10 +1,25 @@
 #!/bin/bash
 #
-# Submit inet's build to the opp_ci coordinator.
+# Submit inet's full test pipeline to the opp_ci coordinator.
 #
 # Fixed config: inet 4.6.0 against omnetpp 6.2.0/6.3.0/6.4.0 (its
 # compatible set), podman isolation (Ubuntu 24.04 / gcc-13), remote
 # submission. This mirrors the validated coordinator pipeline.
+#
+# Kinds submitted (each runs through opp_repl's test framework, the same way
+# test-mm1k drives build,smoke,opp):
+#   build         compile the project
+#   smoke         run every simulation briefly, expecting no crash
+#   fingerprint   replay simulations and compare fingerprints (tests/fingerprint/store.json)
+#   statistical   statistical result checks
+#   speed         performance checks (tests/speed/store.json)
+#   feature       build/test optional feature combinations
+#   opp           the .test suites (unit/module/protocol/queueing/...)
+#   validation    INET's analytical-model validation tests (inet.test.validation)
+#
+# These replace INET's legacy CSV/script harness (tests/fingerprint/*,
+# tests/features/featuretest, tests/speed/speedtest), which is being retired in
+# favour of opp_ci + opp_repl. See opp_ci/plan/.../replace-legacy-inet-test-harness.md.
 #
 # Submission is async: prints `Submitted run #N` per kind; read results with
 #   GET $OPP_CI_COORDINATOR_URL/api/runs/<id>
@@ -12,7 +27,7 @@
 # Requires OPP_CI_COORDINATOR_URL and OPP_CI_API_TOKEN in the environment
 # (and OPP_CI_TLS_INSECURE=1 for the self-signed local coordinator).
 #
-# Usage: bin/test-inet
+# Usage: bin/test-inet [kind[,kind...]]    (default: the full set above)
 #
 
 set -e
@@ -21,11 +36,12 @@ set -e
 : "${OPP_CI_API_TOKEN:?set OPP_CI_API_TOKEN}"
 
 INET_VERSION=4.6.0
+KINDS="${1:-build,smoke,fingerprint,statistical,speed,feature,opp,validation}"
 
 for version in 6.2.0 6.3.0 6.4.0; do
     opp_ci --remote run \
         --project "inet-$INET_VERSION" \
-        --kind build \
+        --kind "$KINDS" \
         --pin omnetpp="$version" \
         --isolation podman --toolchain nix \
         --distro "Ubuntu 24.04" --compiler gcc --compiler-version 13

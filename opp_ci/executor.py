@@ -188,6 +188,7 @@ COMMAND_MAP = {
     "release": "opp_run_release_tests",
     "build": "opp_build_project",
     "opp": "opp_run_opp_tests",
+    "validation": "opp_run_validation_tests",
     "all": "opp_run_all_tests",
 }
 
@@ -208,6 +209,7 @@ def _get_test_functions():
         from opp_repl.test.chart import run_chart_tests
         from opp_repl.test.release import run_release_tests
         from opp_repl.test.opp import run_opp_tests
+        from opp_repl.test.validation import run_validation_tests
         from opp_repl.test.all import run_all_tests
         from opp_repl.simulation.build import build_project
         _TEST_FUNCTIONS = {
@@ -220,6 +222,7 @@ def _get_test_functions():
             "chart": run_chart_tests,
             "release": run_release_tests,
             "opp": run_opp_tests,
+            "validation": run_validation_tests,
             "all": run_all_tests,
             "build": build_project,
         }
