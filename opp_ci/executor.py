@@ -1,3 +1,26 @@
+"""
+Test execution for opp_ci (host opp_env paths and the podman staged path).
+
+No cosmetic commands
+--------------------
+Whatever command opp_ci reports for a stage MUST be exactly the command it
+executes — never a cleaned-up, abbreviated, or "for display" variant. A
+recorded command has to be copy-pasteable and reproduce the run. Concretely:
+
+  * Host paths (``_run_test_via_opp_env``, ``install_project``): pass the real
+    argv through ``_format_argv`` to ``recorder.begin(command=...)``. Build the
+    argv once and use that same value for both the run and the report (see
+    ``_opp_env_argv``).
+  * Podman staged path (``_run_podman_staged``): the container entry scripts
+    (``opp_ci/podman/*.j2``) echo each command they run verbatim via their
+    ``run_cmd`` helper (the ``_CMD_MARKER`` "cmd" stream). That echo — produced
+    where the command actually runs — is the recorded command, so the Python
+    side passes ``command=None`` and does NOT reconstruct a display string.
+
+If you add a stage, do not introduce a separate "display" command. Either
+report the exact argv, or rely on the entry-script ``run_cmd`` echo.
+"""
+
 import contextlib
 import hashlib
 import io
@@ -135,7 +158,7 @@ def _run_external_streaming(args, *, label, timeout, env, cwd, start, on_output=
 
 
 def run_external(args, *, label, timeout=None, env=None, cwd=None, stream=False,
-                 on_output=None):
+                 on_output=None, echo_cmd=False):
     """subprocess.run + structured logging.
 
     Always logs the command at INFO and the exit code + elapsed time. On a
@@ -155,6 +178,13 @@ def run_external(args, *, label, timeout=None, env=None, cwd=None, stream=False,
     Returns the CompletedProcess.
     """
     _logger.info("[%s] $ %s", label, _format_argv(args))
+    if echo_cmd and on_output is not None:
+        # Surface the exact argv to the recorder's "cmd" stream, so what is
+        # reported is what runs — see the "no cosmetic commands" rule in the
+        # module docstring. Use this for host-side stages that run real
+        # commands (the podman path gets the same effect from the entry
+        # script's run_cmd markers).
+        on_output("cmd", _format_argv(args))
     start = time.time()
     if stream:
         return _run_external_streaming(
@@ -780,12 +810,12 @@ def _create_git_worktree(project_dir, git_ref, on_output=None):
     target = os.path.join(tempfile.gettempdir(), f"opp-ci-worktree-{uuid.uuid4().hex[:8]}")
     run_external(
         ["git", "fetch", "origin"], label="git fetch", cwd=project_dir, timeout=120,
-        stream=True, on_output=on_output,
+        stream=True, on_output=on_output, echo_cmd=True,
     )
     result = run_external(
         ["git", "worktree", "add", "--detach", target, git_ref],
         label=f"git worktree add {git_ref}", cwd=project_dir,
-        stream=True, on_output=on_output,
+        stream=True, on_output=on_output, echo_cmd=True,
     )
     if result.returncode != 0:
         raise RuntimeError(f"git worktree add {git_ref} failed: {result.stderr.strip()}")
@@ -1323,8 +1353,11 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         if git_ref:
             # checkout: detached worktree at the requested ref (host side, then
             # bind-mounted). Captured as its own stage so a bad ref is obvious.
+            # No headline command: _create_git_worktree runs two real commands
+            # (git fetch, git worktree add) and echoes each verbatim to the "cmd"
+            # stream (echo_cmd) — see the "no cosmetic commands" rule.
             if recorder is not None:
-                recorder.begin(Stage.CHECKOUT, command=f"git worktree add {git_ref}")
+                recorder.begin(Stage.CHECKOUT, command=None)
             try:
                 worktree_path = _create_git_worktree(
                     project_dir, git_ref,
@@ -1411,8 +1444,8 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         # the build stage — see the taxonomy note in the plan.)
         repl_suffix = inner_cmd[len(COMMAND_MAP[kind]):]   # " --mode … --load … -p …"
         build_inner = "opp_build_project" + repl_suffix
-        # --result-file captures the structured result into `details`; it is
-        # plumbing, so it stays out of the curated stage display below.
+        # --result-file captures the structured result into `details`. It is part
+        # of the real command and is reported as such (no cosmetic variant).
         test_inner = inner_cmd + " --no-build" + f" --result-file {container_result}"
 
         def _oe_args(inner):
@@ -1423,20 +1456,16 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         # project + its deps; omnetpp is pre-baked into the image — see
         # container.prepare — so this is mostly the project install/clone),
         # project.build (opp_build_project), and test.run (the test with
-        # --no-build). The build/test commands are byte-identical to the
-        # combined form; deps.install just front-loads the (idempotent)
-        # --install so it is its own stage and an install failure is
-        # attributed there, skipping build + test.
-        # Each stage carries a third element: the *bare* command to show in the
-        # stage view, stripped of the opp_env / `-c env -u PYTHONPATH …` /
-        # entry-script / podman-exec plumbing that the executed argv needs. The
-        # plumbing still goes to the worker journal (run_external logs the full
-        # argv); the UI just shows what actually ran inside.
-        mode_suffix = f" --mode {mode}" if mode else ""
+        # --no-build). deps.install front-loads the (idempotent) --install so it
+        # is its own stage and an install failure is attributed there, skipping
+        # build + test. The actual command each stage runs is echoed verbatim by
+        # the entry script's run_cmd markers (the green "cmd" stream) — see the
+        # "no cosmetic commands" rule in the module docstring — so the stages
+        # carry no separate display string.
         run_stages = [
-            (Stage.DEPS_INSTALL, _oe_args("true"), f"opp_env install {effective_project}"),
-            (Stage.PROJECT_BUILD, _oe_args(build_inner), "opp_build_project" + mode_suffix),
-            (Stage.TEST_RUN, _oe_args(test_inner), COMMAND_MAP[kind] + mode_suffix + " --no-build"),
+            (Stage.DEPS_INSTALL, _oe_args("true")),
+            (Stage.PROJECT_BUILD, _oe_args(build_inner)),
+            (Stage.TEST_RUN, _oe_args(test_inner)),
         ]
         entry_script = "/opt/opp_env_entry.sh"
     else:
@@ -1478,23 +1507,24 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         # kind=build the build is the whole job, so there is no test stage
         # (opp_build_project has no --no-build flag).
         build_args = ["opp_build_project"] + mode_flags + repl_flags
-        # --result-file captures the structured result into `details` (plumbing,
-        # kept out of the curated stage display).
+        # --result-file captures the structured result into `details`. It is part
+        # of the real command and is reported as such (no cosmetic variant).
         test_args = ([test_command] + mode_flags + repl_flags
                      + ["--no-build", "--result-file", container_result])
+        # The actual command each stage runs is echoed verbatim by the entry
+        # script's run_cmd markers (the green "cmd" stream) — see the "no cosmetic
+        # commands" rule in the module docstring — so the stages carry no separate
+        # display string.
         run_stages = []
         if is_catalog:
             # Install the catalog project(s) once, as their own stage
             # (entry script --do-install), instead of re-running the install
             # loop on every build/test exec. A bind-mounted SimulationProject
             # needs no install stage — its source is already at /work.
-            run_stages.append(
-                (Stage.DEPS_INSTALL, ["--do-install"], f"opp_env install {repl_project}"))
-        run_stages.append(
-            (Stage.PROJECT_BUILD, build_args, "opp_build_project" + mode_suffix))
+            run_stages.append((Stage.DEPS_INSTALL, ["--do-install"]))
+        run_stages.append((Stage.PROJECT_BUILD, build_args))
         if not build_only:
-            run_stages.append(
-                (Stage.TEST_RUN, test_args, test_command + mode_suffix + " --no-build"))
+            run_stages.append((Stage.TEST_RUN, test_args))
         entry_script = "/opt/opp_ci_entry.sh"
 
     # Create + bind-mount the host result dir now (after the branch logic, so an
@@ -1581,11 +1611,13 @@ def _run_podman_staged(*, image, run_stages, entry_script, run_flags,
             result = boot
         else:
             ran = 0
-            for stage_name, args, _display in run_stages:
+            for stage_name, args in run_stages:
                 if recorder is not None:
-                    # No curated headline — the stage title already says what
-                    # this is, and the real commands show in green via the entry
-                    # script's run_cmd markers (cmd stream).
+                    # No headline command here: the entry script echoes the exact
+                    # command it runs via run_cmd markers (the green "cmd" stream),
+                    # so that — not a Python-side reconstruction — is the recorded
+                    # command. See the "no cosmetic commands" rule in the module
+                    # docstring.
                     recorder.begin(stage_name, command=None)
                 result = _exec([entry_script, "--skip-bootstrap"] + args,
                                label=f"podman:{image}:{stage_name}")
@@ -1702,16 +1734,25 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
     # the install dir — so cwd-discovery alone fails with "No enclosing
     # simulation project is found". Mirror the podman path: load the bundled
     # registry AND the project's own install-dir .opp ($<NAME>_ROOT, exported by
-    # opp_env), then select the bare project name. Appended at exec time as
-    # plumbing so the recorder display keeps the clean build/test command.
+    # opp_env), then select the bare project name. These flags are part of the
+    # real command and appear in what the recorder reports (via _opp_env_argv);
+    # they are not stripped for display — see the "no cosmetic commands" rule.
     m = _VERSIONED_NAME_RE.match(project)
     bare_project = m.group(1) if m else project
     root_var = bare_project.upper().replace("-", "_") + "_ROOT"
     repl_flags = f' --load @opp --load "${root_var}" -p {bare_project}'
 
+    def _opp_env_argv(inner):
+        # The *exact* argv executed: `opp_env run` wraps the inner opp_repl
+        # command (with its project-discovery flags) in a login shell via `-c`.
+        # This is the single source of truth for both what runs and what the
+        # recorder reports — see the "no cosmetic commands" rule in the module
+        # docstring.
+        return _opp_env_cmd() + ["run", "-w", ws, *run_pins, run_project, "-c", inner + repl_flags]
+
     def _opp_env_run(inner):
         return run_external(
-            _opp_env_cmd() + ["run", "-w", ws, *run_pins, run_project, "-c", inner + repl_flags],
+            _opp_env_argv(inner),
             label=f"opp_env:{effective_project}", env=env, cwd=run_cwd,
             stream=True, on_output=recorder.output if recorder else None)
 
@@ -1723,7 +1764,7 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
     with _workspace_lock(ws):
         # ── project.build ─────────────────────────────────────────────
         if recorder is not None:
-            recorder.begin(Stage.PROJECT_BUILD, command=build_inner)
+            recorder.begin(Stage.PROJECT_BUILD, command=_format_argv(_opp_env_argv(build_inner)))
         start = time.time()
         build = _opp_env_run(build_inner)
         build_seconds = time.time() - start
@@ -1753,16 +1794,16 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
             }
         # ── test.run ──────────────────────────────────────────────────
         # opp_repl writes result.to_dict() to a temp file via --result-file; we
-        # read it into `details` (see plan §2.7). The flag is plumbing, so the
-        # recorder display keeps the clean `test_inner`.
-        if recorder is not None:
-            recorder.begin(Stage.TEST_RUN, command=test_inner)
+        # read it into `details` (see plan §2.7). It is part of the real command,
+        # so it is included in what the recorder reports — no cosmetic variant.
         fd, result_path = tempfile.mkstemp(prefix="opp-ci-result-", suffix=".json")
         os.close(fd)
+        test_inner_full = test_inner + f" --result-file {shlex.quote(result_path)}"
+        if recorder is not None:
+            recorder.begin(Stage.TEST_RUN, command=_format_argv(_opp_env_argv(test_inner_full)))
         start = time.time()
         try:
-            result = _opp_env_run(
-                test_inner + f" --result-file {shlex.quote(result_path)}")
+            result = _opp_env_run(test_inner_full)
             duration = time.time() - start
             if recorder is not None:
                 recorder.end(result.returncode)

@@ -187,7 +187,7 @@ class PodmanStagedReadsDetailsTest(unittest.TestCase):
             with mock.patch("opp_ci.executor.run_external", return_value=ok):
                 out = executor._run_podman_staged(
                     image="img",
-                    run_stages=[(Stage.TEST_RUN, ["opp_run_smoke_tests"], "smoke")],
+                    run_stages=[(Stage.TEST_RUN, ["opp_run_smoke_tests"])],
                     entry_script="/e.sh", run_flags=[], recorder=None,
                     git_ref=None, worktree_path=None, scratch_dir=None,
                     result_file=rf)
@@ -198,7 +198,7 @@ class PodmanStagedReadsDetailsTest(unittest.TestCase):
         with mock.patch("opp_ci.executor.run_external", return_value=ok):
             out = executor._run_podman_staged(
                 image="img",
-                run_stages=[(Stage.TEST_RUN, ["opp_run_smoke_tests"], "smoke")],
+                run_stages=[(Stage.TEST_RUN, ["opp_run_smoke_tests"])],
                 entry_script="/e.sh", run_flags=[], recorder=None,
                 git_ref=None, worktree_path=None, scratch_dir=None,
                 result_file=None)
