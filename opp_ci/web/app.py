@@ -1654,9 +1654,11 @@ def _matrix_form_context(session):
         v["opp_env_version"] for v in versions_by_project.get("omnetpp", []) if v["opp_env_version"]
     })
 
+    from opp_ci.executor import COMMAND_MAP
     default_expectation = read_default_expectation_code(session)
     return {
         "projects": projects,
+        "kind_options": sorted(COMMAND_MAP),
         "os_suggestions": list(platforms.OS_NAMES),
         "os_version_suggestions": sorted({o.version for o in os_entries if o.version}),
         "distro_suggestions": sorted({platforms.display_name(n) for n in platforms.DISTROS}),

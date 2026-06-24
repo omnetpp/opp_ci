@@ -731,6 +731,15 @@ def expand_matrix(project, config):
          (comp_name, comp_ver), dep_pins, isolation, toolchain) in itertools.product(
             versions, ref_pairs, kinds, modes, platform_cells, arches, compiler_tuples,
             dep_combos, isolations, toolchains):
+        # Coverage forces a coverage-instrumented build and ignores the modes
+        # axis: emit one job (not one per mode) and pin its coordinate to
+        # mode=coverage so it agrees with what the executor actually runs.
+        if kind == "coverage":
+            if mode != modes[0]:
+                continue
+            job_mode = "coverage"
+        else:
+            job_mode = mode
         if toolchain == "nix":
             _validate_nix_compiler(comp_name, comp_ver)
         os_name, os_ver, distro, distro_ver, flavor, flavor_ver = platform_cell
@@ -738,7 +747,7 @@ def expand_matrix(project, config):
             "project": project,
             "version": version,
             "kind": kind,
-            "mode": mode,
+            "mode": job_mode,
             "git_ref": ref,
             "commit_sha": commit_sha,
             "os": os_name,

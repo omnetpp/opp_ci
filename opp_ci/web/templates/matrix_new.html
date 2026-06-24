@@ -27,21 +27,7 @@
                 <label for="kinds">Kinds</label>
                 <input type="text" name="kinds" id="kinds" list="kind-options" placeholder="e.g. smoke, fingerprint, statistical">
                 <datalist id="kind-options">
-                    <option value="build">
-                    <option value="chart">
-                    <option value="feature">
-                    <option value="fingerprint">
-                    <option value="module">
-                    <option value="opp">
-                    <option value="packet">
-                    <option value="protocol">
-                    <option value="queueing">
-                    <option value="sanitizer">
-                    <option value="smoke">
-                    <option value="speed">
-                    <option value="statistical">
-                    <option value="unit">
-                    <option value="validation">
+                    {% for k in kind_options %}<option value="{{ k }}">{% endfor %}
                 </datalist>
             </div>
         </div>

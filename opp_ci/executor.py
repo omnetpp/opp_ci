@@ -215,6 +215,7 @@ COMMAND_MAP = {
     "speed": "opp_run_speed_tests",
     "sanitizer": "opp_run_sanitizer_tests",
     "chart": "opp_run_chart_tests",
+    "coverage": "opp_run_coverage_tests",
     "release": "opp_run_release_tests",
     "build": "opp_build_project",
     "opp": "opp_run_opp_tests",
@@ -237,6 +238,7 @@ def _get_test_functions():
         from opp_repl.test.speed.task import run_speed_tests
         from opp_repl.test.sanitizer import run_sanitizer_tests
         from opp_repl.test.chart import run_chart_tests
+        from opp_repl.test.coverage import run_coverage_tests
         from opp_repl.test.release import run_release_tests
         from opp_repl.test.opp import run_opp_tests
         from opp_repl.test.validation import run_validation_tests
@@ -250,6 +252,7 @@ def _get_test_functions():
             "speed": run_speed_tests,
             "sanitizer": run_sanitizer_tests,
             "chart": run_chart_tests,
+            "coverage": run_coverage_tests,
             "release": run_release_tests,
             "opp": run_opp_tests,
             "validation": run_validation_tests,
@@ -508,6 +511,11 @@ def run_test(project, kind, *, isolation=None, toolchain=None, recorder=None, **
     """
     isolation = isolation or "none"
     toolchain = toolchain or "none"
+    # Coverage needs a coverage-instrumented build; pin the mode here so the
+    # build and run stages agree regardless of how the job was submitted (the
+    # matrix expander pins it too, but single-run paths come straight here).
+    if kind == "coverage":
+        kwargs["mode"] = "coverage"
     if isolation == "podman":
         return _run_test_in_podman(project, kind, toolchain=toolchain,
                                    recorder=recorder, **kwargs)
