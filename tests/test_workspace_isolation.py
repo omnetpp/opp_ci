@@ -23,7 +23,7 @@ from opp_ci.executor import (                                 # noqa: E402
 def _ws(root, **over):
     base = {"project": "mm1k", "resolved_deps": {"omnetpp": "6.4.0"},
             "toolchain": "nix", "compiler": "clang", "compiler_version": "21",
-            "git_ref": "3f9a1c2b4d5e6f70"}
+            "commit_sha": "3f9a1c2b4d5e6f70"}
     base.update(over)
     orig = config.WORKSPACE_ROOT
     config.WORKSPACE_ROOT = root
@@ -68,25 +68,26 @@ class CoordinateKeyTests(unittest.TestCase):
         self.assertNotEqual(_ws(self.root, compiler_version="21"),
                             _ws(self.root, compiler_version="20"))
 
-    def test_git_ref_differs(self):
-        self.assertNotEqual(_ws(self.root, git_ref="aaaaaaaa1111"),
-                            _ws(self.root, git_ref="bbbbbbbb2222"))
+    def test_commit_sha_differs(self):
+        # The source axis is the resolved commit SHA.
+        self.assertNotEqual(_ws(self.root, commit_sha="aaaaaaaa1111"),
+                            _ws(self.root, commit_sha="bbbbbbbb2222"))
+
+    def test_git_ref_does_not_affect_key(self):
+        # A moving branch name must never key the workspace — only the resolved
+        # commit does. Same commit under different branch labels → same dir
+        # (and identical source across branches dedups to one build).
+        a = _ws(self.root, git_ref="topic/feature", commit_sha="abc123def456")
+        b = _ws(self.root, git_ref="release/9.9", commit_sha="abc123def456")
+        self.assertEqual(a, b)
 
     def test_moving_branch_keyed_by_commit_sha(self):
-        # Same branch ref, two commits → distinct workspaces. Without folding
-        # the resolved SHA in, a new commit on the branch would reuse a stale
-        # tree (opp_env never re-checks-out).
+        # Same branch ref, two commits → distinct workspaces. Without keying on
+        # the resolved SHA, a new commit on the branch would reuse a stale tree
+        # (opp_env never re-checks-out).
         a = _ws(self.root, git_ref="topic/feature", commit_sha="aaaaaaaa1111")
         b = _ws(self.root, git_ref="topic/feature", commit_sha="bbbbbbbb2222")
         self.assertNotEqual(a, b)
-
-    def test_commit_sha_takes_precedence_over_ref(self):
-        # A branch ref resolved to a SHA keys identically to submitting that
-        # SHA directly — so re-running by branch lands in the same workspace a
-        # SHA submit would (no rebuild, no stale reuse).
-        by_branch = _ws(self.root, git_ref="topic/feature", commit_sha="abc123def456")
-        by_sha = _ws(self.root, git_ref="abc123def456", commit_sha=None)
-        self.assertEqual(by_branch, by_sha)
 
     def test_project_differs(self):
         self.assertNotEqual(_ws(self.root, project="mm1k"),
@@ -101,9 +102,9 @@ class CoordinateKeyTests(unittest.TestCase):
     def test_missing_axes_normalized(self):
         # None and absent should hash consistently (no crash, stable path).
         a = _ws(self.root, resolved_deps=None, compiler=None,
-                compiler_version=None, git_ref=None)
+                compiler_version=None, git_ref=None, commit_sha=None)
         b = _ws(self.root, resolved_deps=None, compiler=None,
-                compiler_version=None, git_ref=None)
+                compiler_version=None, git_ref=None, commit_sha=None)
         self.assertEqual(a, b)
 
 

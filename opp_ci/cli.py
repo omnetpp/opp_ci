@@ -1104,9 +1104,18 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
         arch, compiler = _coord["arch"], _coord["compiler"]
         compiler_version, mode = _coord["compiler_version"], _coord["mode"]
 
+        # Pin the source ref to a concrete commit SHA up front, like the
+        # coordinator does, so the build workspace keys on the commit (never a
+        # moving branch name) and opp_env checks out exactly that commit.
+        from opp_ci.scheduler import resolve_source_commit
+        try:
+            commit_sha = resolve_source_commit(project, git_ref)
+        except ValueError as e:
+            raise click.ClickException(f"Couldn't resolve source ref {git_ref!r}: {e}")
+
         if not skip_install:
             try:
-                install_project(project, git_ref=git_ref,
+                install_project(project, git_ref=git_ref, commit_sha=commit_sha,
                                 isolation=isolation, toolchain=toolchain,
                                 resolved_deps=resolved_deps,
                                 compiler=compiler, compiler_version=compiler_version)
@@ -1160,6 +1169,7 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
                 session,
                 test_id=test.id,
                 git_ref=git_ref,
+                commit_sha=commit_sha,
                 resolved_deps=resolved_deps,
             )
             test_run.lifecycle = TestRunLifecycle.running
@@ -1175,7 +1185,7 @@ def run_cmd(ctx, project, kinds, name, test_name, git_ref, mode, isolation, tool
 
             try:
                 outcome = run_test(
-                    project, kind, git_ref=git_ref, mode=mode,
+                    project, kind, git_ref=git_ref, commit_sha=commit_sha, mode=mode,
                     isolation=isolation, toolchain=toolchain,
                     os=os_name, os_version=os_version,
                     distro=distro, distro_version=distro_version,
@@ -2174,7 +2184,7 @@ def run_matrix(matrix_name, new_name, spec_file, project, kinds, modes, refs, si
             installed = set()
             for job in jobs:
                 deps = job.get("resolved_deps") or {}
-                install_key = (job["project"], job.get("git_ref"),
+                install_key = (job["project"], job.get("commit_sha") or job.get("git_ref"),
                                job.get("isolation"), job.get("toolchain"),
                                job.get("compiler"), job.get("compiler_version"),
                                frozenset(deps.items()) if isinstance(deps, dict) else None)
@@ -2182,6 +2192,7 @@ def run_matrix(matrix_name, new_name, spec_file, project, kinds, modes, refs, si
                     try:
                         install_project(
                             job["project"], git_ref=job.get("git_ref"),
+                            commit_sha=job.get("commit_sha"),
                             isolation=job.get("isolation") or "none",
                             toolchain=job.get("toolchain") or "none",
                             resolved_deps=job.get("resolved_deps"),
@@ -2257,7 +2268,8 @@ def run_matrix(matrix_name, new_name, spec_file, project, kinds, modes, refs, si
             try:
                 outcome = run_test(
                     job["project"], job["kind"],
-                    git_ref=job.get("git_ref"), opp_file=matrix.opp_file,
+                    git_ref=job.get("git_ref"), commit_sha=job.get("commit_sha"),
+                    opp_file=matrix.opp_file,
                     mode=job.get("mode"),
                     isolation=job.get("isolation"), toolchain=job.get("toolchain"),
                     os=job.get("os"), os_version=job.get("os_version"),

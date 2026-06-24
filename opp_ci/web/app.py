@@ -1183,6 +1183,7 @@ def run_rerun(run_id: int, current_user: User = Depends(require_user("submitter"
             session,
             test_id=original.test_id,
             git_ref=original.git_ref,
+            commit_sha=original.commit_sha,
             version=original.version,
             resolved_deps=original.resolved_deps,
         )
