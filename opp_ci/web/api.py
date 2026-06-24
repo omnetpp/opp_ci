@@ -667,6 +667,7 @@ async def worker_poll(
                 "kind": test.kind,
                 "mode": test.mode,
                 "git_ref": claimed_run.git_ref,
+                "commit_sha": claimed_run.commit_sha,
                 "os": test.os,
                 "os_version": test.os_version,
                 "distro": test.distro,

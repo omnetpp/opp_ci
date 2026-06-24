@@ -72,6 +72,22 @@ class CoordinateKeyTests(unittest.TestCase):
         self.assertNotEqual(_ws(self.root, git_ref="aaaaaaaa1111"),
                             _ws(self.root, git_ref="bbbbbbbb2222"))
 
+    def test_moving_branch_keyed_by_commit_sha(self):
+        # Same branch ref, two commits → distinct workspaces. Without folding
+        # the resolved SHA in, a new commit on the branch would reuse a stale
+        # tree (opp_env never re-checks-out).
+        a = _ws(self.root, git_ref="topic/feature", commit_sha="aaaaaaaa1111")
+        b = _ws(self.root, git_ref="topic/feature", commit_sha="bbbbbbbb2222")
+        self.assertNotEqual(a, b)
+
+    def test_commit_sha_takes_precedence_over_ref(self):
+        # A branch ref resolved to a SHA keys identically to submitting that
+        # SHA directly — so re-running by branch lands in the same workspace a
+        # SHA submit would (no rebuild, no stale reuse).
+        by_branch = _ws(self.root, git_ref="topic/feature", commit_sha="abc123def456")
+        by_sha = _ws(self.root, git_ref="abc123def456", commit_sha=None)
+        self.assertEqual(by_branch, by_sha)
+
     def test_project_differs(self):
         self.assertNotEqual(_ws(self.root, project="mm1k"),
                             _ws(self.root, project="inet"))

@@ -349,12 +349,14 @@ class WorkerAgent:
         project = opp_env_project_id(job["project"], job.get("version"))
         kind = job["kind"]
         git_ref = job.get("git_ref")
+        commit_sha = job.get("commit_sha")
         opp_file = job.get("opp_file")
         mode = job.get("mode")
         isolation = job.get("isolation") or "none"
         toolchain = job.get("toolchain") or "none"
         run_kwargs = {
             "git_ref": git_ref,
+            "commit_sha": commit_sha,
             "opp_file": opp_file,
             "mode": mode,
             "isolation": isolation,
@@ -399,6 +401,7 @@ class WorkerAgent:
                                 resolved_deps=run_kwargs["resolved_deps"],
                                 compiler=run_kwargs["compiler"],
                                 compiler_version=run_kwargs["compiler_version"],
+                                commit_sha=commit_sha,
                                 recorder=recorder)
             except RuntimeError as e:
                 _logger.error("Install failed for run #%d: %s", run_id, e)

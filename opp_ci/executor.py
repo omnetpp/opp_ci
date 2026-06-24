@@ -425,7 +425,7 @@ def resolve_commit_sha(project, opp_file=None):
 
 def install_project(project, git_ref=None, *, isolation="none", toolchain="none",
                     resolved_deps=None, compiler=None, compiler_version=None,
-                    recorder=None):
+                    commit_sha=None, recorder=None):
     """Install a project via opp_env on the worker's host.
 
     Runs for the host paths (``isolation=none``); podman installs inside the
@@ -456,6 +456,7 @@ def install_project(project, git_ref=None, *, isolation="none", toolchain="none"
     ws = _opp_env_workspace(
         project=project, resolved_deps=resolved_deps, toolchain=toolchain,
         compiler=compiler, compiler_version=compiler_version, git_ref=git_ref,
+        commit_sha=commit_sha,
     )
     _gc_workspaces()
     # --init marks the workspace on first use (same flag the host Containerfile
@@ -584,7 +585,7 @@ def _opp_cache_root():
 
 
 def _opp_env_workspace(*, project, resolved_deps, toolchain, compiler,
-                       compiler_version, git_ref):
+                       compiler_version, git_ref, commit_sha=None):
     """Return (creating + touching it) the per-coordinate opp_env workspace dir.
 
     The host-nix path (isolation=none, toolchain=nix) has no container to
@@ -605,6 +606,14 @@ def _opp_env_workspace(*, project, resolved_deps, toolchain, compiler,
     from opp_ci.db.models import dep_identity_token
 
     deps = resolved_deps if isinstance(resolved_deps, dict) else {}
+    # Identity of the project's own source ref. A *moving* ref (branch/tag) must
+    # not key the workspace by name — otherwise a new commit on the same branch
+    # reuses a stale tree (opp_env never re-checks-out) and the run silently
+    # builds old source. Fold in the coordinator-resolved commit SHA instead, so
+    # each commit gets its own workspace (mirroring how deps key on git:<sha>).
+    # Falls back to the raw ref when unresolved, and to "" for release versions
+    # (so release runs keep their existing hash, no churn).
+    source_ref = commit_sha or git_ref or ""
     # Canonical, order-independent view of the coordinate: sorting keys and
     # normalising None→"" means dict iteration order or a missing axis can
     # never shift the hash between the install and run steps. Each dep value is
@@ -616,7 +625,7 @@ def _opp_env_workspace(*, project, resolved_deps, toolchain, compiler,
         "toolchain": toolchain or "",
         "compiler": compiler or "",
         "compiler_version": str(compiler_version or ""),
-        "git_ref": git_ref or "",
+        "git_ref": source_ref,
         "deps": {str(k): dep_identity_token(v) for k, v in sorted(deps.items())},
     }
     canon = json.dumps(coordinate, sort_keys=True, separators=(",", ":"))
@@ -628,7 +637,7 @@ def _opp_env_workspace(*, project, resolved_deps, toolchain, compiler,
         project or "proj",
         f"omnetpp{omnetpp_label}" if omnetpp else "omnetpp",
         f"{compiler}{compiler_version}" if compiler else (toolchain or "nix"),
-        (git_ref or "")[:8] or "none",
+        source_ref[:8] or "none",
     ]))
     prefix = re.sub(r"[^A-Za-z0-9._-]", "", raw_prefix)
     ws = os.path.join(config.WORKSPACE_ROOT, f"{prefix}-{digest}")
@@ -1711,6 +1720,7 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
         project=project, resolved_deps=kwargs.get("resolved_deps"),
         toolchain=toolchain, compiler=kwargs.get("compiler"),
         compiler_version=kwargs.get("compiler_version"), git_ref=git_ref,
+        commit_sha=kwargs.get("commit_sha"),
     )
 
     # Name the pinned deps (e.g. omnetpp-6.4.0) alongside the project so opp_env
