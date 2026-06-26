@@ -102,16 +102,29 @@ These live outside the in-process test runner, so no kwargs/config merge reaches
 - Register the missing `opp_run_opp_tests` console script (same as `opp_run_coverage_tests`).
 
 ## Steps
-- [ ] opp_repl: remove `run_number=0` and the `["tplx"]` / chart-filter defaults from signatures;
-      keep `mode`/`cpu_time_limit` identity defaults. Fingerprint `ingredients_list=None` → derive
-      from store.
-- [ ] opp_repl: add `SimulationProject.test_parameters` (untyped dict) + load-time aspect-key
-      check + the in-runner merge keyed by kind; migrate existing flat attrs
-      (`fingerprint_store`, `statistics_folder`, `validation_test_runner`, `speed_store`,
-      `media_folder`) to compat properties reading `test_parameters`.
-- [ ] `inet.opp`: declare per-kind config (run_number=0 set; chart filter=showcases; baselines).
-- [ ] opp_repl: widen `--mode` choices (`sanitize`,`profile`) (D3).
-- [ ] opp_ci: read kind→mode for the build stage + collapse modes axis (D3); provision baseline
-      repos before chart/statistical (D5).
-- [ ] opp_repl: register `opp_run_opp_tests` console script.
+
+Implemented on branch `topic/align-test-defaults` (opp_repl + opp_ci worktrees; committed, not pushed):
+- [x] opp_repl: drop `run_number=0` (→ `None`/all runs) from smoke/sanitizer/statistical/speed;
+      fingerprint `ingredients_list=None` → all store-present ingredients (store-gated). `["tplx"]`
+      and chart-filter defaults removed; `mode`/`cpu_time_limit` identity defaults kept. *(feature's
+      `run_number=0` left untouched — it's hardcoded internal task-builder logic, not a kind default.)*
+- [x] opp_repl: `SimulationProject.test_parameters` (untyped dict) + load-time aspect-key check +
+      module-level `apply_project_test_defaults` merged at the top of each `run_<kind>_tests`
+      (feature/chart import it lazily to dodge the `test/*`↔`simulation.compare` cycle). Flat attrs
+      (`fingerprint_store`, `statistics_folder`, `media_folder`, `speed_store`,
+      `validation_test_runner`) derived from `test_parameters` for back-compat. `get_test_baseline(kind)`.
+- [x] `inet.opp`: per-kind config in `test_parameters` (run_number=0 for single-run kinds;
+      chart filter=showcases; statistical baseline repo `inet-framework/statistics`).
+- [x] opp_repl: `--mode` accepts `sanitize`/`profile`; `opp_run_opp_tests` console script registered.
+- [x] opp_ci: `KIND_FORCED_MODE` (coverage/sanitizer/speed) drives `run_test` build/run mode and
+      `expand_matrix` coordinate + modes-axis collapse (D3).
+- Verified: test_parameters mechanism + compat attrs + merge precedence + aspect validation +
+  inet.opp parse (in the working installed import order); expand_matrix collapse for all three
+  instrumented kinds. (PYTHONPATH cold-import of opp_repl hits a **pre-existing** order quirk —
+  `omnetpp.test.OppTest` via `documentation`-first — unrelated to these changes.)
+
+Remaining:
+- [ ] **D5 — provision baseline repos** before chart/statistical: opp_ci clones
+      `tests[kind].baseline.repository@ref` into `folder` (declarations + `get_test_baseline` are in
+      place; the checkout step is not). Confirm the chart media-baseline repo (TODO in `inet.opp`).
 - [ ] Verify each kind end-to-end vs current INET CI PASS/FAIL counts (replace-legacy Phases 2–3).
