@@ -223,6 +223,15 @@ COMMAND_MAP = {
     "all": "opp_run_all_tests",
 }
 
+# Kinds that require an instrumented build: the kind itself dictates the build
+# mode, not the matrix's modes axis. opp_ci builds and runs as two `--mode`
+# stages, so the mode is forced for both. opp_repl's --mode accepts these.
+KIND_FORCED_MODE = {
+    "coverage": "coverage",
+    "sanitizer": "sanitize",
+    "speed": "profile",
+}
+
 # Mapping from test name to the opp_repl function that runs it.
 # Lazily imported to avoid pulling opp_repl at module load time.
 _TEST_FUNCTIONS = None
@@ -511,11 +520,11 @@ def run_test(project, kind, *, isolation=None, toolchain=None, recorder=None, **
     """
     isolation = isolation or "none"
     toolchain = toolchain or "none"
-    # Coverage needs a coverage-instrumented build; pin the mode here so the
-    # build and run stages agree regardless of how the job was submitted (the
-    # matrix expander pins it too, but single-run paths come straight here).
-    if kind == "coverage":
-        kwargs["mode"] = "coverage"
+    # Instrumented kinds (coverage/sanitizer/speed) need their build mode pinned
+    # so the build and run stages agree regardless of how the job was submitted
+    # (the matrix expander pins it too, but single-run paths come straight here).
+    if kind in KIND_FORCED_MODE:
+        kwargs["mode"] = KIND_FORCED_MODE[kind]
     if isolation == "podman":
         return _run_test_in_podman(project, kind, toolchain=toolchain,
                                    recorder=recorder, **kwargs)

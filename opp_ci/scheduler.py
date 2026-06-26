@@ -731,13 +731,15 @@ def expand_matrix(project, config):
          (comp_name, comp_ver), dep_pins, isolation, toolchain) in itertools.product(
             versions, ref_pairs, kinds, modes, platform_cells, arches, compiler_tuples,
             dep_combos, isolations, toolchains):
-        # Coverage forces a coverage-instrumented build and ignores the modes
-        # axis: emit one job (not one per mode) and pin its coordinate to
-        # mode=coverage so it agrees with what the executor actually runs.
-        if kind == "coverage":
+        # Instrumented kinds (coverage/sanitizer/speed) force their build mode and
+        # ignore the modes axis: emit one job (not one per mode) and pin its
+        # coordinate to the forced mode so it agrees with what the executor runs.
+        from opp_ci.executor import KIND_FORCED_MODE
+        forced_mode = KIND_FORCED_MODE.get(kind)
+        if forced_mode is not None:
             if mode != modes[0]:
                 continue
-            job_mode = "coverage"
+            job_mode = forced_mode
         else:
             job_mode = mode
         if toolchain == "nix":
