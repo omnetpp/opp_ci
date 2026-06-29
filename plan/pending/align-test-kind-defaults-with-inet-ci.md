@@ -123,8 +123,17 @@ Implemented on branch `topic/align-test-defaults` (opp_repl + opp_ci worktrees; 
   instrumented kinds. (PYTHONPATH cold-import of opp_repl hits a **pre-existing** order quirk —
   `omnetpp.test.OppTest` via `documentation`-first — unrelated to these changes.)
 
+D5 (baseline provisioning):
+- [x] opp_ci `_provision_test_baseline(project, kind, project_root)` resolves the project's
+      `test_parameters[kind]["baseline"]` (via opp_repl) and clones/fetches `repository@ref` into
+      `<project_root>/<folder>`; no-op (no stage) when the kind declares no baseline repository.
+      Injected into the **opp_env host path** before the build (CHECKOUT stage); a checkout failure
+      skips build+test and returns ERROR (no silent all-`only_current`). Unit-verified (no-op /
+      clone+checkout / folder-only no-op).
+
 Remaining:
-- [ ] **D5 — provision baseline repos** before chart/statistical: opp_ci clones
-      `tests[kind].baseline.repository@ref` into `folder` (declarations + `get_test_baseline` are in
-      place; the checkout step is not). Confirm the chart media-baseline repo (TODO in `inet.opp`).
-- [ ] Verify each kind end-to-end vs current INET CI PASS/FAIL counts (replace-legacy Phases 2–3).
+- [ ] D5 **podman path** — the project tree lives in the container, so the baseline must be checked
+      out in-container (different mechanism than the host path); not yet wired.
+- [ ] Confirm the **chart media-baseline repo** (TODO in `inet.opp`; currently folder-only → in-repo).
+- [ ] Live verification: a real chart/statistical run that clones the baseline and produces real
+      diffs; and each kind end-to-end vs current INET CI PASS/FAIL counts (replace-legacy Phases 2–3).

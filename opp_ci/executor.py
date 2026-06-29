@@ -798,6 +798,58 @@ def _ensure_github_clone(owner, repo):
     return target
 
 
+def _provision_test_baseline(project, kind, project_root, *, opp_file=None, recorder=None):
+    """Check out the project's declared baseline repo for *kind* into
+    ``<project_root>/<folder>`` so chart/statistical can compare against it.
+
+    The declaration comes from the project's ``.opp`` ``test_parameters[kind]
+    ["baseline"]`` = ``{repository, ref, folder}`` (resolved via opp_repl). This
+    is a *no-op with no recorded stage* when the kind declares no baseline
+    repository (the common case), so other kinds are unaffected. On checkout
+    failure it raises — chart/statistical must fail loudly rather than silently
+    report every result as ``only_current`` against a missing baseline.
+    """
+    try:
+        _ws, simulation_project = _load_workspace(project, opp_file)
+        baseline = simulation_project.get_test_baseline(kind)
+    except Exception as e:  # noqa: BLE001 — resolution failure shouldn't crash unrelated kinds
+        _logger.warning("Could not resolve %s baseline for %s: %s", kind, project, e)
+        return
+    repo = (baseline or {}).get("repository")
+    if not repo:
+        return  # no external baseline (e.g. in-repo media) — nothing to provision
+    ref = baseline.get("ref")
+    folder = baseline.get("folder") or "."
+    dest = os.path.join(project_root, folder)
+    url = repo if ("://" in repo or repo.startswith("git@")) else f"https://github.com/{repo}.git"
+    on_output = recorder.output if recorder is not None else None
+    label = repo + (f"@{ref}" if ref else "")
+    if recorder is not None:
+        recorder.begin(Stage.CHECKOUT, command=f"baseline {label} -> {folder}")
+    try:
+        if os.path.isdir(os.path.join(dest, ".git")):
+            res = run_external(["git", "fetch", "origin"], label=f"baseline fetch {repo}",
+                               cwd=dest, timeout=600, stream=True, on_output=on_output)
+        else:
+            os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+            res = run_external(["git", "clone", url, dest], label=f"baseline clone {repo}",
+                               timeout=900, stream=True, on_output=on_output)
+        if res.returncode != 0:
+            raise RuntimeError(f"{kind} baseline checkout {url} failed (exit {res.returncode})")
+        if ref:
+            res = run_external(["git", "checkout", ref], label=f"baseline checkout {ref}",
+                               cwd=dest, timeout=120, stream=True, on_output=on_output)
+            if res.returncode != 0:
+                raise RuntimeError(f"{kind} baseline checkout {ref} failed (exit {res.returncode})")
+    except Exception:
+        if recorder is not None:
+            recorder.end(1, status="failed")
+        raise
+    if recorder is not None:
+        recorder.end(0)
+    _logger.info("Provisioned %s baseline %s -> %s", kind, repo, dest)
+
+
 def _resolve_project_dir(project, opp_file=None):
     """Resolve the on-disk source dir for *project*.
 
@@ -1793,6 +1845,22 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
     build_only = kind == "build"
 
     with _workspace_lock(ws):
+        # ── baseline checkout (chart/statistical only) ────────────────
+        # No-op for kinds without a declared baseline repo. A failure here must
+        # not masquerade as a build/test failure, so it skips both downstream
+        # stages and returns ERROR with the cause.
+        try:
+            _provision_test_baseline(project, kind, run_cwd,
+                                     opp_file=kwargs.get("opp_file"), recorder=recorder)
+        except Exception as e:  # noqa: BLE001
+            if recorder is not None:
+                recorder.skip(Stage.PROJECT_BUILD, reason="skipped: baseline checkout failed")
+                recorder.skip(Stage.TEST_RUN, reason="skipped: baseline checkout failed")
+            return {
+                "result_code": "ERROR", "test_exec_seconds": 0.0,
+                "stdout": "", "stderr": f"baseline provisioning failed: {e!r}",
+                "details": None, "commit_sha": None,
+            }
         # ── project.build ─────────────────────────────────────────────
         if recorder is not None:
             recorder.begin(Stage.PROJECT_BUILD, command=_format_argv(_opp_env_argv(build_inner)))
