@@ -74,7 +74,7 @@ test_parameters = {
     "statistical": {"defaults": {"run_number": 0},
                     "baseline": {"repository": "inet-framework/statistics", "ref": "main", "folder": "statistics"}},
     "chart":       {"defaults": {"filter": "showcases"},
-                    "baseline": {"repository": "inet-framework/<media-baselines>", "ref": "main", "folder": "doc/media"}},
+                    "baseline": {"repository": "inet-framework/media", "folder": "media"}},
     "validation":  {"runner": "inet.test.validation:run_validation_tests"},
     # coverage, opp: nothing — inherit baked-in defaults
 }
@@ -138,7 +138,8 @@ D5 (baseline provisioning) — implemented for both execution paths:
       host clone+checkout).
 
 Remaining:
-- [ ] Confirm the **chart media-baseline repo** (TODO in `inet.opp`; currently folder-only → in-repo).
+- [x] Confirm the **chart media-baseline repo**: `inet-framework/media`, checked out into the
+      inet `media/` folder (feeds `media_folder`). Set in `inet.opp`.
 - [ ] Live verification: a real chart/statistical run (host + podman) that clones the baseline and
       produces real diffs; each kind end-to-end vs current INET CI PASS/FAIL counts (replace-legacy
       Phases 2–3).
