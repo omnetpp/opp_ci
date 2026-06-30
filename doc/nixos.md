@@ -196,9 +196,10 @@ want them gone.
 
 ## Freshness & caveats
 
-- The uvx `ExecStart` (with `--refresh-package`) is baked into the store at
+- The uvx `ExecStart` (with `--refresh`) is baked into the store at
   rebuild time, but it is the *same* refreshing command, so each
-  (re)start re-fetches the latest `@<ref>` code. Only changing
+  (re)start does a full re-resolve and re-fetches the latest `@<ref>` code
+  (including the `--from` opp_ci tool env). Only changing
   `ref`/`uvPackage` (or any option) needs a `nixos-rebuild`.
 - Wheels uv downloads with native deps are non-FHS binaries that may fail
   to load without `programs.nix-ld.enable = true;` — enable nix-ld if a job

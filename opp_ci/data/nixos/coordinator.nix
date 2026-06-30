@@ -16,15 +16,17 @@ let
   stateDir = "/var/lib/opp_ci";
 
   # uvx ExecStart: pin opp_ci@ref with the coordinator extras, supply opp_repl
-  # and opp_env from their opp_ci branches, and force a re-resolve of all three
-  # on every start (--refresh-package) so a restart picks up the latest code on
-  # the ref. opp_env is bundled (for dependency-lock / compatibility queries);
-  # the coordinator's env sets OPP_CI_OPP_ENV_CMD=opp_env to use it.
+  # and opp_env from their opp_ci branches, and force a full re-resolve on every
+  # start (--refresh) so a restart picks up the latest code on the ref. --refresh
+  # (not --refresh-package) is required: --refresh-package only refreshes the
+  # --with overlays, leaving the cached opp_ci --from tool env pinned to its first
+  # resolved commit. opp_env is bundled (for dependency-lock / compatibility
+  # queries); the coordinator's env sets OPP_CI_OPP_ENV_CMD=opp_env to use it.
   execStart = "${cfg.uvPackage}/bin/uvx"
     + " --from \"opp_ci[web,postgres,client,podman] @ git+https://github.com/omnetpp/opp_ci.git@${cfg.ref}\""
     + " --with \"opp_repl[all] @ git+https://github.com/omnetpp/opp_repl.git@opp_ci\""
     + " --with \"opp-env @ git+https://github.com/omnetpp/opp_env.git@opp_ci\""
-    + " --refresh-package opp_ci --refresh-package opp_repl --refresh-package opp-env"
+    + " --refresh"
     + " opp_ci coordinator start";
 
   # Typed non-secret options projected onto their OPP_CI_* vars. Nulls are

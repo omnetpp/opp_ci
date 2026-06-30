@@ -2,8 +2,8 @@
 
 Covers plan/pending/uvx-service-management.md §11:
   * the embedded uvx command — right extras per role, @<ref>, opp_repl and
-    opp_env from their opp_ci branches, and --refresh-package opp_ci opp_repl
-    opp-env;
+    opp_env from their opp_ci branches, and --refresh (full re-resolve, so the
+    --from opp_ci tool env is rebuilt each start — not just the --with overlays);
   * option → env-var mapping in the rendered env files;
   * coordinator unit / worker template / target / plist / wrapper / newsyslog /
     env files render with the expected key lines;
@@ -45,8 +45,8 @@ class UvxCommandTest(unittest.TestCase):
                       "git+https://github.com/omnetpp/opp_repl.git@opp_ci", cmd)
         self.assertIn("opp-env @ "
                       "git+https://github.com/omnetpp/opp_env.git@opp_ci", cmd)
-        self.assertIn("--refresh-package opp_ci --refresh-package opp_repl "
-                      "--refresh-package opp-env", cmd)
+        self.assertIn("--refresh ", cmd)
+        self.assertNotIn("--refresh-package", cmd)
         self.assertTrue(cmd.endswith("opp_ci coordinator start"))
         self.assertTrue(cmd.startswith(UVX))
 
@@ -224,8 +224,7 @@ class NixosRenderTest(unittest.TestCase):
         self.assertIn("path = [ cfg.uvPackage ];", coord)
         self.assertIn("${cfg.uvPackage}/bin/uvx", coord)
         self.assertIn("opp-env @ git+https://github.com/omnetpp/opp_env.git@opp_ci", coord)
-        self.assertIn("--refresh-package opp_ci --refresh-package opp_repl "
-                      "--refresh-package opp-env", coord)
+        self.assertIn('+ " --refresh"', coord)
         self.assertIn("opp_ci coordinator start", coord)
         self.assertIn("EnvironmentFile = cfg.environmentFiles;", coord)
         self.assertIn("services.postgresql", coord)

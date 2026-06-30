@@ -29,7 +29,7 @@ unit:
 uvx --from "opp_ci[web,postgres,client,podman] @ git+https://github.com/omnetpp/opp_ci.git@main" \
     --with "opp_repl[all] @ git+https://github.com/omnetpp/opp_repl.git@opp_ci" \
     --with "opp-env @ git+https://github.com/omnetpp/opp_env.git@opp_ci" \
-    --refresh-package opp_ci --refresh-package opp_repl --refresh-package opp-env \
+    --refresh \
     opp_ci coordinator start
 ```
 
@@ -42,9 +42,11 @@ uvx --from "opp_ci[web,postgres,client,podman] @ git+https://github.com/omnetpp/
   `opp_env` console script on PATH for the worker (host-nix builds) and the
   coordinator (dependency-lock / compatibility queries) — see
   `OPP_CI_OPP_ENV_CMD` below.
-- `--refresh-package opp_ci opp_repl opp-env` is what delivers "latest each
-  restart": without it, `uvx` caches the first resolved commit of a
-  branch and reuses it forever.
+- `--refresh` is what delivers "latest each restart": it forces uv to re-resolve
+  **everything**, including the `--from` opp_ci tool environment. Plain
+  `--refresh-package` is **not** enough — it refreshes only the `--with` overlays
+  (opp_repl/opp_env) and leaves the cached opp_ci tool env pinned to the first
+  commit it ever resolved on a branch, so a branch advance never reaches the host.
 
 The `opp_ci coordinator start` / `opp_ci worker start` command line carries **no**
 runtime options — all runtime config comes from env files (below).

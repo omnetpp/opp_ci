@@ -19,7 +19,7 @@ let
     + " --from \"opp_ci[client,podman] @ git+https://github.com/omnetpp/opp_ci.git@${top.ref}\""
     + " --with \"opp_repl[all] @ git+https://github.com/omnetpp/opp_repl.git@opp_ci\""
     + " --with \"opp-env @ git+https://github.com/omnetpp/opp_env.git@opp_ci\""
-    + " --refresh-package opp_ci --refresh-package opp_repl --refresh-package opp-env"
+    + " --refresh"
     + " opp_ci worker start";
 
   instanceModule = { name, ... }: {
