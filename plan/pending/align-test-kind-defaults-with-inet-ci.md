@@ -123,17 +123,22 @@ Implemented on branch `topic/align-test-defaults` (opp_repl + opp_ci worktrees; 
   instrumented kinds. (PYTHONPATH cold-import of opp_repl hits a **pre-existing** order quirk —
   `omnetpp.test.OppTest` via `documentation`-first — unrelated to these changes.)
 
-D5 (baseline provisioning):
-- [x] opp_ci `_provision_test_baseline(project, kind, project_root)` resolves the project's
-      `test_parameters[kind]["baseline"]` (via opp_repl) and clones/fetches `repository@ref` into
-      `<project_root>/<folder>`; no-op (no stage) when the kind declares no baseline repository.
-      Injected into the **opp_env host path** before the build (CHECKOUT stage); a checkout failure
-      skips build+test and returns ERROR (no silent all-`only_current`). Unit-verified (no-op /
-      clone+checkout / folder-only no-op).
+D5 (baseline provisioning) — implemented for both execution paths:
+- [x] Resolution + host checkout: `_resolve_test_baseline` reads the project's
+      `test_parameters[kind]["baseline"]` (via opp_repl); `_checkout_baseline_on_host` clones/fetches
+      `repository@ref` into `<root>/<folder>` (CHECKOUT stage). No-op (no stage) when the kind
+      declares no baseline repo; checkout failure skips build+test → ERROR (no silent all-`only_current`).
+- [x] **opp_env host path** — `_provision_test_baseline` runs before the build.
+- [x] **podman bind-mount path** (SimulationProject w/ opp_file) — host checkout into the mounted
+      tree before the container runs.
+- [x] **podman catalog path** (bundled inet/omnetpp) — an in-container CHECKOUT stage inserted
+      before PROJECT_BUILD: an idempotent `git clone/fetch + checkout` run via the entry script's
+      `opp_env run -c` in the install dir, so it lands in `<install_dir>/<folder>`. A failed stage
+      aborts the rest (`_run_podman_staged`). Unit-verified (shell shape, URL forms, stage insertion,
+      host clone+checkout).
 
 Remaining:
-- [ ] D5 **podman path** — the project tree lives in the container, so the baseline must be checked
-      out in-container (different mechanism than the host path); not yet wired.
 - [ ] Confirm the **chart media-baseline repo** (TODO in `inet.opp`; currently folder-only → in-repo).
-- [ ] Live verification: a real chart/statistical run that clones the baseline and produces real
-      diffs; and each kind end-to-end vs current INET CI PASS/FAIL counts (replace-legacy Phases 2–3).
+- [ ] Live verification: a real chart/statistical run (host + podman) that clones the baseline and
+      produces real diffs; each kind end-to-end vs current INET CI PASS/FAIL counts (replace-legacy
+      Phases 2–3).

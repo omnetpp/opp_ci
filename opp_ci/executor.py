@@ -798,34 +798,55 @@ def _ensure_github_clone(owner, repo):
     return target
 
 
-def _provision_test_baseline(project, kind, project_root, *, opp_file=None, recorder=None):
-    """Check out the project's declared baseline repo for *kind* into
-    ``<project_root>/<folder>`` so chart/statistical can compare against it.
+def _resolve_test_baseline(project, kind, opp_file=None):
+    """Return the ``{repository, ref, folder}`` baseline declaration the project's
+    ``.opp`` sets for *kind* (via opp_repl ``test_parameters``), or ``None``.
 
-    The declaration comes from the project's ``.opp`` ``test_parameters[kind]
-    ["baseline"]`` = ``{repository, ref, folder}`` (resolved via opp_repl). This
-    is a *no-op with no recorded stage* when the kind declares no baseline
-    repository (the common case), so other kinds are unaffected. On checkout
-    failure it raises — chart/statistical must fail loudly rather than silently
-    report every result as ``only_current`` against a missing baseline.
+    chart/statistical compare against an external baseline repo that must be
+    checked out before the run; most kinds declare none.
     """
     try:
         _ws, simulation_project = _load_workspace(project, opp_file)
-        baseline = simulation_project.get_test_baseline(kind)
+        return simulation_project.get_test_baseline(kind)
     except Exception as e:  # noqa: BLE001 — resolution failure shouldn't crash unrelated kinds
         _logger.warning("Could not resolve %s baseline for %s: %s", kind, project, e)
-        return
-    repo = (baseline or {}).get("repository")
-    if not repo:
-        return  # no external baseline (e.g. in-repo media) — nothing to provision
+        return None
+
+
+def _baseline_url(repo):
+    return repo if ("://" in repo or repo.startswith("git@")) else f"https://github.com/{repo}.git"
+
+
+def _baseline_checkout_shell(baseline):
+    """A shell one-liner that idempotently checks out *baseline* into its folder
+    relative to the cwd — for the in-container (opp_env catalog) podman path,
+    where the project install dir only exists inside the container. Run via the
+    entry script's ``opp_env run -c`` (a login shell, in the install dir)."""
+    repo = baseline["repository"]
+    ref = baseline.get("ref")
+    folder = baseline.get("folder") or "."
+    q = shlex.quote
+    cmd = (f"if [ -d {q(folder)}/.git ]; then git -C {q(folder)} fetch origin; "
+           f"else git clone {q(_baseline_url(repo))} {q(folder)}; fi")
+    if ref:
+        cmd += f" && git -C {q(folder)} checkout {q(ref)}"
+    return cmd
+
+
+def _checkout_baseline_on_host(baseline, kind, project_root, *, recorder=None):
+    """Clone/fetch a resolved *baseline* into ``<project_root>/<folder>`` on the
+    host (opp_env host path, or a bind-mounted podman project). Records a CHECKOUT
+    stage and raises on failure — chart/statistical must fail loudly rather than
+    silently report every result as ``only_current`` against a missing baseline.
+    """
+    repo = baseline["repository"]
     ref = baseline.get("ref")
     folder = baseline.get("folder") or "."
     dest = os.path.join(project_root, folder)
-    url = repo if ("://" in repo or repo.startswith("git@")) else f"https://github.com/{repo}.git"
+    url = _baseline_url(repo)
     on_output = recorder.output if recorder is not None else None
-    label = repo + (f"@{ref}" if ref else "")
     if recorder is not None:
-        recorder.begin(Stage.CHECKOUT, command=f"baseline {label} -> {folder}")
+        recorder.begin(Stage.CHECKOUT, command=f"baseline {repo}{('@'+ref) if ref else ''} -> {folder}")
     try:
         if os.path.isdir(os.path.join(dest, ".git")):
             res = run_external(["git", "fetch", "origin"], label=f"baseline fetch {repo}",
@@ -848,6 +869,15 @@ def _provision_test_baseline(project, kind, project_root, *, opp_file=None, reco
     if recorder is not None:
         recorder.end(0)
     _logger.info("Provisioned %s baseline %s -> %s", kind, repo, dest)
+
+
+def _provision_test_baseline(project, kind, project_root, *, opp_file=None, recorder=None):
+    """Resolve and (on the host) check out the project's baseline repo for *kind*
+    into ``<project_root>/<folder>``. No-op (no stage) when the kind declares no
+    baseline repository. Used by the opp_env host path."""
+    baseline = _resolve_test_baseline(project, kind, opp_file)
+    if (baseline or {}).get("repository"):
+        _checkout_baseline_on_host(baseline, kind, project_root, recorder=recorder)
 
 
 def _resolve_project_dir(project, opp_file=None):
@@ -1607,6 +1637,27 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
         if not build_only:
             run_stages.append((Stage.TEST_RUN, test_args))
         entry_script = "/opt/opp_ci_entry.sh"
+
+    # Baseline checkout (chart/statistical). Bind-mounted projects get it on the
+    # host (into the mounted tree at mount_path); catalog projects get an
+    # in-container CHECKOUT stage that checks out into the opp_env install dir
+    # after install and before the build. No-op when no baseline repo is declared.
+    test_baseline = _resolve_test_baseline(project, kind, opp_file)
+    if (test_baseline or {}).get("repository"):
+        if is_catalog:
+            insert_at = next((i for i, (st, _a) in enumerate(run_stages)
+                              if st == Stage.PROJECT_BUILD), len(run_stages))
+            run_stages.insert(insert_at, (Stage.CHECKOUT, [_baseline_checkout_shell(test_baseline)]))
+        else:
+            try:
+                _checkout_baseline_on_host(test_baseline, kind, mount_path, recorder=recorder)
+            except Exception as e:  # noqa: BLE001
+                if recorder is not None:
+                    for st, _a in run_stages:
+                        recorder.skip(st, reason="skipped: baseline checkout failed")
+                return {"result_code": "ERROR", "test_exec_seconds": 0.0,
+                        "stdout": "", "stderr": f"baseline provisioning failed: {e!r}",
+                        "details": None, "commit_sha": None}
 
     # Create + bind-mount the host result dir now (after the branch logic, so an
     # unknown-kind error can't leak it); read its result.json into `details`,
