@@ -798,6 +798,21 @@ def _ensure_github_clone(owner, repo):
     return target
 
 
+def _bare_project_name(project):
+    """Strip any opp_env version / git-ref suffix so a versioned run id matches
+    the bare name a bundled ``.opp`` registers.
+
+    ``inet-git@<sha>`` and ``inet-git`` both → ``inet``; ``mm1k-latest`` →
+    ``mm1k``. The run is dispatched under its versioned opp_env id (``inet-git``),
+    but the project's ``test_parameters`` live under the bare name in the ``@opp``
+    registry — without this, ``_load_workspace`` would fail to find the project
+    and silently fall back to a programmatic project with no baseline. Mirrors the
+    ``bare_project`` normalization the build/test commands already use (``-p``)."""
+    token = _strip_git_ref(project)
+    m = _VERSIONED_NAME_RE.match(token)
+    return m.group(1) if m else token
+
+
 def _resolve_test_baseline(project, kind, opp_file=None):
     """Return the ``{repository, ref, folder}`` baseline declaration the project's
     ``.opp`` sets for *kind* (via opp_repl ``test_parameters``), or ``None``.
@@ -806,7 +821,7 @@ def _resolve_test_baseline(project, kind, opp_file=None):
     checked out before the run; most kinds declare none.
     """
     try:
-        _ws, simulation_project = _load_workspace(project, opp_file)
+        _ws, simulation_project = _load_workspace(_bare_project_name(project), opp_file)
         return simulation_project.get_test_baseline(kind)
     except Exception as e:  # noqa: BLE001 — resolution failure shouldn't crash unrelated kinds
         _logger.warning("Could not resolve %s baseline for %s: %s", kind, project, e)
