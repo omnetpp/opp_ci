@@ -1819,6 +1819,43 @@ def _read_result_file(path):
         return None
 
 
+def _project_venv_opp_repl_prefix():
+    """Shell prefix that makes ``opp_run_*`` execute under the project's ``.venv``.
+
+    opp_repl runs the *simulations* as subprocesses, but does the result *analysis*
+    IN-PROCESS — chart rendering via ``exec(chart.script)`` and statistical scalar
+    comparison via pandas. So the analysis must run under the interpreter that owns
+    the project's pinned Python deps AND omnetpp's compiled ``scave_bindings`` —
+    i.e. the ``.venv`` opp_env builds (omnetpp + inet ``requirements.txt``). That
+    venv is active during ``opp_env run`` (``$VIRTUAL_ENV`` set), but the uvx
+    opp_repl isn't installed in it, so ``opp_run_*`` would otherwise run from uvx
+    with mismatched deps (e.g. pandas 3.0 vs omnetpp's <3.0).
+
+    Install the worker's *exact* opp_repl commit into the venv (skipped when already
+    present), so the command then resolves to ``.venv/bin`` (first on PATH) and its
+    in-process analysis uses the project's deps. ``--no-deps``: opp_repl's runtime
+    deps (numpy/pandas/matplotlib/scipy/ipython, dask/py4j/requests) are already in
+    the venv from the requirements, so we add only opp_repl and never disturb the
+    pinned versions. No-op when no venv is active (nix path) — falls back to uvx.
+    """
+    import importlib.metadata
+    try:
+        ver = importlib.metadata.version("opp_repl")  # e.g. 0.5.dev151+g2b1f71e76
+    except Exception:  # noqa: BLE001
+        return ""
+    m = re.search(r"\+g([0-9a-f]{6,})", ver)
+    ref = m.group(1) if m else "opp_ci"               # exact commit, else the branch
+    spec = shlex.quote(f"opp_repl @ git+https://github.com/omnetpp/opp_repl.git@{ref}")
+    check = ('cur=$(python -c "import importlib.metadata as m; '
+             "print(m.version('opp_repl'))\" 2>/dev/null)")
+    return (
+        'if [ -n "$VIRTUAL_ENV" ]; then '
+        + check + "; "
+        + f'case "$cur" in *{ref}*) ;; *) python -m pip install -q --no-deps {spec} ;; esac; '
+        + "fi && "
+    )
+
+
 def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwargs):
     """Run a test via opp_env subprocess (opp_env environment on the host).
 
@@ -1963,7 +2000,7 @@ def _run_test_via_opp_env(project, kind, recorder=None, toolchain="nix", **kwarg
         # so it is included in what the recorder reports — no cosmetic variant.
         fd, result_path = tempfile.mkstemp(prefix="opp-ci-result-", suffix=".json")
         os.close(fd)
-        test_inner_full = test_inner + f" --result-file {shlex.quote(result_path)}"
+        test_inner_full = _project_venv_opp_repl_prefix() + test_inner + f" --result-file {shlex.quote(result_path)}"
         if recorder is not None:
             recorder.begin(Stage.TEST_RUN, command=_format_argv(_opp_env_argv(test_inner_full)))
         start = time.time()
