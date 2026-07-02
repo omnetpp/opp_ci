@@ -219,6 +219,13 @@ COMMAND_MAP = {
     "release": "opp_run_release_tests",
     "build": "opp_build_project",
     "opp": "opp_run_opp_tests",
+    # opp_test .test suites split by folder (INET's unit/module/other badges); each
+    # is the `opp` kind scoped to a project-declared folder. "other" = packet+queueing+protocol.
+    "unit": "opp_run_unit_tests",
+    "module": "opp_run_module_tests",
+    "packet": "opp_run_packet_tests",
+    "queueing": "opp_run_queueing_tests",
+    "protocol": "opp_run_protocol_tests",
     "validation": "opp_run_validation_tests",
     "all": "opp_run_all_tests",
 }
@@ -249,7 +256,8 @@ def _get_test_functions():
         from opp_repl.test.chart import run_chart_tests
         from opp_repl.test.coverage import run_coverage_tests
         from opp_repl.test.release import run_release_tests
-        from opp_repl.test.opp import run_opp_tests
+        from opp_repl.test.opp import (run_opp_tests, run_unit_tests, run_module_tests,
+                                        run_packet_tests, run_queueing_tests, run_protocol_tests)
         from opp_repl.test.validation import run_validation_tests
         from opp_repl.test.all import run_all_tests
         from opp_repl.simulation.build import build_project
@@ -264,6 +272,11 @@ def _get_test_functions():
             "coverage": run_coverage_tests,
             "release": run_release_tests,
             "opp": run_opp_tests,
+            "unit": run_unit_tests,
+            "module": run_module_tests,
+            "packet": run_packet_tests,
+            "queueing": run_queueing_tests,
+            "protocol": run_protocol_tests,
             "validation": run_validation_tests,
             "all": run_all_tests,
             "build": build_project,
