@@ -536,8 +536,15 @@ def run_test(project, kind, *, isolation=None, toolchain=None, recorder=None, **
     # Instrumented kinds (coverage/sanitizer/speed) need their build mode pinned
     # so the build and run stages agree regardless of how the job was submitted
     # (the matrix expander pins it too, but single-run paths come straight here).
+    # Kinds may also declare an intrinsic mode in their .opp test_parameters (the
+    # opp_test suites pin debug to match their expected outputs); that is resolved
+    # from the project and forced the same way. KIND_FORCED_MODE takes precedence.
     if kind in KIND_FORCED_MODE:
         kwargs["mode"] = KIND_FORCED_MODE[kind]
+    else:
+        kind_mode = _resolve_test_mode(project, kind, kwargs.get("opp_file"))
+        if kind_mode:
+            kwargs["mode"] = kind_mode
     if isolation == "podman":
         return _run_test_in_podman(project, kind, toolchain=toolchain,
                                    recorder=recorder, **kwargs)
@@ -838,6 +845,22 @@ def _resolve_test_baseline(project, kind, opp_file=None):
         return simulation_project.get_test_baseline(kind)
     except Exception as e:  # noqa: BLE001 — resolution failure shouldn't crash unrelated kinds
         _logger.warning("Could not resolve %s baseline for %s: %s", kind, project, e)
+        return None
+
+
+def _resolve_test_mode(project, kind, opp_file=None):
+    """Return the build/run ``mode`` the project's ``.opp`` pins *kind* to (via
+    opp_repl ``test_parameters[kind].defaults.mode``), or ``None`` when the kind
+    has no intrinsic mode. The opp_test suites (unit/module/packet/queueing/
+    protocol) declare ``debug`` because their expected outputs are built for the
+    debug binaries; forcing it here keeps the build and run stages in the same
+    mode regardless of how the job was submitted (mirrors ``KIND_FORCED_MODE``,
+    but data-driven from the project instead of hardcoded in opp_ci)."""
+    try:
+        _ws, simulation_project = _load_workspace(_bare_project_name(project), opp_file)
+        return simulation_project.get_test_mode(kind)
+    except Exception as e:  # noqa: BLE001 — resolution failure shouldn't crash unrelated kinds
+        _logger.warning("Could not resolve %s mode for %s: %s", kind, project, e)
         return None
 
 
