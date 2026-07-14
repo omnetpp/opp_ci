@@ -408,6 +408,33 @@ async def get_run(
         session.close()
 
 
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(
+    run_id: int,
+    _identity: dict = Depends(require_role("submitter")),
+):
+    """Cancel a queued run — the token-authenticated peer of the web UI's
+    cancel. A run that is already running is left to finish (same locked
+    decision as the web route); the response reports the resulting lifecycle
+    and whether anything was actually cancelled."""
+    import datetime
+    session = SessionLocal()
+    try:
+        run = session.execute(
+            select(TestRun).where(TestRun.id == run_id)
+        ).scalar_one_or_none()
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Run #{run_id} not found")
+        cancelled = run.lifecycle == TestRunLifecycle.queued
+        if cancelled:
+            run.lifecycle = TestRunLifecycle.cancelled
+            run.finished_at = datetime.datetime.utcnow()
+            session.commit()
+        return {"id": run_id, "lifecycle": run.lifecycle.value, "cancelled": cancelled}
+    finally:
+        session.close()
+
+
 # ── Worker endpoints ───────────────────────────────────────────────────
 
 @router.post("/workers/register")

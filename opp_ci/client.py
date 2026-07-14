@@ -123,6 +123,14 @@ class OppCiClient:
         """Get full details of a run including results."""
         return self._get(f"/runs/{run_id}")
 
+    def cancel_run(self, run_id):
+        """Cancel a queued run (a running run is left to finish).
+
+        Returns ``{"id": ..., "lifecycle": ..., "cancelled": bool}`` where
+        ``cancelled`` is True only if the run was queued and got cancelled.
+        """
+        return self._post(f"/runs/{run_id}/cancel", {})
+
     def list_runs(self, *, limit=50, **filters):
         """List test runs with optional filters.
 

@@ -299,6 +299,17 @@ def _show_run_remote(run_id):
     _remote(op)
 
 
+def _cancel_run_remote(run_id):
+    def op(c):
+        result = c.cancel_run(run_id)
+        if result.get("cancelled"):
+            click.echo(f"Run #{run_id} cancelled.")
+        else:
+            click.echo(f"Run #{run_id} not cancelled (lifecycle: {result.get('lifecycle')}; "
+                       "only queued runs can be cancelled).")
+    _remote(op)
+
+
 def _show_results_remote(project, git_ref, kind, status, limit):
     def op(c):
         rows = c.list_runs(project=project, kind=kind, status=status, limit=limit)
@@ -1621,6 +1632,32 @@ def list_runs(project, git_ref, kind, status, limit):
             ref = run.git_ref or "-"
             verdict = run.recorded_verdict or "-"
             click.echo(f"{run.id:<6} {run.project:<20} {ref:<16} {run.kind:<14} {run.effective_status:<10} {verdict:<11} {duration:<10} {started}")
+    finally:
+        session.close()
+
+
+@main.command("cancel-run")
+@click.argument("run_id", type=int)
+@remoteable(_cancel_run_remote)
+def cancel_run(run_id):
+    """Cancel a queued test run (a running run is left to finish)."""
+    import datetime
+    session = SessionLocal()
+    try:
+        run = session.execute(
+            select(TestRun).where(TestRun.id == run_id)
+        ).scalar_one_or_none()
+        if run is None:
+            click.echo(f"Run #{run_id} not found.")
+            return
+        if run.lifecycle == TestRunLifecycle.queued:
+            run.lifecycle = TestRunLifecycle.cancelled
+            run.finished_at = datetime.datetime.utcnow()
+            session.commit()
+            click.echo(f"Run #{run_id} cancelled.")
+        else:
+            click.echo(f"Run #{run_id} not cancelled (lifecycle: {run.lifecycle.value}; "
+                       "only queued runs can be cancelled).")
     finally:
         session.close()
 
