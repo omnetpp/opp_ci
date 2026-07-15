@@ -897,20 +897,24 @@ def _checkout_baseline_on_host(baseline, kind, project_root, *, recorder=None):
     url = _baseline_url(repo)
     on_output = recorder.output if recorder is not None else None
     if recorder is not None:
-        recorder.begin(Stage.CHECKOUT, command=f"baseline {repo}{('@'+ref) if ref else ''} -> {folder}")
+        # No cosmetic headline: the real git commands below echo verbatim
+        # (echo_cmd) to the "cmd" stream — see the "no cosmetic commands" rule.
+        recorder.begin(Stage.CHECKOUT, command=None)
     try:
         if os.path.isdir(os.path.join(dest, ".git")):
             res = run_external(["git", "fetch", "origin"], label=f"baseline fetch {repo}",
-                               cwd=dest, timeout=600, stream=True, on_output=on_output)
+                               cwd=dest, timeout=600, stream=True, on_output=on_output,
+                               echo_cmd=True)
         else:
             os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
             res = run_external(["git", "clone", url, dest], label=f"baseline clone {repo}",
-                               timeout=900, stream=True, on_output=on_output)
+                               timeout=900, stream=True, on_output=on_output, echo_cmd=True)
         if res.returncode != 0:
             raise RuntimeError(f"{kind} baseline checkout {url} failed (exit {res.returncode})")
         if ref:
             res = run_external(["git", "checkout", ref], label=f"baseline checkout {ref}",
-                               cwd=dest, timeout=120, stream=True, on_output=on_output)
+                               cwd=dest, timeout=120, stream=True, on_output=on_output,
+                               echo_cmd=True)
             if res.returncode != 0:
                 raise RuntimeError(f"{kind} baseline checkout {ref} failed (exit {res.returncode})")
     except Exception:
@@ -1297,6 +1301,7 @@ def _build_nix_runner_image(final_tag, slug, os_name, os_version,
             ["podman", "build", "-t", base_tag, *_label_args(base_labels, "--label"),
              "-f", os.path.join(tmp, "Containerfile"), tmp],
             label=f"podman build {base_tag}", stream=True, on_output=on_output,
+            echo_cmd=True,
         )
         if result.returncode != 0:
             raise RuntimeError(f"podman build {base_tag} failed (exit {result.returncode})")
@@ -1320,7 +1325,7 @@ def _build_nix_runner_image(final_tag, slug, os_name, os_version,
              "-v", f"{_NIX_STORE_VOLUME}:/nix",
              base_tag, "install", install_token],
             label=f"bake {install_token} into {final_tag}", stream=True,
-            on_output=on_output,
+            on_output=on_output, echo_cmd=True,
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -1330,7 +1335,7 @@ def _build_nix_runner_image(final_tag, slug, os_name, os_version,
         commit_labels["org.opp_ci.base-id"] = base_id
         result = run_external(
             ["podman", "commit", *_label_args(commit_labels, "--change"), cname, final_tag],
-            label=f"podman commit {final_tag}",
+            label=f"podman commit {final_tag}", on_output=on_output, echo_cmd=True,
         )
         if result.returncode != 0:
             raise RuntimeError(f"podman commit {final_tag} failed (exit {result.returncode})")
@@ -1388,7 +1393,7 @@ def build_runner_image(tag, toolchain, os_name, os_version, compiler, compiler_v
             ["podman", "build", "-t", tag, *_label_args(labels, "--label"),
              "-f", containerfile_path, tmp],
             label=f"podman build {tag}",
-            stream=True, on_output=on_output,
+            stream=True, on_output=on_output, echo_cmd=True,
         )
         if result.returncode != 0:
             raise RuntimeError(f"podman build {tag} failed (exit {result.returncode})")
@@ -1476,7 +1481,11 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
     # build streams into this stage. A build failure fails the stage and
     # propagates (the worker reports ERROR).
     if recorder is not None:
-        recorder.begin(Stage.CONTAINER_PREPARE, command=f"ensure runner image {image}")
+        # No cosmetic headline: the real `podman build` (and, for nix, the
+        # run/commit bake) echo verbatim (echo_cmd) to the "cmd" stream —
+        # see the "no cosmetic commands" rule. "ensure runner image" was not
+        # a real command.
+        recorder.begin(Stage.CONTAINER_PREPARE, command=None)
     try:
         _ensure_runner_image(
             image, toolchain, os_name, os_version, compiler, compiler_version,
@@ -2105,13 +2114,17 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
     worktree_path = None
     if git_ref:
         if recorder is not None:
-            recorder.begin(Stage.CHECKOUT, command=f"git worktree @ {git_ref}")
+            # No cosmetic headline: the real `git fetch` echoes verbatim below;
+            # the worktree itself is created in-process (make_worktree_...), so
+            # there is no further shell command to show.
+            recorder.begin(Stage.CHECKOUT, command=None)
         try:
             from opp_repl.simulation.project import make_worktree_simulation_project
             root = simulation_project.get_root_path()
             if root:
                 run_external(["git", "fetch", "origin"], label="git fetch",
-                             cwd=root, timeout=120, stream=True, on_output=out_cb)
+                             cwd=root, timeout=120, stream=True, on_output=out_cb,
+                             echo_cmd=True)
             simulation_project = make_worktree_simulation_project(simulation_project, git_ref)
             worktree_path = simulation_project.get_root_path()
             _logger.info("Created worktree at %s for %s@%s", worktree_path, project, git_ref)
@@ -2135,7 +2148,10 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
         # as a separate exec; the test exec then runs build-less here).
         if not skip_build:
             if recorder is not None:
-                recorder.begin(Stage.PROJECT_BUILD, command="opp_build_project (direct)")
+                # In-process build (simulation_project.build): opp_repl spawns the
+                # real compiler itself and its output streams below — no shell
+                # command of our own to show, so no cosmetic headline.
+                recorder.begin(Stage.PROJECT_BUILD, command=None)
             try:
                 with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
                     build_result = simulation_project.build(mode=build_mode)
@@ -2189,7 +2205,10 @@ def _run_test_direct(project, kind, *, opp_file=None, git_ref=None, mode=None,
 
         # ── test.run (build already done; don't rebuild) ──────────────
         if recorder is not None:
-            recorder.begin(Stage.TEST_RUN, command=f"{func.__name__} --no-build (direct)")
+            # In-process test call (func(...)): opp_repl spawns the real
+            # simulations itself and their output streams below — no shell
+            # command of our own to show, so no cosmetic headline.
+            recorder.begin(Stage.TEST_RUN, command=None)
         call_kwargs = {"simulation_project": simulation_project, "build": False}
         if mode:
             call_kwargs["mode"] = mode
