@@ -1502,7 +1502,16 @@ def _run_test_in_podman(project, kind, *, toolchain="none", recorder=None, **kwa
     # already-versioned name as-is, otherwise install the "-latest" alias.
     _ver_match = _VERSIONED_NAME_RE.match(project)
     catalog_bare = _ver_match.group(1) if _ver_match else project
-    catalog_install_id = project if _ver_match else f"{project}-latest"
+    if _ver_match:
+        catalog_install_id = project
+    else:
+        # Bake the git ref into the install token (inet-git@<sha>) exactly like
+        # the host/nix paths (resolve_opp_env_id at lines 482/1925); a bare
+        # `inet` would otherwise become `inet-latest`, which is incompatible
+        # with `omnetpp-git` in opp_env's matrix ("versions cannot be installed
+        # together"). Falls back to `-latest` only when there is no ref.
+        catalog_install_id, _ = resolve_opp_env_id(
+            project, kwargs.get("commit_sha") or git_ref, toolchain=toolchain)
     repl_project = catalog_bare if is_catalog else project
     if is_catalog:
         # Source comes from `opp_env install` inside the container. We still
