@@ -469,16 +469,34 @@ class WorkerAgent:
         if stages:
             payload["stages"] = stages
 
-        try:
-            resp = self._session.post(
-                f"{self.coordinator_url}/api/workers/result",
-                json=payload,
-                timeout=60,
-            )
-            if resp.status_code != 200:
-                _logger.error("Result report failed for run #%d: %s %s", run_id, resp.status_code, resp.text)
-        except requests.RequestException as e:
-            _logger.error("Result report error for run #%d: %s", run_id, e)
+        # Retry with backoff: a finished job's result is expensive to
+        # reproduce, so a single dropped connection must not lose it. Large
+        # fingerprint/statistical payloads through Cloudflare occasionally get
+        # an "SSL: UNEXPECTED_EOF" mid-upload; the session has no retry adapter,
+        # so without this a transient drop left the run stuck "running" forever.
+        # A 4xx (client error) won't improve on retry, so stop; retry 5xx and
+        # connection/SSL errors.
+        backoffs = [2, 5, 12, 30, 60]
+        for attempt in range(len(backoffs) + 1):
+            try:
+                resp = self._session.post(
+                    f"{self.coordinator_url}/api/workers/result",
+                    json=payload,
+                    timeout=180,
+                )
+                if resp.status_code == 200:
+                    return
+                _logger.error("Result report for run #%d rejected: %s %s",
+                              run_id, resp.status_code, resp.text)
+                if resp.status_code < 500:
+                    return  # client error — retrying won't help
+            except requests.RequestException as e:
+                _logger.warning("Result report for run #%d attempt %d/%d failed: %s",
+                                run_id, attempt + 1, len(backoffs) + 1, e)
+            if attempt < len(backoffs):
+                time.sleep(backoffs[attempt])
+        _logger.error("Result report for run #%d GAVE UP after %d attempts — "
+                      "run may show 'running' until reaped", run_id, len(backoffs) + 1)
 
     def _send_offline(self):
         """Best-effort final heartbeat on shutdown, flagged so the coordinator
