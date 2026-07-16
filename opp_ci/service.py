@@ -214,13 +214,22 @@ def uvx_argv(spec, *, uvx=None):
     Pins opp_ci to ``@<ref>`` with the role's extras and supplies both opp_repl
     and opp_env from their ``opp_ci`` branches via ``--with`` (so the bundled
     ``opp_env`` console script lands on PATH for the process and its children —
-    see ``OPP_CI_OPP_ENV_CMD=opp_env`` in the env renderers). ``--refresh`` forces
-    uv to re-resolve *everything* — including the ``--from`` tool environment
-    (opp_ci) — on every start (the "latest each restart" mechanism). Plain
-    ``--refresh-package`` is **not** enough: it refreshes the ``--with`` overlays
-    (opp_repl/opp_env) but leaves the cached opp_ci tool env pinned to whatever
-    commit it first resolved, so a branch advance never reaches the worker. The
-    opp_ci subcommand carries no runtime options — all config comes from env files.
+    see ``OPP_CI_OPP_ENV_CMD=opp_env`` in the env renderers). ``--refresh`` +
+    ``--reinstall`` together are the "latest each restart" mechanism, on every
+    start:
+
+    * ``--refresh`` re-fetches the git *sources* (opp_ci/opp_repl/opp_env),
+      picking up new commits on their branches. Plain ``--refresh-package`` is
+      not enough — it refreshes only the ``--with`` overlays and leaves the
+      ``--from`` opp_ci source pinned.
+    * ``--reinstall`` is **also** required: ``--refresh`` alone re-fetches the
+      source but uv **reuses the already-built tool environment** when the
+      requirement string (e.g. ``…@opp_ci``) is unchanged, so a branch advance
+      never reaches the worker (observed: a worker kept running stale opp_repl
+      across restarts until the uv cache was cleared). ``--reinstall`` forces the
+      env to be rebuilt from the freshly-fetched source each start.
+
+    The opp_ci subcommand carries no runtime options — all config comes from env files.
     """
     uvx = uvx or spec.uvx_path()
     from_spec = f"opp_ci[{spec.extras}] @ {OPP_CI_GIT}@{spec.ref}"
@@ -234,6 +243,7 @@ def uvx_argv(spec, *, uvx=None):
         "--with", repl_spec,
         "--with", env_spec,
         "--refresh",
+        "--reinstall",
         "opp_ci", *subcommand,
     ]
 
