@@ -148,5 +148,20 @@ RUN_EXTRA=$(strip_refs "$EXTRA_PROJECTS")
 # (its deps are already there, pinned) so it resolves to .venv/bin. Mirrors the
 # host path's executor.py:_project_venv_opp_repl_prefix().
 REPL_IN_VENV='if [ -n "$VIRTUAL_ENV" ] && ! python -m pip show opp_repl >/dev/null 2>&1; then python -m pip install -q --no-deps -e /opt/opp_repl_src; fi && '
-printf '@@oppci:cmd@@ opp_env -l ERROR run -w /opt/opp_env_workspace %s%s -c "%s"\n' "$RUN_PINNED" "$RUN_EXTRA" "${REPL_IN_VENV}$*"
-exec opp_env -l ERROR run -w /opt/opp_env_workspace $RUN_PINNED $RUN_EXTRA -c "${REPL_IN_VENV}$*"
+# --- TEMP DIAGNOSTIC (module-podman SIGTERM hunt): name who signals the test process.
+# Gated to module runs — module-podman already fails, so this instruments nothing that works.
+# strace -f follows the whole opp_env->python->make/sim tree; on signal delivery it prints
+# {si_pid, si_uid, si_code} to stderr (captured in the run's stderr), naming the sender.
+# Guarded so a failed strace install can't turn the run into a hard ERROR. REVERT after.
+STRACE_WRAP=""
+case "$*" in
+    *opp_run_module_tests*)
+        apt-get update -qq >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq strace >/dev/null 2>&1 || true
+        if command -v strace >/dev/null 2>&1; then
+            STRACE_WRAP="strace -f -e trace=none -e signal=term,kill,int,quit,abrt,segv,hup -o /dev/stderr "
+        fi
+        ;;
+esac
+printf '@@oppci:cmd@@ %sopp_env -l ERROR run -w /opt/opp_env_workspace %s%s -c "%s"\n' "$STRACE_WRAP" "$RUN_PINNED" "$RUN_EXTRA" "${REPL_IN_VENV}$*"
+exec ${STRACE_WRAP}opp_env -l ERROR run -w /opt/opp_env_workspace $RUN_PINNED $RUN_EXTRA -c "${REPL_IN_VENV}$*"
