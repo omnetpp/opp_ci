@@ -52,9 +52,16 @@ sync_repo() {
 
 # Only opp_repl is cloned/installed — the tests run opp_repl's console scripts
 # directly (opp_build_project, opp_run_*_tests), not opp_ci. See plan §2.6.
+# --no-deps: opp_repl's result analysis (chart rendering, statistical comparison)
+# runs IN-PROCESS and must use the project's PINNED deps (pandas <3, numpy <3 from
+# omnetpp/inet requirements.txt) that omnetpp's scave_bindings need — NOT the
+# unpinned pandas 3.x a plain `pip install` would drag in. The pinned deps live in
+# the project .venv, into which opp_repl is (re)installed --no-deps at run time
+# (see the run stage below). This bare install just puts the console scripts on
+# PATH for discovery; its deps must not clobber the venv's pinned versions.
 do_bootstrap() {
     sync_repo opp_repl {{ opp_repl_repo }} {{ opp_repl_ref }}
-    run_cmd pip install -q -e /opt/opp_repl_src
+    run_cmd pip install -q --no-deps -e /opt/opp_repl_src
 }
 
 # Parse OPP_CI_INSTALL_PROJECTS (comma-separated catalog projects) into
@@ -131,5 +138,15 @@ PINNED_PROJECTS="${OPP_CI_PIN_DEPS:-{{ omnetpp_install }}}"
 # branch tokens. The deps.install stage already checked out the right refs.
 RUN_PINNED=$(strip_refs "$PINNED_PROJECTS")
 RUN_EXTRA=$(strip_refs "$EXTRA_PROJECTS")
-printf '@@oppci:cmd@@ opp_env -l ERROR run -w /opt/opp_env_workspace %s%s -c "%s"\n' "$RUN_PINNED" "$RUN_EXTRA" "$*"
-exec opp_env -l ERROR run -w /opt/opp_env_workspace $RUN_PINNED $RUN_EXTRA -c "$*"
+# opp_repl does its result analysis (chart rendering via exec(chart.script),
+# statistical scalar comparison via pandas) IN-PROCESS, so opp_run_* must execute
+# under the project's .venv — where omnetpp/inet requirements.txt pinned pandas <3
+# / numpy <3 and where omnetpp's compiled scave_bindings live. opp_env activates
+# that venv ($VIRTUAL_ENV) for the -c command, but the bootstrap opp_repl isn't in
+# it, so opp_run_* would otherwise run with mismatched deps (pandas 3.x → chart
+# convertUnit/getBestUnit TypeErrors). Install opp_repl into the venv --no-deps
+# (its deps are already there, pinned) so it resolves to .venv/bin. Mirrors the
+# host path's executor.py:_project_venv_opp_repl_prefix().
+REPL_IN_VENV='if [ -n "$VIRTUAL_ENV" ] && ! python -m pip show opp_repl >/dev/null 2>&1; then python -m pip install -q --no-deps -e /opt/opp_repl_src; fi && '
+printf '@@oppci:cmd@@ opp_env -l ERROR run -w /opt/opp_env_workspace %s%s -c "%s"\n' "$RUN_PINNED" "$RUN_EXTRA" "${REPL_IN_VENV}$*"
+exec opp_env -l ERROR run -w /opt/opp_env_workspace $RUN_PINNED $RUN_EXTRA -c "${REPL_IN_VENV}$*"
