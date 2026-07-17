@@ -21,8 +21,13 @@ ENV LANG=C.UTF-8
 # The last two lib rows (z3, OSG, ffmpeg + lld) are INET's feature libraries,
 # matching what INET's GitHub workflows apt-install — z3 in particular pins the
 # gate-scheduling solver whose version the statistical baseline is bit-exact to.
+# iputils-ping: INET's ExternalProcess module tests (tests/module/ExternalProcess_*.test)
+# run `ping` as an external command. Without it execvp fails in the forked child, whose
+# stopProcess() then runs `/bin/kill -SIGTERM 0` — a process-group-wide SIGTERM that,
+# under the shared podman-exec process group, kills the entire concurrent module run
+# (opp_env included → exit 143). The host and GitHub runners ship ping; match them.
 RUN apt-get update && apt-get install --no-install-recommends -y \
-      ca-certificates curl git which xdg-utils \
+      ca-certificates curl git which xdg-utils iputils-ping \
       make pkg-config bison flex perl ccache lldb lld \
       python3 python3-dev python3-pip python3-venv \
       libxml2-dev zlib1g-dev libssl-dev libpcap-dev \
