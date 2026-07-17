@@ -159,7 +159,7 @@ case "$*" in
         apt-get update -qq >/dev/null 2>&1 || true
         DEBIAN_FRONTEND=noninteractive apt-get install -y -qq strace >/dev/null 2>&1 || true
         if command -v strace >/dev/null 2>&1; then
-            STRACE_WRAP="strace -f -e trace=none -e signal=term,kill,int,quit,abrt,segv,hup -o /dev/stderr "
+            STRACE_WRAP="strace -f -e trace=execve,kill,tkill,tgkill -e signal=term,int,quit,abrt,segv,hup -o /dev/stderr "
         fi
         ;;
 esac
