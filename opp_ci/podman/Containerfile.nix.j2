@@ -31,19 +31,22 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 
 {% if os in ("ubuntu", "debian") -%}
-# iputils-ping: INET's ExternalProcess module tests run `ping`; without it the forked
-# child's execvp fails and its stopProcess() does `/bin/kill -SIGTERM 0`, a process-group
-# SIGTERM that kills the whole concurrent run. See Containerfile.host.j2 for the details.
+# iputils-ping + strip its cap_net_raw so a rootless userns can execve it: INET's
+# ExternalProcess tests run `ping`; a missing or cap-bearing ping makes execvp fail and
+# the forked child's stopProcess() do `/bin/kill -SIGTERM 0` — a process-group SIGTERM
+# that kills the whole concurrent run. See Containerfile.host.j2 for the full details.
 RUN apt-get update && apt-get install --no-install-recommends -y \
       ca-certificates curl git python3 python3-dev python3-pip python3-venv \
-      xz-utils sudo iputils-ping \
+      xz-utils sudo iputils-ping libcap2-bin \
  && rm -rf /var/lib/apt/lists/*
 {%- elif os == "fedora" -%}
-RUN dnf -y install ca-certificates curl git python3 python3-devel python3-pip xz sudo iputils \
+RUN dnf -y install ca-certificates curl git python3 python3-devel python3-pip xz sudo iputils libcap \
  && dnf clean all
 {%- else -%}
 RUN false
 {%- endif %}
+# Strip ping's cap_net_raw (see above); no-op if ping/setcap absent.
+RUN setcap -r /usr/bin/ping 2>/dev/null || true
 
 # Single-user Nix install via Determinate Systems' nix-installer, which
 # explicitly supports container builds (no systemd / no init / no nixbld

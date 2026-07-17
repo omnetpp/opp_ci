@@ -21,13 +21,19 @@ ENV LANG=C.UTF-8
 # The last two lib rows (z3, OSG, ffmpeg + lld) are INET's feature libraries,
 # matching what INET's GitHub workflows apt-install — z3 in particular pins the
 # gate-scheduling solver whose version the statistical baseline is bit-exact to.
-# iputils-ping: INET's ExternalProcess module tests (tests/module/ExternalProcess_*.test)
-# run `ping` as an external command. Without it execvp fails in the forked child, whose
-# stopProcess() then runs `/bin/kill -SIGTERM 0` — a process-group-wide SIGTERM that,
-# under the shared podman-exec process group, kills the entire concurrent module run
-# (opp_env included → exit 143). The host and GitHub runners ship ping; match them.
+# INET's ExternalProcess module tests (tests/module/ExternalProcess_*.test) run `ping`.
+# TWO things are needed for that to work in a ROOTLESS podman container — otherwise
+# execvp fails in the forked child, whose stopProcess() then runs `/bin/kill -SIGTERM 0`,
+# a process-group-wide SIGTERM that kills the entire concurrent module run (opp_env
+# included → exit 143) at ~140/321:
+#   1. iputils-ping installed (bare ubuntu has no ping → ENOENT).
+#   2. its cap_net_raw file capability STRIPPED (setcap -r, below) — a rootless user
+#      namespace refuses to execve a file carrying capabilities it can't grant (EPERM).
+#      Stripped, ping falls back to unprivileged ICMP datagram sockets, which work for
+#      `ping localhost`. libcap2-bin provides setcap.
+# Host/GitHub runners run ping outside a userns and never hit this; this restores parity.
 RUN apt-get update && apt-get install --no-install-recommends -y \
-      ca-certificates curl git which xdg-utils iputils-ping \
+      ca-certificates curl git which xdg-utils iputils-ping libcap2-bin \
       make pkg-config bison flex perl ccache lldb lld \
       python3 python3-dev python3-pip python3-venv \
       libxml2-dev zlib1g-dev libssl-dev libpcap-dev \
@@ -37,6 +43,9 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
       libavcodec-dev libavformat-dev libavutil-dev libswresample-dev \
       {{ compiler_package }} \
  && rm -rf /var/lib/apt/lists/*
+# Strip ping's cap_net_raw so a rootless userns can execve it (see above). Separate RUN
+# so an apt failure still fails the build; the `|| true` only guards setcap itself.
+RUN setcap -r /usr/bin/ping 2>/dev/null || true
 # Ubuntu/Debian's '{{ compiler }}-{{ compiler_version }}' package only installs
 # versioned binaries (/usr/bin/{{ compiler }}-{{ compiler_version }}). OMNeT++'s
 # ./configure and opp_makemake call the unversioned names — provide aliases.
