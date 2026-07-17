@@ -214,20 +214,20 @@ def uvx_argv(spec, *, uvx=None):
     Pins opp_ci to ``@<ref>`` with the role's extras and supplies both opp_repl
     and opp_env from their ``opp_ci`` branches via ``--with`` (so the bundled
     ``opp_env`` console script lands on PATH for the process and its children —
-    see ``OPP_CI_OPP_ENV_CMD=opp_env`` in the env renderers). ``--refresh`` +
-    ``--reinstall`` together are the "latest each restart" mechanism, on every
-    start:
+    see ``OPP_CI_OPP_ENV_CMD=opp_env`` in the env renderers).
 
-    * ``--refresh`` re-fetches the git *sources* (opp_ci/opp_repl/opp_env),
-      picking up new commits on their branches. Plain ``--refresh-package`` is
-      not enough — it refreshes only the ``--with`` overlays and leaves the
-      ``--from`` opp_ci source pinned.
-    * ``--reinstall`` is **also** required: ``--refresh`` alone re-fetches the
-      source but uv **reuses the already-built tool environment** when the
-      requirement string (e.g. ``…@opp_ci``) is unchanged, so a branch advance
-      never reaches the worker (observed: a worker kept running stale opp_repl
-      across restarts until the uv cache was cleared). ``--reinstall`` forces the
-      env to be rebuilt from the freshly-fetched source each start.
+    ``--refresh`` is the "latest each restart" mechanism: it re-resolves every
+    git source in the environment — the ``--from`` opp_ci *and* the ``--with``
+    opp_repl/opp_env — to its branch HEAD, and rebuilds the tool environment
+    when a branch has advanced (reusing cached artifacts when it hasn't). Plain
+    ``--refresh-package`` would cover only the named packages; ``--refresh``
+    covers all three plus their transitive deps. Verified against uv 0.11.x:
+    ``--refresh`` alone picks up a moved ``--from`` HEAD — uv prints an
+    "Updating" line only for the ``--with`` sources, but the ``--from`` is
+    rebuilt too (an earlier belief that only a cache-clean worked was wrong).
+
+    NB: ``--reinstall`` is deliberately absent — ``uvx`` ignores it for the tool
+    itself ("Tools cannot be reinstalled via uvx") and it only emitted a warning.
 
     The opp_ci subcommand carries no runtime options — all config comes from env files.
     """
@@ -243,7 +243,6 @@ def uvx_argv(spec, *, uvx=None):
         "--with", repl_spec,
         "--with", env_spec,
         "--refresh",
-        "--reinstall",
         "opp_ci", *subcommand,
     ]
 

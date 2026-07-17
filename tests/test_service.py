@@ -47,6 +47,9 @@ class UvxCommandTest(unittest.TestCase):
                       "git+https://github.com/omnetpp/opp_env.git@opp_ci", cmd)
         self.assertIn("--refresh ", cmd)
         self.assertNotIn("--refresh-package", cmd)
+        # uvx ignores --reinstall for the tool itself (only warns); --refresh
+        # alone re-resolves the branch HEADs. Keep it out.
+        self.assertNotIn("--reinstall", cmd)
         self.assertTrue(cmd.endswith("opp_ci coordinator start"))
         self.assertTrue(cmd.startswith(UVX))
 
