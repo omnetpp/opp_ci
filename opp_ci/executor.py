@@ -868,6 +868,13 @@ def _baseline_url(repo):
     return repo if ("://" in repo or repo.startswith("git@")) else f"https://github.com/{repo}.git"
 
 
+def _is_full_commit_hash(ref):
+    """True when *ref* is a full commit hash. Such a ref names one fixed commit,
+    which can be on no branch (the head of a pull request), so a plain
+    ``git fetch origin`` does not always bring it; a fetch by the hash does."""
+    return re.fullmatch(r"[0-9a-f]{40}", ref) is not None
+
+
 def _baseline_checkout_shell(baseline):
     """A shell one-liner that idempotently checks out *baseline* into its folder
     relative to the cwd — for the in-container (opp_env catalog) podman path,
@@ -879,8 +886,13 @@ def _baseline_checkout_shell(baseline):
     q = shlex.quote
     cmd = (f"if [ -d {q(folder)}/.git ]; then git -C {q(folder)} fetch origin; "
            f"else git clone {q(_baseline_url(repo))} {q(folder)}; fi")
-    if ref:
-        cmd += f" && git -C {q(folder)} checkout {q(ref)}"
+    if ref and _is_full_commit_hash(ref):
+        cmd += (f" && {{ git -C {q(folder)} cat-file -e {q(ref + '^{commit}')} 2>/dev/null"
+                f" || git -C {q(folder)} fetch origin {q(ref)}; }}"
+                f" && git -C {q(folder)} checkout --detach {q(ref)}")
+    elif ref:
+        # a branch or a tag: take what the remote has now, not an older local branch
+        cmd += f" && git -C {q(folder)} fetch origin {q(ref)} && git -C {q(folder)} checkout --detach FETCH_HEAD"
     return cmd
 
 
@@ -912,7 +924,19 @@ def _checkout_baseline_on_host(baseline, kind, project_root, *, recorder=None):
         if res.returncode != 0:
             raise RuntimeError(f"{kind} baseline checkout {url} failed (exit {res.returncode})")
         if ref:
-            res = run_external(["git", "checkout", ref], label=f"baseline checkout {ref}",
+            target = ref
+            has_commit = _is_full_commit_hash(ref) and subprocess.run(
+                ["git", "cat-file", "-e", ref + "^{commit}"], cwd=dest, capture_output=True).returncode == 0
+            if not has_commit:
+                res = run_external(["git", "fetch", "origin", ref], label=f"baseline fetch {ref}",
+                                   cwd=dest, timeout=600, stream=True, on_output=on_output,
+                                   echo_cmd=True)
+                if res.returncode != 0:
+                    raise RuntimeError(f"{kind} baseline fetch {ref} failed (exit {res.returncode})")
+                if not _is_full_commit_hash(ref):
+                    # a branch or a tag: take what the remote has now, not an older local branch
+                    target = "FETCH_HEAD"
+            res = run_external(["git", "checkout", "--detach", target], label=f"baseline checkout {ref}",
                                cwd=dest, timeout=120, stream=True, on_output=on_output,
                                echo_cmd=True)
             if res.returncode != 0:
